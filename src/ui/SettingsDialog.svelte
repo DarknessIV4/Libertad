@@ -95,7 +95,7 @@
     </select>
     <label class="check"><input type="checkbox" bind:checked={s.sendThumbnails} onchange={saveFiles} /> Send a preview picture with pictures and videos</label>
     <div class="row kept">
-      <p class="help">Files sent and received are kept on this computer, up to 2 GB, so others can get them from you later. {files.usage != null ? `In use: ${formatBytes(files.usage)}.` : ''}</p>
+      <p class="help">Files sent and received are kept on this computer, up to 100 GB, so others can get them from you later. {files.usage != null ? `In use: ${formatBytes(files.usage)}.` : ''}</p>
       <button class="btn" disabled={!files.usage} onclick={() => files.clear()}>Delete kept files</button>
     </div>
 
