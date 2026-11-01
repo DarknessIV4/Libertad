@@ -26,7 +26,7 @@ export type FileType = typeof FILE[keyof typeof FILE];
 
 export const MAX_FILE = 100 * 1024 ** 3;
 // Keeps the bookkeeping small even when a server's limits make pieces small
-export const MAX_PIECES = 65536;
+export const MAX_PIECES = 1048576;
 
 // i: id, n: name, s: size in bytes, m: type, c: bytes per piece, h: hash of the piece hashes
 export interface FileMeta { i: string; n: string; s: number; m: string; c: number; h: string }
