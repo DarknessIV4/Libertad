@@ -27,7 +27,7 @@ export interface Transfer {
 const BLANK: Transfer = { state: 'idle', got: 0, rate: 0, sources: 0, error: '', url: '', sending: 0 };
 
 // What this computer keeps of files it sent and received; the oldest go first
-const KEEP_BYTES = 2 * 1024 ** 3;
+const KEEP_BYTES = 100 * 1024 ** 3;
 const INDEX = 'files:index';
 const MAX_SOURCES = 4;
 // How long answers to "who has it" may take
@@ -189,7 +189,7 @@ class Files {
     if (!client) return 'Not connected.';
     if (!this.supported(s)) return `${file.name}: sending files needs a server running Mumble 1.4 or newer`;
     if (!file.size) return `${file.name}: the file is empty`;
-    if (file.size > MAX_FILE) return `${file.name}: too large (at most 2 GB)`;
+    if (file.size > MAX_FILE) return `${file.name}: too large (at most 100 GB)`;
     const c = pieceBytes(client.config);
     if (c < 1500) return `${file.name}: this server's message limit is too small for files`;
     const count = pieceCount({ s: file.size, c });
