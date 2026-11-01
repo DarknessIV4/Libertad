@@ -24,7 +24,7 @@ export const FILE = {
 } as const;
 export type FileType = typeof FILE[keyof typeof FILE];
 
-export const MAX_FILE = 2 * 1024 ** 3;
+export const MAX_FILE = 100 * 1024 ** 3;
 // Keeps the bookkeeping small even when a server's limits make pieces small
 export const MAX_PIECES = 65536;
 
