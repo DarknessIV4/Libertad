@@ -10,13 +10,22 @@ const PING_INTERVAL_MS = 15000;
 // (leaky bucket, defaults messageburst=5 and messagelimit=1/s). Its bucket restarts its timer
 // on every limited message and only leaks whole seconds, discarding the rest; the client
 // mirrors exactly that and queues instead of losing messages. The margin absorbs network jitter.
-const RATE_BURST = 5;
-const RATE_LEAK_MS = 1000;
-const RATE_MARGIN_MS = 250;
+let RATE_BURST = 5;
+let RATE_LEAK_MS = 1000;
+let RATE_MARGIN_MS = 250;
 const RATE_LIMITED = new Set<MessageName>(['TextMessage', 'ChannelState', 'ACL', 'Version']);
 // File pieces (bulk chat messages) use the bucket only up to here, so two of the user's own
 // messages always go out at once
-const BULK_CAP = RATE_BURST - 2;
+let BULK_CAP = RATE_BURST - 2;
+
+// Only for servers where messagelimit / messageburst were raised: Murmur drops messages
+// silently when they come faster than its limit.
+export function setRateLimits(burst: number, perSecond: number): void {
+  RATE_BURST = Math.max(1, Math.floor(burst));
+  RATE_LEAK_MS = 1000 / Math.max(1, perSecond);
+  RATE_MARGIN_MS = Math.max(50, Math.min(250, RATE_LEAK_MS / 2));
+  BULK_CAP = Math.max(1, RATE_BURST - 2);
+}
 
 export interface Channel {
   id: number;

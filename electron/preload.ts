@@ -13,6 +13,15 @@ for (const key of Object.keys(listeners) as (keyof typeof listeners)[]) {
 
 // The only native surface the renderer gets
 contextBridge.exposeInMainWorld('mumh5Native', {
+  files: {
+    write: (id: string, offset: number, bytes: Uint8Array, size: number) => ipcRenderer.invoke('files:write', id, offset, bytes, size),
+    read: (id: string, offset: number, length: number) => ipcRenderer.invoke('files:read', id, offset, length),
+    finish: (id: string) => ipcRenderer.invoke('files:finish', id),
+    remove: (id: string) => ipcRenderer.invoke('files:remove', id),
+    export: (id: string, name: string) => ipcRenderer.invoke('files:export', id, name),
+    has: (id: string) => ipcRenderer.invoke('files:has', id),
+    free: () => ipcRenderer.invoke('files:free'),
+  },
   platformInfo: () => ipcRenderer.invoke('platform:info'),
   updateTray: (state: unknown) => ipcRenderer.send('tray:update', state),
   linkPreview: (url: string) => ipcRenderer.invoke('preview:fetch', url),

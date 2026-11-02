@@ -11,6 +11,8 @@ import {
 import { newId } from '../core/text-signal.ts';
 import type { Session } from './session.svelte.ts';
 import { getBlob, putBlob, getData, putData, deleteBlob } from './blobstore.ts';
+import { desktop } from './native.ts';
+import { setRateLimits } from '../core/client.ts';
 import { store } from './settings.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
 
@@ -19,6 +21,7 @@ export interface Transfer {
   got: number;     // bytes so far
   rate: number;    // bytes per second, recently
   sources: number; // people sending it to us
+  disk?: boolean;
   error: string;
   url: string;     // once ready
   sending: number; // people we are sending it to
@@ -29,7 +32,28 @@ const BLANK: Transfer = { state: 'idle', got: 0, rate: 0, sources: 0, error: '',
 // What this computer keeps of files it sent and received; the oldest go first
 const KEEP_BYTES = 100 * 1024 ** 3;
 const INDEX = 'files:index';
-const MAX_SOURCES = 4;
+const MAX_SOURCES = 12;
+
+// Desktop app: files this big are written straight to a file on disk, not kept as Blobs.
+// To test with a small file: localStorage.setItem('mumh5.diskMin', '1000000') and restart.
+function diskMin(): number {
+  try { return Number(localStorage.getItem('mumh5.diskMin')) || 256 * 1024 ** 2; } catch { return 256 * 1024 ** 2; }
+}
+const useDisk = (meta: FileMeta): boolean => !!desktop && meta.s >= diskMin();
+const diskInit = (meta: FileMeta) => {
+  const on = useDisk(meta);
+  const n = on ? pieceCount(meta) : 0;
+  return { disk: on, have: new Uint8Array(n), flat: new Uint8Array(n * 32), tail: Promise.resolve() as Promise<unknown>, wfail: false };
+};
+const hasPiece = (d: Download, k: number): boolean => (d.disk ? d.have[k] === 1 : !!d.parts[k]);
+type KeptDisk = Kept & { disk?: boolean };
+
+// Opt-in faster sending for servers where you raised messagelimit / messageburst.
+// Once: localStorage.setItem('mumh5.rate', '30,10')  (burst, messages per second), then restart.
+try {
+  const r = localStorage.getItem('mumh5.rate');
+  if (r) { const [b, p] = r.split(',').map(Number); if (b > 0 && p > 0) setRateLimits(b, p); }
+} catch { /* no storage */ }
 // How long answers to "who has it" may take
 const FIND_MS = 3000;
 // A source that sent nothing for this long is asked again, twice, then the download stops
@@ -48,6 +72,11 @@ interface Download {
   count: number;
   parts: (Blob | undefined)[];
   digests: Promise<Uint8Array>[];
+  disk: boolean;
+  have: Uint8Array;
+  flat: Uint8Array;
+  tail: Promise<unknown>;
+  wfail: boolean;
   got: number;
   bytes: number;
   sources: Map<number, Source>;
@@ -126,7 +155,8 @@ class Files {
       for (const k of [...list]) {
         if (total <= KEEP_BYTES) break;
         if (this.local.has(k.i)) continue;
-        await deleteBlob('file:' + k.i).catch(() => {});
+        if ((k as KeptDisk).disk) await desktop?.files.remove(k.i).catch(() => {});
+        else await deleteBlob('file:' + k.i).catch(() => {});
         list.splice(list.indexOf(k), 1);
         total -= k.s;
       }
@@ -163,6 +193,11 @@ class Files {
   async check(meta: FileMeta): Promise<void> {
     if (this.checked.has(meta.i)) return;
     this.checked.add(meta.i);
+    const diskKept = (await this.loadIndex()).find(k => k.i === meta.i) as KeptDisk | undefined;
+    if (diskKept?.disk && diskKept.h === meta.h && desktop && !this.downloads.has(meta.i) && await desktop.files.has(meta.i)) {
+      this.readyDisk(meta);
+      return;
+    }
     const found = await this.find(meta.i);
     if (found && found.meta.h === meta.h && !this.downloads.has(meta.i)) this.ready(found.meta, found.blob);
   }
@@ -173,7 +208,10 @@ class Files {
 
   async clear(): Promise<void> {
     const index = await this.loadIndex();
-    for (const k of index) await deleteBlob('file:' + k.i).catch(() => {});
+    for (const k of index) {
+      if ((k as KeptDisk).disk) await desktop?.files.remove(k.i).catch(() => {});
+      else await deleteBlob('file:' + k.i).catch(() => {});
+    }
     this.index = [];
     this.usage = 0;
     await putData(INDEX, []).catch(() => {});
@@ -233,7 +271,7 @@ class Files {
     }
     const now = Date.now();
     const d: Download = {
-      s, meta, count: pieceCount(meta), parts: [], digests: [], got: 0, bytes: 0, sources: new Map(),
+      s, meta, count: pieceCount(meta), parts: [], digests: [], ...diskInit(meta), got: 0, bytes: 0, sources: new Map(),
       findUntil: now + FIND_MS, lastAt: now, stalls: 0, timer: setInterval(() => this.watch(d), 2000),
       rebalance: undefined, rateFrom: { at: now, bytes: 0 }
     };
@@ -270,7 +308,7 @@ class Files {
 
   private missing(d: Download): number[] {
     const out: number[] = [];
-    for (let k = 0; k < d.count; k++) if (!d.parts[k]) out.push(k);
+    for (let k = 0; k < d.count; k++) if (!hasPiece(d, k)) out.push(k);
     return out;
   }
 
@@ -319,11 +357,23 @@ class Files {
   piece(s: Session, from: number, html: string): void {
     const p = parsePiece(html);
     const d = p && this.downloads.get(p.id);
-    if (!p || !d || d.s !== s || !d.sources.has(from) || p.index >= d.count || d.parts[p.index]) return;
+    if (!p || !d || d.s !== s || !d.sources.has(from) || p.index >= d.count || hasPiece(d, p.index)) return;
     const bytes = decode15(p.payload, pieceSize(d.meta, p.index));
     if (!bytes) return;
-    d.parts[p.index] = new Blob([bytes as Uint8Array<ArrayBuffer>]);
-    d.digests[p.index] = sha256(bytes);
+    if (d.disk) {
+      const k = p.index;
+      d.have[k] = 1;
+      const task = Promise.all([
+        desktop!.files.write(d.meta.i, k * d.meta.c, bytes, d.meta.s),
+        sha256(bytes).then(h => { d.flat.set(h, k * 32); }),
+      ]).catch(() => {
+        if (!d.wfail) { d.wfail = true; this.fail(d, 'Could not write the file to disk'); }
+      });
+      d.tail = d.tail.then(() => task);
+    } else {
+      d.parts[p.index] = new Blob([bytes as Uint8Array<ArrayBuffer>]);
+      d.digests[p.index] = sha256(bytes);
+    }
     d.got++;
     d.bytes += bytes.length;
     d.lastAt = Date.now();
@@ -336,6 +386,7 @@ class Files {
 
   private async finish(d: Download): Promise<void> {
     this.stop(d);
+    if (d.disk) return this.finishDisk(d);
     const hash = await rootHash(await Promise.all(d.digests));
     if (hash !== d.meta.h) return this.fail(d, 'The file did not arrive intact');
     const blob = new Blob(d.parts as Blob[], { type: safeType(d.meta.m) });
@@ -345,6 +396,56 @@ class Files {
   }
 
   // ─── Requests between clients ───────────────────────────────────────────────
+
+  private async finishDisk(d: Download): Promise<void> {
+    const id = d.meta.i;
+    try {
+      await d.tail;
+      if (d.wfail) { await desktop!.files.remove(id).catch(() => {}); return; }
+      const digests: Uint8Array[] = [];
+      for (let k = 0; k < d.count; k++) digests.push(d.flat.subarray(k * 32, (k + 1) * 32));
+      if (await rootHash(digests) !== d.meta.h) {
+        await desktop!.files.remove(id).catch(() => {});
+        return this.fail(d, 'The file did not arrive intact');
+      }
+      await desktop!.files.finish(id);
+      this.readyDisk(d.meta);
+      void this.keepDisk(d.meta);
+      sounds.play('uploadDone');
+      // There is no Save button for disk files yet, so ask where to put the file now
+      void desktop!.files.export(id, d.meta.n).catch(() => {});
+    } catch {
+      await desktop?.files.remove(id).catch(() => {});
+      this.fail(d, 'Could not write the file to disk');
+    }
+  }
+
+  private readyDisk(meta: FileMeta): void {
+    this.set(meta.i, { state: 'ready', got: meta.s, url: '', disk: true, error: '', rate: 0, sources: 0 });
+  }
+
+  saveAs(id: string, name: string): Promise<boolean> | undefined {
+    return desktop?.files.export(id, name);
+  }
+
+  private async keepDisk(meta: FileMeta): Promise<void> {
+    try {
+      const index = await this.loadIndex();
+      const list: Kept[] = [...index.filter(k => k.i !== meta.i), { ...meta, at: Date.now(), disk: true } as KeptDisk];
+      let total = list.reduce((n, k) => n + k.s, 0);
+      for (const k of [...list]) {
+        if (total <= KEEP_BYTES) break;
+        if (this.local.has(k.i) || k.i === meta.i) continue;
+        if ((k as KeptDisk).disk) await desktop?.files.remove(k.i).catch(() => {});
+        else await deleteBlob('file:' + k.i).catch(() => {});
+        list.splice(list.indexOf(k), 1);
+        total -= k.s;
+      }
+      this.index = list;
+      this.usage = total;
+      await putData(INDEX, list);
+    } catch { /* storage unavailable */ }
+  }
 
   private runtime(s: Session): Runtime {
     let rt = this.runtimes.get(s);
@@ -391,7 +492,7 @@ class Files {
         const src = mine?.sources.get(from);
         if (!mine || !src) return;
         mine.lastAt = Date.now();
-        const left = [...src.pieces].filter(k => !mine.parts[k]);
+        const left = [...src.pieces].filter(k => !hasPiece(mine, k));
         if (!left.length) return;
         // Something got lost on the way: ask again, or leave it to the others
         if (++src.retries > 2) return this.dropSource(mine, from);
