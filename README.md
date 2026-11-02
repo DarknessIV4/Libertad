@@ -11,7 +11,7 @@ mumh5 works with any Mumble server, as it is: nothing has to be installed or cha
 - **Talk.** Clear, low-delay voice, with push to talk, voice activity or always on, and noise suppression.
 - **Chat like you are used to.** Messages, pictures, files, link previews and YouTube cards, in every channel and in private.
 - **Share your screen or your camera** with the people in your channel.
-- **Send files**, up to 2 GB, through the Mumble server itself. No upload sites.
+- **Send files**, up to 100 GB, through the Mumble server itself. No upload sites.
 - **See who is who.** Profile pictures and profile cards, and before you connect, how many people are on each of your servers.
 - **Make it yours.** 100 color schemes, from dark and light to Windows 95, and three layouts.
 - **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose.
