@@ -93,9 +93,10 @@
       <option value="100">100 MB</option>
       <option value="500">500 MB</option>
     </select>
+    <p class="help">Files of 256 MB and up always wait for a click, then ask where to save. They are written straight to that place and not kept in the app, so they take space only once.</p>
     <label class="check"><input type="checkbox" bind:checked={s.sendThumbnails} onchange={saveFiles} /> Send a preview picture with pictures and videos</label>
     <div class="row kept">
-      <p class="help">Files sent and received are kept on this computer, up to 100 GB, so others can get them from you later. {files.usage != null ? `In use: ${formatBytes(files.usage)}.` : ''}</p>
+      <p class="help">Files under 256 MB that you sent or received are kept on this computer, up to 100 GB, so others can get them from you later. {files.usage != null ? `In use: ${formatBytes(files.usage)}.` : ''}</p>
       <button class="btn" disabled={!files.usage} onclick={() => files.clear()}>Delete kept files</button>
     </div>
 

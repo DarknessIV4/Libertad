@@ -11,7 +11,8 @@ import {
 import { newId } from '../core/text-signal.ts';
 import type { Session } from './session.svelte.ts';
 import { getBlob, putBlob, getData, putData, deleteBlob } from './blobstore.ts';
-import { desktop } from './native.ts';
+import { desktop, type FileBegin } from './native.ts';
+import { formatBytes } from './html.ts';
 import { setRateLimits } from '../core/client.ts';
 import { store } from './settings.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
@@ -22,6 +23,7 @@ export interface Transfer {
   rate: number;    // bytes per second, recently
   sources: number; // people sending it to us
   disk?: boolean;
+  saved?: string;  // where a large file went: a path on the desktop, a file name in the browser
   error: string;
   url: string;     // once ready
   sending: number; // people we are sending it to
@@ -34,18 +36,37 @@ const KEEP_BYTES = 100 * 1024 ** 3;
 const INDEX = 'files:index';
 const MAX_SOURCES = 12;
 
-// Desktop app: files this big are written straight to a file on disk, not kept as Blobs.
-// To test with a small file: localStorage.setItem('mumh5.diskMin', '1000000') and restart.
+// Files this big are not held as Blobs: they are written as they arrive straight into the file the
+// person picked, so nothing is kept twice. The desktop app does that through its main process, a
+// browser with the file picker through that. To test with a small file:
+// localStorage.setItem('mumh5.diskMin', '1000000') and restart.
 function diskMin(): number {
   try { return Number(localStorage.getItem('mumh5.diskMin')) || 256 * 1024 ** 2; } catch { return 256 * 1024 ** 2; }
 }
-const useDisk = (meta: FileMeta): boolean => !!desktop && meta.s >= diskMin();
-const diskInit = (meta: FileMeta) => {
-  const on = useDisk(meta);
-  const n = on ? pieceCount(meta) : 0;
-  return { disk: on, have: new Uint8Array(n), flat: new Uint8Array(n * 32), tail: Promise.resolve() as Promise<unknown>, wfail: false };
+
+// Where a large download goes as it arrives
+interface Sink {
+  write(offset: number, bytes: Uint8Array): Promise<unknown>;
+  // Puts the finished file in place; returns where it is
+  finish(): Promise<string>;
+  // Drops what was written; safe to call more than once
+  abort(): Promise<unknown>;
+}
+
+type Picker = (o: { suggestedName: string }) => Promise<FileSystemFileHandle>;
+const picker = (): Picker | null => {
+  const f = (globalThis as { showSaveFilePicker?: Picker }).showSaveFilePicker;
+  return typeof f === 'function' ? f.bind(globalThis) : null;
+};
+const useDisk = (meta: FileMeta): boolean => (!!desktop || !!picker()) && meta.s >= diskMin();
+const fileName = (n: string) => n.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 200) || 'file';
+
+const diskInit = (meta: FileMeta, sink: Sink | null) => {
+  const n = sink ? pieceCount(meta) : 0;
+  return { disk: !!sink, sink, have: new Uint8Array(n), flat: new Uint8Array(n * 32), tail: Promise.resolve() as Promise<unknown>, wfail: false };
 };
 const hasPiece = (d: Download, k: number): boolean => (d.disk ? d.have[k] === 1 : !!d.parts[k]);
+// An older version also cached large files in the app's folder
 type KeptDisk = Kept & { disk?: boolean };
 
 // Opt-in faster sending for servers where you raised messagelimit / messageburst.
@@ -73,6 +94,7 @@ interface Download {
   parts: (Blob | undefined)[];
   digests: Promise<Uint8Array>[];
   disk: boolean;
+  sink: Sink | null;
   have: Uint8Array;
   flat: Uint8Array;
   tail: Promise<unknown>;
@@ -120,6 +142,8 @@ class Files {
   private local = new Map<string, { meta: FileMeta; blob: Blob }>();
   private index: Kept[] | null = null;
   private checked = new Set<string>();
+  // Files whose Save dialog is open
+  private choosing = new Set<string>();
 
   // Plugin data needs a 1.4 server; older ones would not pass the requests on
   supported(s: Session): boolean {
@@ -193,10 +217,13 @@ class Files {
   async check(meta: FileMeta): Promise<void> {
     if (this.checked.has(meta.i)) return;
     this.checked.add(meta.i);
-    const diskKept = (await this.loadIndex()).find(k => k.i === meta.i) as KeptDisk | undefined;
-    if (diskKept?.disk && diskKept.h === meta.h && desktop && !this.downloads.has(meta.i) && await desktop.files.has(meta.i)) {
-      this.readyDisk(meta);
-      return;
+    const kept = (await this.loadIndex()).find(k => k.i === meta.i) as KeptDisk | undefined;
+    if (desktop && (useDisk(meta) || kept?.disk) && !this.downloads.has(meta.i)) {
+      const at = await desktop.files.where(meta.i, meta.h).catch(() => null);
+      if (!this.downloads.has(meta.i)) {
+        if (at?.kind === 'saved') return this.readyDisk(meta, at.path);
+        if (at?.kind === 'cache' && kept?.disk && kept.h === meta.h) return this.readyDisk(meta);
+      }
     }
     const found = await this.find(meta.i);
     if (found && found.meta.h === meta.h && !this.downloads.has(meta.i)) this.ready(found.meta, found.blob);
@@ -246,7 +273,8 @@ class Files {
     if (!meta) return `${file.name}: cannot be sent`;
     this.checked.add(meta.i);
     this.ready(meta, file);
-    this.keep(meta, file);
+    // A copy of a big file would take the same space again; it is sent from the original while this run lasts
+    if (meta.s < diskMin()) this.keep(meta, file);
     return meta;
   }
 
@@ -257,26 +285,81 @@ class Files {
     const limit = store.settings.autoDownload * 1024 * 1024;
     this.check(meta).then(() => {
       const t = this.transfers[meta.i];
-      if (limit && meta.s <= limit && (!t || t.state === 'idle')) this.download(s, meta, author);
+      // Large files ask where to save, which needs a click
+      if (limit && meta.s <= limit && !useDisk(meta) && (!t || t.state === 'idle')) this.download(s, meta, author);
     });
   }
 
   download(s: Session, meta: FileMeta, author: number | null): void {
     const client = s.client;
     const t = this.transfers[meta.i];
-    if (this.downloads.has(meta.i) || t?.state === 'ready') return;
+    if (this.downloads.has(meta.i) || this.choosing.has(meta.i) || t?.state === 'ready') return;
     if (!client || !this.supported(s)) {
       this.set(meta.i, { state: 'failed', error: 'Downloading needs a server running Mumble 1.4 or newer' });
       return;
     }
+    if (!useDisk(meta)) return this.start(s, meta, author, null);
+    // Where to save comes first, from this very click; nothing is fetched if it is refused
+    this.choosing.add(meta.i);
+    this.openSink(meta).then(opened => {
+      if (!opened) return;
+      if ('error' in opened) return this.set(meta.i, { state: 'failed', error: opened.error });
+      this.start(s, meta, author, opened.sink);
+    }).catch(() => {
+      this.set(meta.i, { state: 'failed', error: 'Could not create the file there' });
+    }).finally(() => this.choosing.delete(meta.i));
+  }
+
+  // The file to write into, or null when the person closed the dialog
+  private async openSink(meta: FileMeta): Promise<{ sink: Sink } | { error: string } | null> {
+    const id = meta.i;
+    if (desktop) {
+      const r: FileBegin = await desktop.files.begin(id, fileName(meta.n), meta.s, meta.h).catch(() => ({ ok: false, reason: 'error' }) as FileBegin);
+      if (r.ok) {
+        return { sink: { write: (o, b) => desktop!.files.write(id, o, b), finish: () => desktop!.files.finish(id), abort: () => desktop!.files.remove(id) } };
+      }
+      if (r.reason === 'canceled') return null;
+      const room = r.free != null ? ` (${formatBytes(r.free)} free, ${formatBytes(meta.s)} needed)` : '';
+      return { error: r.reason === 'space' ? `Not enough free space there${room}` : r.reason === 'toolarge' ? 'That drive cannot hold a file this large' : 'Could not create the file there' };
+    }
+    // The browser: must be called from the click itself, before anything is awaited
+    let handle: FileSystemFileHandle;
+    try {
+      handle = await picker()!({ suggestedName: fileName(meta.n) });
+    } catch (e) {
+      return (e as { name?: string } | null)?.name === 'AbortError' ? null : { error: 'Could not create the file there' };
+    }
+    let w: FileSystemWritableFileStream;
+    try {
+      w = await handle.createWritable();
+    } catch {
+      return { error: 'Could not write to that file' };
+    }
+    return {
+      sink: {
+        write: (o, b) => w.write({ type: 'write', position: o, data: b as Uint8Array<ArrayBuffer> }),
+        finish: async () => { await w.close(); return handle.name; },
+        abort: () => w.abort().catch(() => {})
+      }
+    };
+  }
+
+  private start(s: Session, meta: FileMeta, author: number | null, sink: Sink | null): void {
+    const client = s.client;
+    // The connection may have gone while the dialog was open
+    if (!client) {
+      void sink?.abort().catch(() => {});
+      this.set(meta.i, { state: 'failed', error: 'Disconnected' });
+      return;
+    }
     const now = Date.now();
     const d: Download = {
-      s, meta, count: pieceCount(meta), parts: [], digests: [], ...diskInit(meta), got: 0, bytes: 0, sources: new Map(),
+      s, meta, count: pieceCount(meta), parts: [], digests: [], ...diskInit(meta, sink), got: 0, bytes: 0, sources: new Map(),
       findUntil: now + FIND_MS, lastAt: now, stalls: 0, timer: setInterval(() => this.watch(d), 2000),
       rebalance: undefined, rateFrom: { at: now, bytes: 0 }
     };
     this.downloads.set(meta.i, d);
-    this.set(meta.i, { state: 'finding', got: 0, rate: 0, sources: 0, error: '' });
+    this.set(meta.i, { state: 'finding', got: 0, rate: 0, sources: 0, error: '', saved: undefined });
     if (author != null && author !== client.session && client.users.has(author)) {
       d.sources.set(author, { pieces: new Set(), retries: 0 });
       this.assign(d);
@@ -289,6 +372,7 @@ class Files {
     const d = this.downloads.get(id);
     if (!d) return;
     this.stop(d);
+    this.discard(d);
     this.set(id, { state: 'idle', got: 0, rate: 0, sources: 0 });
   }
 
@@ -300,8 +384,18 @@ class Files {
     if (d.s.client) this.signal(d.s, busy, FILE.want, { i: d.meta.i, r: [] });
   }
 
+  // What a download that did not finish wrote is deleted now, not at the next start
+  private discard(d: Download): void {
+    if (!d.sink) return;
+    const sink = d.sink;
+    // Writes still on their way are no longer an error to report
+    d.wfail = true;
+    d.tail.then(() => sink.abort()).catch(() => {});
+  }
+
   private fail(d: Download, error: string): void {
     this.stop(d);
+    this.discard(d);
     this.set(d.meta.i, { state: 'failed', error, rate: 0, sources: 0 });
     sounds.play('uploadFailed');
   }
@@ -364,10 +458,10 @@ class Files {
       const k = p.index;
       d.have[k] = 1;
       const task = Promise.all([
-        desktop!.files.write(d.meta.i, k * d.meta.c, bytes, d.meta.s),
+        d.sink!.write(k * d.meta.c, bytes),
         sha256(bytes).then(h => { d.flat.set(h, k * 32); }),
       ]).catch(() => {
-        if (!d.wfail) { d.wfail = true; this.fail(d, 'Could not write the file to disk'); }
+        if (!d.wfail) { d.wfail = true; this.fail(d, 'Could not write the file'); }
       });
       d.tail = d.tail.then(() => task);
     } else {
@@ -398,53 +492,55 @@ class Files {
   // ─── Requests between clients ───────────────────────────────────────────────
 
   private async finishDisk(d: Download): Promise<void> {
-    const id = d.meta.i;
+    const sink = d.sink!;
     try {
       await d.tail;
-      if (d.wfail) { await desktop!.files.remove(id).catch(() => {}); return; }
+      if (d.wfail) { await sink.abort().catch(() => {}); return; }
       const digests: Uint8Array[] = [];
       for (let k = 0; k < d.count; k++) digests.push(d.flat.subarray(k * 32, (k + 1) * 32));
       if (await rootHash(digests) !== d.meta.h) {
-        await desktop!.files.remove(id).catch(() => {});
+        await sink.abort().catch(() => {});
         return this.fail(d, 'The file did not arrive intact');
       }
-      await desktop!.files.finish(id);
-      this.readyDisk(d.meta);
-      void this.keepDisk(d.meta);
+      // Only a file that checked out is put in place; it is the only copy
+      const where = await sink.finish();
+      this.readyDisk(d.meta, where);
       sounds.play('uploadDone');
-      // There is no Save button for disk files yet, so ask where to put the file now
-      void desktop!.files.export(id, d.meta.n).catch(() => {});
     } catch {
-      await desktop?.files.remove(id).catch(() => {});
-      this.fail(d, 'Could not write the file to disk');
+      await sink.abort().catch(() => {});
+      this.fail(d, 'Could not write the file');
     }
   }
 
-  private readyDisk(meta: FileMeta): void {
-    this.set(meta.i, { state: 'ready', got: meta.s, url: '', disk: true, error: '', rate: 0, sources: 0 });
+  private readyDisk(meta: FileMeta, saved?: string): void {
+    this.set(meta.i, { state: 'ready', got: meta.s, url: '', disk: true, saved, error: '', rate: 0, sources: 0 });
   }
 
-  saveAs(id: string, name: string): Promise<boolean> | undefined {
-    return desktop?.files.export(id, name);
+  // Opens the folder holding a file that was saved (desktop app)
+  reveal(id: string): void {
+    void desktop?.files.reveal(id).catch(() => {});
   }
 
-  private async keepDisk(meta: FileMeta): Promise<void> {
-    try {
-      const index = await this.loadIndex();
-      const list: Kept[] = [...index.filter(k => k.i !== meta.i), { ...meta, at: Date.now(), disk: true } as KeptDisk];
-      let total = list.reduce((n, k) => n + k.s, 0);
-      for (const k of [...list]) {
-        if (total <= KEEP_BYTES) break;
-        if (this.local.has(k.i) || k.i === meta.i) continue;
-        if ((k as KeptDisk).disk) await desktop?.files.remove(k.i).catch(() => {});
-        else await deleteBlob('file:' + k.i).catch(() => {});
-        list.splice(list.indexOf(k), 1);
-        total -= k.s;
-      }
-      this.index = list;
-      this.usage = total;
-      await putData(INDEX, list);
-    } catch { /* storage unavailable */ }
+  // A large file an older version cached: ask where, then move it out of the cache, not copy it
+  async saveKept(meta: FileMeta): Promise<void> {
+    if (!desktop) return;
+    const r = await desktop.files.export(meta.i, fileName(meta.n), meta.h).catch(() => null);
+    if (r?.ok) {
+      await this.forget(meta.i);
+      this.set(meta.i, { saved: r.path, error: '' });
+    } else if (r?.reason !== 'canceled') {
+      const room = r?.reason === 'space' && r.free != null ? ` (${formatBytes(r.free)} free)` : '';
+      this.set(meta.i, { error: r?.reason === 'space' ? `Not enough free space there${room}` : 'Could not save the file there' });
+    }
+  }
+
+  // Takes a file out of the kept list once it lives somewhere else
+  private async forget(id: string): Promise<void> {
+    const index = await this.loadIndex();
+    const list = index.filter(k => k.i !== id);
+    this.index = list;
+    this.usage = list.reduce((n, k) => n + k.s, 0);
+    await putData(INDEX, list).catch(() => {});
   }
 
   private runtime(s: Session): Runtime {

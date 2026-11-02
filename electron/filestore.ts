@@ -1,97 +1,60 @@
-import { app, dialog, ipcMain, BrowserWindow } from 'electron';
-import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promises as fs, constants } from 'node:fs';
-import type { FileHandle } from 'node:fs/promises';
+import { app, dialog, ipcMain, shell, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
+import { createFileStore } from './filestore-core.ts';
 
-// Large received files live here as plain files, not as Blobs in IndexedDB.
-// Names are a hash of the file id, so a hostile id can never become a path.
-const dir = () => path.join(app.getPath('userData'), 'files');
-const key = (id: string) => createHash('sha256').update(String(id)).digest('hex');
-const partPath = (id: string) => path.join(dir(), key(id) + '.part');
-const donePath = (id: string) => path.join(dir(), key(id) + '.bin');
-const exists = (p: string) => fs.stat(p).then(() => true, () => false);
-const okNum = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 const MAX_IO = 4 * 1024 * 1024;
+const okNum = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+const okStr = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
+const safeName = (n: unknown) => String(n ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 200) || 'file';
 
-// One open handle per file, cached as a promise so concurrent first writes share it
-const handles = new Map<string, Promise<FileHandle>>();
-
-function open(id: string, size?: number): Promise<FileHandle> {
-  let p = handles.get(id);
-  if (!p) {
-    p = (async () => {
-      await fs.mkdir(dir(), { recursive: true });
-      if (await exists(donePath(id))) return fs.open(donePath(id), 'r');
-      const fresh = !(await exists(partPath(id)));
-      // 'r+' / 'w+' and not 'a': append mode ignores write offsets on Linux
-      const h = await fs.open(partPath(id), fresh ? 'w+' : 'r+');
-      if (fresh && process.platform === 'win32') {
-        // NTFS zero-fills the gap when a write lands past the end, unless the file is sparse
-        await new Promise<void>(r => execFile('fsutil', ['sparse', 'setflag', partPath(id)], () => r()));
-      }
-      if (okNum(size) && size > 0) await h.truncate(size).catch(() => {});
-      return h;
-    })();
-    handles.set(id, p);
-    p.catch(() => handles.delete(id));
-  }
-  return p;
-}
-
-async function close(id: string): Promise<void> {
-  const p = handles.get(id);
-  if (!p) return;
-  handles.delete(id);
-  const h = await p.catch(() => null);
-  await h?.close().catch(() => {});
+// Paths only ever come from the Save dialog, never from the renderer
+async function pickPlace(e: IpcMainInvokeEvent, name: unknown): Promise<string | null> {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const opts = { defaultPath: path.join(app.getPath('downloads'), safeName(name)) };
+  const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+  return r.canceled || !r.filePath ? null : r.filePath;
 }
 
 export function registerFileStore(): void {
-  // Downloads do not survive a restart, so leftover partial files are garbage
-  fs.readdir(dir())
-    .then(names => Promise.all(names.filter(n => n.endsWith('.part')).map(n => fs.rm(path.join(dir(), n), { force: true }))))
-    .catch(() => {});
+  const store = createFileStore({
+    cacheDir: () => path.join(app.getPath('userData'), 'files'),
+    stateFile: () => path.join(app.getPath('userData'), 'files-state.json')
+  });
+  store.sweep().catch(() => {});
 
-  ipcMain.handle('files:write', async (_e, id: string, offset: number, bytes: Uint8Array, size: number) => {
-    if (!okNum(offset) || !(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IO) throw new Error('bad write');
-    const h = await open(id, size);
-    const { bytesWritten } = await h.write(bytes, 0, bytes.byteLength, offset);
-    if (bytesWritten !== bytes.byteLength) throw new Error('short write');
-    return true;
+  // Asks where to save, then makes the file there; nothing is fetched if this says no
+  ipcMain.handle('files:begin', async (e, id: unknown, name: unknown, size: unknown, hash: unknown) => {
+    if (!okStr(id, 64) || !okNum(size) || size < 1 || !okStr(hash, 128)) throw new Error('bad request');
+    const place = await pickPlace(e, name);
+    if (!place) return { ok: false, reason: 'canceled' };
+    return store.begin(id, place, size, hash);
   });
-  ipcMain.handle('files:read', async (_e, id: string, offset: number, length: number) => {
-    if (!okNum(offset) || !okNum(length) || length > MAX_IO) throw new Error('bad range');
-    const h = await open(id);
-    const buf = Buffer.alloc(length);
-    const { bytesRead } = await h.read(buf, 0, length, offset);
-    return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+  ipcMain.handle('files:write', (_e, id: unknown, offset: unknown, bytes: unknown) => {
+    if (!okStr(id, 64) || !okNum(offset) || !(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IO) throw new Error('bad write');
+    return store.write(id, offset, bytes);
   });
-  ipcMain.handle('files:finish', async (_e, id: string) => {
-    await close(id);
-    await fs.rename(partPath(id), donePath(id));
-    return true;
+  ipcMain.handle('files:finish', (_e, id: unknown) => {
+    if (!okStr(id, 64)) throw new Error('bad request');
+    return store.finish(id);
   });
-  ipcMain.handle('files:remove', async (_e, id: string) => {
-    await close(id);
-    await fs.rm(partPath(id), { force: true });
-    await fs.rm(donePath(id), { force: true });
-    return true;
+  ipcMain.handle('files:remove', (_e, id: unknown) => {
+    if (!okStr(id, 64)) throw new Error('bad request');
+    return store.remove(id);
   });
-  ipcMain.handle('files:has', (_e, id: string) => exists(donePath(id)));
-  ipcMain.handle('files:free', async () => {
-    await fs.mkdir(dir(), { recursive: true });
-    const s = await fs.statfs(dir());
-    return s.bavail * s.bsize;
+  ipcMain.handle('files:where', (_e, id: unknown, hash: unknown) => {
+    if (!okStr(id, 64) || !okStr(hash, 128)) return null;
+    return store.where(id, hash);
   });
-  ipcMain.handle('files:export', async (e, id: string, name: string) => {
-    const win = BrowserWindow.fromWebContents(e.sender);
-    const opts = { defaultPath: String(name ?? 'file').slice(0, 255) };
-    const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
-    if (r.canceled || !r.filePath) return false;
-    // Instant on filesystems with reflinks (btrfs, XFS), a normal copy elsewhere
-    await fs.copyFile(donePath(id), r.filePath, constants.COPYFILE_FICLONE);
-    return true;
+  ipcMain.handle('files:reveal', async (_e, id: unknown) => {
+    const p = okStr(id, 64) ? await store.savedPath(id) : null;
+    if (p) shell.showItemInFolder(p);
+    return !!p;
+  });
+  // A file an older version kept in the app's cache: ask where, then move it out of the cache
+  ipcMain.handle('files:export', async (e, id: unknown, name: unknown, hash: unknown) => {
+    if (!okStr(id, 64) || !okStr(hash, 128)) throw new Error('bad request');
+    const place = await pickPlace(e, name);
+    if (!place) return { ok: false, reason: 'canceled' };
+    return store.moveOut(id, place, hash);
   });
 }

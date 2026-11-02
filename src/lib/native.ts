@@ -22,16 +22,23 @@ export interface PlatformApi {
   };
 }
 
+export type FileBegin = { ok: true } | { ok: false; reason: 'canceled' | 'space' | 'toolarge' | 'error'; free?: number };
+export type FileExport = { ok: true; path: string } | { ok: false; reason: 'canceled' | 'space' | 'toolarge' | 'error'; free?: number };
+
 // The desktop app's preload API
 interface NativeApi extends PlatformApi {
   files: {
-    write(id: string, offset: number, bytes: Uint8Array, size: number): Promise<boolean>;
-    read(id: string, offset: number, length: number): Promise<Uint8Array>;
-    finish(id: string): Promise<boolean>;
+    // Asks where to save (a Save dialog) and creates the file there; nothing is fetched before this says ok
+    begin(id: string, name: string, size: number, hash: string): Promise<FileBegin>;
+    write(id: string, offset: number, bytes: Uint8Array): Promise<boolean>;
+    // Puts the finished file in place and returns its path
+    finish(id: string): Promise<string>;
+    // Drops an unfinished download and any cached copy; never a file the person saved
     remove(id: string): Promise<boolean>;
-    export(id: string, name: string): Promise<boolean>;
-    has(id: string): Promise<boolean>;
-    free(): Promise<number>;
+    where(id: string, hash: string): Promise<{ kind: 'saved'; path: string } | { kind: 'cache' } | null>;
+    reveal(id: string): Promise<boolean>;
+    // Moves a file an older version cached out to a place the person picks
+    export(id: string, name: string, hash: string): Promise<FileExport>;
   };
   updateTray(state: { icon: string; tooltip: string; connected: boolean; server: string; muted: boolean; deafened: boolean; mode: string }): void;
   onTrayAction(fn: (action: string) => void): void;
