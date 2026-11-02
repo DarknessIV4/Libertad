@@ -1,33 +1,22 @@
 # Changelog
-
-All notable changes to mumh5. Versions follow the `version` in `package.json`.
-
-## Unreleased
-
+ 
+All notable changes to mumh5.
+ 
+## 0.2.1 - 2026-11-03
+ 
+### Added
+ 
+- Profile cards: a click on someone (in the channel list, the member list, the chat or a voice tile) opens their card next to them, like in Discord: picture, name, channel, description and Send message. On phones it is a sheet at the bottom. Your own card has Edit description, Change name and your picture.
+- Profile pictures, as Mumble textures, so they go through the server like everything else and the desktop Mumble client has them too. Your picture is cut square, made small enough for the server's image limit, kept on this computer and sent to every server you connect to, since servers keep pictures only for registered users.
+- A start screen while not connected: your saved servers with how many people are on them and their ping, a notice when you were kicked or the connection was lost, and your mute and deafen buttons. The counts come from a ping at start and once a minute; in the browser version the proxy pings the servers it allows.
+- The interface font is Inter, shipped with the app (nothing is fetched from outside).
 ### Changed
-
+ 
 - Large files (256 MB and up) ask where to save when you click Download, before anything is fetched. They are written straight into the file you chose (as `<name>.mumh5part` beside it until the file is complete and checked) instead of into the app's storage and then copied out, so they no longer take twice the space. Closing the dialog cancels the download, and the free space and the drive's file size limit are checked first.
 - Large files are never fetched by themselves, whatever the setting for small ones, because choosing where to save needs a click.
 - A large file you send is sent from where it is on disk and no longer copied into the app's storage first. It can only be fetched from you until you restart the app.
 - The browser version does the same where the browser has the file picker (Chrome, Edge): a large download streams into the file you pick instead of being held in memory.
 - Files kept by older versions: Save as moves the file out of the app's storage to the place you pick, instead of copying it.
-
-### Fixed
-
-- A download that was stopped, failed or lost its sender deleted nothing: its part file and open file handle stayed until the next start. They are removed at once now.
-- A failed save of a large file showed nothing. Errors are shown on the card, and a large file that was saved has a Show in folder button.
-- Large videos and pictures that were already saved showed an empty player.
-- The file size limit is stated as 100 GB everywhere (README, changelog and developer notes said 2 GB).
-
-### Added
-
-- Profile cards: a click on someone (in the channel list, the member list, the chat or a voice tile) opens their card next to them, like in Discord: picture, name, channel, description and Send message. On phones it is a sheet at the bottom. Your own card has Edit description, Change name and your picture.
-- Profile pictures, as Mumble textures, so they go through the server like everything else and the desktop Mumble client has them too. Your picture is cut square, made small enough for the server's image limit, kept on this computer and sent to every server you connect to, since servers keep pictures only for registered users.
-- A start screen while not connected: your saved servers with how many people are on them and their ping, a notice when you were kicked or the connection was lost, and your mute and deafen buttons. The counts come from a ping at start and once a minute; in the browser version the proxy pings the servers it allows.
-- The interface font is Inter, shipped with the app (nothing is fetched from outside).
-
-### Changed
-
 - New look throughout, still with square corners: one type scale, fields and buttons of one height with a visible focus ring, calmer spacing in the chat, the message box set in from the edges, softer shadows on menus and dialogs, sentence-case labels.
 - New app icon: a lowercase m that is also a speech bubble, white on near black; the tray icon uses the same black while idle.
 - Stacked is the default layout for new installations; saved settings keep their layout.
@@ -37,19 +26,21 @@ All notable changes to mumh5. Versions follow the `version` in `package.json`.
 - A single click on a channel only selects it (a double click joins). The description opens from the marker next to the channel or from its menu, next to the channel instead of in the side panel.
 - A stream opened in a separate window leaves only its bar in the main window, and the chat gets the room.
 - Resized panels return to their size when a window that was made smaller grows again.
-
 ### Fixed
-
+ 
+- A download that was stopped, failed or lost its sender deleted nothing: its part file and open file handle stayed until the next start. They are removed at once now.
+- A failed save of a large file showed nothing. Errors are shown on the card, and a large file that was saved has a Show in folder button.
+- Large videos and pictures that were already saved showed an empty player.
+- The file size limit is stated as 100 GB everywhere (README, changelog and developer notes said 2 GB).
 - The desktop app no longer downloads spellchecker dictionaries from Google (redirector.gvt1.com); the spellchecker is off.
 - Dependencies with security advisories updated: DOMPurify 3.4.17 (it cleans the HTML of messages and descriptions), and for development and building Vite 8.3.5, markdown-it 14.3.3 and http-cache-semantics 4.3.0. node-forge has an advisory without a fixed version; it is about RSA signature verification, which mumh5 does not use (it only creates and reads certificates and .p12 files).
 - The stacked layout keeps the message box and the picture of a stream visible however small the window or the chat is made, and the channel list can no longer be dragged over them.
 - Connecting while muted, or voice coming back to a server, no longer plays the mute or undeafen sound; unmuting plays the unmute sound instead of undeafen.
 - Settings tabs no longer run off the edge, and the identity setup no longer ends in an empty bar.
-
 ## 0.2.0 - 2026-10-17
-
+ 
 ### Added
-
+ 
 - Linux: `install.sh` and `uninstall.sh` in the `.tar.gz`. They install for one user (`~/.local`) or for everyone (`/opt`, with sudo), with a `mumh5` command and a menu entry; running the installer again updates. Uninstalling keeps settings and identities unless `--purge` is given.
 - File sharing through the Mumble server itself, with no file host: any file up to 2 GB, announced in the chat with a preview picture (all that regular Mumble clients see) and sent in pieces to the mumh5 users who fetch it. Small files are fetched by themselves (up to 20 MB, Settings, Chat and files). About 12 MB a minute per sender on a server with default limits; anyone who has the file can send it, and a download shares the pieces out between up to four of them. Files sent and received are kept on the computer, up to 2 GB.
 - 95 more color schemes, 100 in all: six made by hand (Forest, Ember, Ocean, Plum, Paper, High contrast) and 89 generated from a hue and an accent (`npm run themes`), 64 dark and 25 light. The picker can be narrowed by name and by dark or light.
@@ -66,9 +57,8 @@ All notable changes to mumh5. Versions follow the `version` in `package.json`.
 - Link previews in chat: title, description and image for web links (up to two per message), fetched by this computer when turned on in Settings, Chat and files (off by default).
 - Voice tiles on small windows: when the window is too narrow for the member list, the people in your voice channel appear as tiles above the chat, light up while they talk, and keep mute and deafen at hand. The tiles can be collapsed.
 - Per-person volume slider (0 to 300%) directly in the user context menu. Double-click resets it to 100%.
-
 ### Changed
-
+ 
 - Profile panel: the current channel sits on its own line under the name, and the badge row wraps on narrow panels.
 - Profile panel: guests no longer get a "Guest" badge; registered users keep the "Registered" badge.
 - Profile panel: volume, "mute for me" and nickname moved to the user context menu, which has them for every place a user appears.
@@ -76,16 +66,14 @@ All notable changes to mumh5. Versions follow the `version` in `package.json`.
 - User information dialog updates every second, so online and idle times tick live.
 - Channel tree: channels no longer show an icon in front of the name; only channels you cannot enter show a lock.
 - Channel details header without the channel icon.
-
 ### Removed
-
+ 
 - Uploads to a f0ckm instance, its settings (upload host, key, expiry) and link previews fetched through it. Files now go through the Mumble server.
-
 ### Fixed
-
+ 
 - A description preview could open after dropping a channel and stay on screen.
 - Messages sent in quick, irregular bursts could still be dropped by the server's rate limit. The client now mirrors Murmur's bucket exactly (it only leaks whole seconds and restarts its timer on every message) and queues instead of losing messages.
-
 ## 0.1.0
-
+ 
 - Initial version.
+ 
