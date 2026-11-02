@@ -83,9 +83,10 @@ test('announcements hide their marker from other clients and come back intact', 
 test('announced details are checked', () => {
   assert.deepEqual(validMeta(meta), meta);
   assert.equal(validMeta({ ...meta, s: 0 }), null);
-  assert.equal(validMeta({ ...meta, s: 3 * 1024 ** 3 }), null);
+  assert.equal(validMeta({ ...meta, s: 101 * 1024 ** 3 }), null);
+  assert.ok(validMeta({ ...meta, s: 100 * 1024 ** 3 }), "exactly at the limit");
   assert.equal(validMeta({ ...meta, c: 1485 }), null);
-  assert.equal(validMeta({ ...meta, s: 2 * 1024 ** 3, c: 15000 }), null, 'too many pieces');
+  assert.equal(validMeta({ ...meta, s: 100 * 1024 ** 3, c: 50000 }), null, 'too many pieces');
   assert.equal(validMeta({ ...meta, h: 'xyz' }), null);
   assert.equal(validMeta({ ...meta, i: 'A/B' }), null);
   assert.equal(validMeta({ ...meta, m: 'text/html<script>' }), null);

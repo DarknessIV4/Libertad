@@ -24,6 +24,15 @@ export interface PlatformApi {
 
 // The desktop app's preload API
 interface NativeApi extends PlatformApi {
+  files: {
+    write(id: string, offset: number, bytes: Uint8Array, size: number): Promise<boolean>;
+    read(id: string, offset: number, length: number): Promise<Uint8Array>;
+    finish(id: string): Promise<boolean>;
+    remove(id: string): Promise<boolean>;
+    export(id: string, name: string): Promise<boolean>;
+    has(id: string): Promise<boolean>;
+    free(): Promise<number>;
+  };
   updateTray(state: { icon: string; tooltip: string; connected: boolean; server: string; muted: boolean; deafened: boolean; mode: string }): void;
   onTrayAction(fn: (action: string) => void): void;
   linkPreview(url: string): Promise<LinkPreviewData | null>;

@@ -1,3 +1,4 @@
+import { registerFileStore } from './filestore.ts';
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, shell, session, systemPreferences, type WebContents } from 'electron';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -28,6 +29,7 @@ const conns = new Map<string, Conn>();
 
 // ─── Identities (client certificates) ─────────────────────────────────────────
 
+registerFileStore();
 ipcMain.handle('identities:list', () => identities().list());
 ipcMain.handle('identities:create', (_e, name: string, email: string) => identities().create(String(name), String(email ?? '')));
 ipcMain.handle('identities:import', (_e, bytes: Uint8Array, password: string, name: string) =>
