@@ -4,6 +4,21 @@ All notable changes to mumh5. Versions follow the `version` in `package.json`.
 
 ## Unreleased
 
+### Changed
+
+- Large files (256 MB and up) ask where to save when you click Download, before anything is fetched. They are written straight into the file you chose (as `<name>.mumh5part` beside it until the file is complete and checked) instead of into the app's storage and then copied out, so they no longer take twice the space. Closing the dialog cancels the download, and the free space and the drive's file size limit are checked first.
+- Large files are never fetched by themselves, whatever the setting for small ones, because choosing where to save needs a click.
+- A large file you send is sent from where it is on disk and no longer copied into the app's storage first. It can only be fetched from you until you restart the app.
+- The browser version does the same where the browser has the file picker (Chrome, Edge): a large download streams into the file you pick instead of being held in memory.
+- Files kept by older versions: Save as moves the file out of the app's storage to the place you pick, instead of copying it.
+
+### Fixed
+
+- A download that was stopped, failed or lost its sender deleted nothing: its part file and open file handle stayed until the next start. They are removed at once now.
+- A failed save of a large file showed nothing. Errors are shown on the card, and a large file that was saved has a Show in folder button.
+- Large videos and pictures that were already saved showed an empty player.
+- The file size limit is stated as 100 GB everywhere (README, changelog and developer notes said 2 GB).
+
 ### Added
 
 - Profile cards: a click on someone (in the channel list, the member list, the chat or a voice tile) opens their card next to them, like in Discord: picture, name, channel, description and Send message. On phones it is a sheet at the bottom. Your own card has Edit description, Change name and your picture.

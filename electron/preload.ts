@@ -14,13 +14,13 @@ for (const key of Object.keys(listeners) as (keyof typeof listeners)[]) {
 // The only native surface the renderer gets
 contextBridge.exposeInMainWorld('mumh5Native', {
   files: {
-    write: (id: string, offset: number, bytes: Uint8Array, size: number) => ipcRenderer.invoke('files:write', id, offset, bytes, size),
-    read: (id: string, offset: number, length: number) => ipcRenderer.invoke('files:read', id, offset, length),
+    begin: (id: string, name: string, size: number, hash: string) => ipcRenderer.invoke('files:begin', id, name, size, hash),
+    write: (id: string, offset: number, bytes: Uint8Array) => ipcRenderer.invoke('files:write', id, offset, bytes),
     finish: (id: string) => ipcRenderer.invoke('files:finish', id),
     remove: (id: string) => ipcRenderer.invoke('files:remove', id),
-    export: (id: string, name: string) => ipcRenderer.invoke('files:export', id, name),
-    has: (id: string) => ipcRenderer.invoke('files:has', id),
-    free: () => ipcRenderer.invoke('files:free'),
+    where: (id: string, hash: string) => ipcRenderer.invoke('files:where', id, hash),
+    reveal: (id: string) => ipcRenderer.invoke('files:reveal', id),
+    export: (id: string, name: string, hash: string) => ipcRenderer.invoke('files:export', id, name, hash),
   },
   platformInfo: () => ipcRenderer.invoke('platform:info'),
   updateTray: (state: unknown) => ipcRenderer.send('tray:update', state),

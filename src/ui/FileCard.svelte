@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import { files, fileKind, type Transfer } from '../lib/files.svelte.ts';
+  import { desktop } from '../lib/native.ts';
   import { sessions } from '../lib/session.svelte.ts';
   import { formatBytes } from '../lib/html.ts';
   import type { FileMeta } from '../core/file-transfer.ts';
@@ -27,23 +28,26 @@
     if (t.state === 'finding') return 'Looking for someone who has it';
     if (t.state === 'loading') return `${formatBytes(t.got)} of ${formatBytes(meta.s)}${t.rate ? `, ${formatBytes(Math.round(t.rate))}/s` : ''}`;
     if (t.state === 'failed') return t.error;
-    return formatBytes(meta.s) + (t.sending ? `, sending to ${t.sending}` : '');
+    const sending = t.sending ? `, sending to ${t.sending}` : '';
+    if (t.error) return t.error;
+    if (t.saved) return `${formatBytes(meta.s)}, saved ${desktop ? 'to' : 'as'} ${t.saved}${sending}`;
+    return formatBytes(meta.s) + sending;
   });
 
   const get = () => files.download(sessions.active, meta, author);
 </script>
 
-<div class="file" class:failed={t?.state === 'failed'}>
-  {#if ready && kind === 'image'}
+<div class="file" class:failed={t?.state === 'failed' || !!t?.error}>
+  {#if ready && t?.url && kind === 'image'}
     <img src={t!.url} alt={meta.n} />
-  {:else if ready && kind === 'video'}
+  {:else if ready && t?.url && kind === 'video'}
     <video src={t!.url} controls preload="metadata"><track kind="captions" /></video>
-  {:else if ready && kind === 'audio'}
+  {:else if ready && t?.url && kind === 'audio'}
     <audio src={t!.url} controls preload="metadata"></audio>
   {:else if poster}
-    <button class="poster" title={busy ? meta.n : `Download (${eta(meta.s - (t?.got ?? 0))})`} disabled={busy} onclick={get}>
+    <button class="poster" title={busy || ready ? meta.n : `Download (${eta(meta.s - (t?.got ?? 0))})`} disabled={busy || ready} onclick={get}>
       <img src={poster} alt="" />
-      {#if kind === 'video' && !busy}<span class="play"><Icon name="download" size={28} /></span>{/if}
+      {#if kind === 'video' && !busy && !ready}<span class="play"><Icon name="download" size={28} /></span>{/if}
     </button>
   {/if}
   <div class="row">
@@ -52,8 +56,12 @@
       <span class="name" title={meta.n}>{meta.n}</span>
       <span class="sub">{status}</span>
     </div>
-    {#if ready}
-      <a class="icon-btn" href={t!.url} download={meta.n} title="Save" aria-label="Save {meta.n}"><Icon name="download" size={18} /></a>
+    {#if ready && t?.url}
+      <a class="icon-btn" href={t.url} download={meta.n} title="Save" aria-label="Save {meta.n}"><Icon name="download" size={18} /></a>
+    {:else if ready && t?.saved}
+      {#if desktop}<button class="btn" onclick={() => files.reveal(meta.i)}>Show in folder</button>{/if}
+    {:else if ready}
+      <button class="btn" title="Moves the file out of the app's storage to the place you pick" onclick={() => files.saveKept(meta)}>Save as...</button>
     {:else if busy}
       <button class="icon-btn" title="Stop" aria-label="Stop downloading {meta.n}" onclick={() => files.cancel(meta.i)}><Icon name="x" size={18} /></button>
     {:else}
