@@ -26,7 +26,7 @@ The picture goes straight from you to the people watching, not through a company
 
 ## Get started
 
-1. **Download mumh5** from the [releases page](https://git.lat/kibi/mumh5/releases) and install it (the files are listed below).
+1. **Download mumh5** from the [releases page](https://github.com/DarknessIV4/mumh5/releases) and install it (the files are listed below).
 2. **Create your identity.** mumh5 asks for it on the first start: give it a name and it is made, or, if you used Mumble on this computer before, keep that one with all your registrations.
 3. **Add a server** with the plus button, using the address your friends gave you, or find one in the public server list (desktop app).
 
