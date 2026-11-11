@@ -122,3 +122,33 @@ export async function makeAvatar(file: Blob, maxBytes: number): Promise<Uint8Arr
     bmp.close();
   }
 }
+
+
+// A profile banner. Small enough for a description, it comes back as a data: URI to put in there;
+// otherwise as a file, which other people fetch over WebRTC. A GIF is kept as it is (its animation
+// would be lost otherwise). Other pictures are cut to the 5:2 of the banner from the middle and
+// kept at good quality, so a detailed picture is simply shared as a file. Null: not a picture.
+export async function makeBanner(file: Blob, maxBytes: number): Promise<{ src: string } | { blob: Blob; mime: string } | null> {
+  if (file.type === 'image/gif') return file.size <= maxBytes ? { src: await readDataUrl(file) } : { blob: file, mime: 'image/gif' };
+  if (!/^image\/(png|jpeg|webp|avif|bmp)$/.test(file.type)) return null;
+  const bmp = await createImageBitmap(file);
+  try {
+    const width = Math.min(1280, bmp.width), height = Math.round(width * 0.4);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#1a1b1f';
+    ctx.fillRect(0, 0, width, height);
+    // Cover: the picture fills the banner, the overhang is cut off
+    const scale = Math.max(width / bmp.width, height / bmp.height);
+    const sw = width / scale, sh = height / scale;
+    ctx.drawImage(bmp, (bmp.width - sw) / 2, (bmp.height - sh) / 2, sw, sh, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    if (!blob) return null;
+    return blob.size <= maxBytes ? { src: await readDataUrl(blob) } : { blob, mime: 'image/jpeg' };
+  } finally {
+    bmp.close();
+  }
+}

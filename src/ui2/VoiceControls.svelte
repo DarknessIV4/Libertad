@@ -3,6 +3,7 @@
   import { session, sessions } from '../lib/session.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
   import { share } from '../lib/share.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   // Mute, deafen and share. large: the voice screen's row of big buttons with labels.
   let { large = false }: { large?: boolean } = $props();
@@ -11,7 +12,9 @@
   // Without a connection the buttons show the remembered choice, applied at the next connect
   const muted = $derived(self ? self.selfMute : sessions.mute);
   const deafened = $derived(self ? self.selfDeaf : sessions.deaf);
-  const sharing = $derived(!!share.stream);
+  // Hosting a watch together session (also while you have left it, until it is ended) counts as sharing: the button ends it
+  const hostingWatch = $derived(watchTogether.isHostWithParty);
+  const sharing = $derived(!!share.stream || hostingWatch);
   const canShare = $derived(session.status === 'connected' && share.supported(sessions.active));
 
   function quick(e: MouseEvent, kind: 'input' | 'output') {
@@ -33,11 +36,11 @@
     {#if large}<span>{deafened ? 'Deafened' : 'Deafen'}</span>{/if}
   </button>
   {#if large}
-    <button class:live={sharing} disabled={!sharing && !canShare} aria-label={sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'}
-      title={sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
-      onclick={() => (sharing ? share.stop() : share.start(sessions.active))}>
-      <Icon name={sharing ? share.kind : 'screen'} size={24} />
-      <span>{sharing ? 'Stop sharing' : 'Share'}</span>
+    <button class:live={sharing} disabled={!sharing && !canShare} aria-label={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'}
+      title={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
+      onclick={() => (hostingWatch ? watchTogether.end() : sharing ? share.stop() : share.start(sessions.active))}>
+      <Icon name={sharing && !hostingWatch ? share.kind : 'screen'} size={24} />
+      <span>{hostingWatch ? 'End watch' : sharing ? 'Stop sharing' : 'Share'}</span>
     </button>
   {/if}
 </div>

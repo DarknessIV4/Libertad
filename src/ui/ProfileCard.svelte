@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import Avatar from './Avatar.svelte';
   import { session, sessions } from '../lib/session.svelte.ts';
@@ -10,7 +11,12 @@
   import { share } from '../lib/share.svelte.ts';
   import { renderIncoming } from '../lib/html.ts';
   import { makeAvatar } from '../lib/images.ts';
+  import { setBannerFromFile } from '../lib/banner-actions.ts';
+  import { colorPicker } from '../lib/colorpicker.svelte.ts';
+  import { stripBanner, type BannerView } from '../core/banner.ts';
   import { ownAvatar } from '../lib/avatar.svelte.ts';
+  import { ownBanner } from '../lib/banner.svelte.ts';
+  import { stills, bgPause } from '../lib/still.svelte.ts';
 
   // A person's card, next to what was clicked (a sheet at the bottom on phones)
   const open = $derived(ui.profile);
@@ -24,8 +30,21 @@
 
   // The description comes later when the server only announced its hash
   $effect(() => { if (user?.commentHash && !user.comment) session.loadComment(user.session); });
-  const comment = $derived(user?.comment ? renderIncoming(user.comment, store.trustedHosts).html : '');
+  const comment = $derived(user?.comment ? renderIncoming(stripBanner(user.comment), store.trustedHosts).html : '');
   const pending = $derived(!!user?.commentHash && !user.comment);
+
+  // A banner too big for a description is fetched from its owner (within the limit in Settings)
+  $effect(() => {
+    if (!user || isSelf) return;
+    void user.comment; void user.commentHash; void user.name;
+    untrack(() => session.ensureProfile(user));
+  });
+
+  // The banner behind the picture: theirs, or a color of their name until it arrives
+  let previewColor = $state<string | null>(null);
+  const banner = $derived<BannerView | null>(previewColor && isSelf ? { kind: 'color', color: previewColor } : user ? session.banner(user.session, 'banner') : null);
+  const bannerStyle = $derived(banner?.kind === 'image' ? `background-image: url("${(user && bgPause.paused(user) ? stills.of(banner) : null) ?? banner.src}")`
+    : `background-color: ${banner?.kind === 'color' ? banner.color : `hsl(${hue} 38% 30%)`}`);
 
   // Gone when the person left or the connection ended
   $effect(() => { if (open && (!user || session.status !== 'connected')) close(); });
@@ -37,7 +56,7 @@
   // Rows end a few pixels inside their list; the larger side gap keeps the card clear of the list's edge
   const GAP = 8, SIDE_GAP = 16, EDGE = 8;
 
-  // What the card points at. A row as wide as the window (stacked layout) leaves no room beside it,
+  // What the card points at. A row as wide as the window leaves no room beside it,
   // so the card goes beside the name in it, level with the row.
   function anchorBox(o: NonNullable<typeof open>): { left: number; right: number; top: number; bottom: number } {
     if (!o.el?.isConnected) return o.anchor;
@@ -103,7 +122,9 @@
 
   // Outside the card closes it; the click still reaches what is under the pointer
   function outside(e: MouseEvent) {
+    if ((e.target as Element).closest?.('[data-colorpicker]')) return;
     if (open && el && !el.contains(e.target as Node)) close();
+    else if (bannerMenu && !(e.target as Element).closest?.('.bmenu, .banner-edit')) bannerMenu = false;
   }
 
   let picker = $state<HTMLInputElement>();
@@ -125,6 +146,58 @@
     }
   }
 
+  // ─── Banner: a color, a picture or a GIF ───
+  let bannerMenu = $state(false);
+  let bannerPicker = $state<HTMLInputElement>();
+  let bannerBusy = $state(false);
+
+  async function chooseColor() {
+    bannerMenu = false;
+    // Starts on the current banner color, or on the color shown until there is one; shown live until Apply
+    const start = banner?.kind === 'color' ? banner.color : hslToHex(hue, 0.38, 0.3);
+    const c = await colorPicker.open(start, v => (previewColor = v));
+    if (c) await commitColor(c); else previewColor = null;
+  }
+  function hslToHex(h: number, s: number, l: number): string {
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number) => {
+      const k = (n + h / 30) % 12;
+      return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+  }
+  async function commitColor(value: string) {
+    previewColor = null;
+    await sessions.setBanner('banner', { kind: 'color', color: value.toLowerCase() });
+  }
+
+  function chooseFile(accept: string) {
+    bannerMenu = false;
+    if (!bannerPicker) return;
+    bannerPicker.accept = accept;
+    bannerPicker.click();
+  }
+  async function pickBanner() {
+    const file = bannerPicker?.files?.[0];
+    if (bannerPicker) bannerPicker.value = '';
+    if (!file) return;
+    bannerBusy = true;
+    error = '';
+    try {
+      error = await setBannerFromFile('banner', file);
+    } catch {
+      error = 'This file could not be read as a picture.';
+    } finally {
+      bannerBusy = false;
+    }
+  }
+
+  async function removeBanner() {
+    bannerMenu = false;
+    previewColor = null;
+    await sessions.setBanner('banner', null);
+  }
+
   function message() {
     if (!user) return;
     session.selectView(`dm:${user.session}`);
@@ -140,14 +213,35 @@
   }
 </script>
 
-<svelte:window onmousedowncapture={outside} onkeydown={e => { if (open && e.key === 'Escape') close(); }} />
+<svelte:window onmousedowncapture={outside} onkeydown={e => { if (open && e.key === 'Escape') { if (bannerMenu) bannerMenu = false; else close(); } }} />
 
 {#if open && user}
   {#if sheet}<button class="scrim" aria-label="Close" onclick={close}></button>{/if}
   <div class="card {side}" class:sheet role="dialog" tabindex="-1" aria-label="Profile of {name}" bind:this={el}
     style:left={sheet ? undefined : `${pos.x}px`} style:top={sheet ? undefined : `${pos.y}px`}
     oncontextmenu={e => menu.show(e, userMenu(user))}>
-    <div class="banner" style:background="hsl({hue} 38% 30%)"></div>
+    <div class="banner" style={bannerStyle}>
+      {#if isSelf}
+        <button class="banner-edit" title="Change your banner" aria-label="Change your banner" aria-haspopup="menu" aria-expanded={bannerMenu}
+          disabled={bannerBusy} onclick={() => (bannerMenu = !bannerMenu)}>
+          <Icon name="image" size={14} />
+        </button>
+      {/if}
+    </div>
+    {#if isSelf}
+      {#if bannerMenu}
+        <div class="menu bmenu" role="menu" aria-label="Banner">
+          <button role="menuitem" onclick={chooseColor}>Choose a color...</button>
+          <button role="menuitem" onclick={() => chooseFile('image/png,image/jpeg,image/webp')}>Use an image...</button>
+          <button role="menuitem" onclick={() => chooseFile('image/gif')}>Use a GIF...</button>
+          {#if ownBanner.value}
+            <div class="sep" role="separator"></div>
+            <button role="menuitem" class="danger" onclick={removeBanner}>Remove banner</button>
+          {/if}
+        </div>
+      {/if}
+      <input bind:this={bannerPicker} type="file" hidden onchange={pickBanner} />
+    {/if}
     <div class="top">
       <span class="pic"><Avatar name={user.name} size={80} speaking={talking} src={session.avatar(user.session)} /></span>
       {#if isSelf}
@@ -222,14 +316,25 @@
   .card.left { --from: translateX(6px); }
   .card.above { --from: translateY(6px); }
   .card.sheet { left: 0; right: 0; bottom: 0; width: auto; max-height: 85vh; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); animation: up 160ms var(--ease); }
-  .banner { height: 64px; }
-  .top { position: relative; height: 48px; padding: 0 16px; }
+  /* The banner runs behind the whole picture: as much of it below the picture as above it */
+  .banner { position: relative; height: 128px; background-size: cover; background-position: center; background-repeat: no-repeat; }
+  .banner-edit { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+    background: rgb(0 0 0 / 0.55); color: #fff; border: 0; }
+  .banner-edit:hover:not(:disabled) { background: var(--accent); color: var(--accent-text); }
+  .bmenu { position: absolute; z-index: 3; top: 40px; right: 8px; min-width: 190px; padding: 5px;
+    background: var(--bg-1); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); }
+  .bmenu button { display: block; width: 100%; padding: 6px 10px; line-height: 20px; text-align: left; color: var(--text); }
+  .bmenu button:hover, .bmenu button:focus-visible { background: var(--accent); color: var(--accent-text); outline: none; }
+  .bmenu button.danger { color: var(--danger); }
+  .bmenu button.danger:hover { background: var(--danger); color: #fff; }
+  .bmenu .sep { height: 1px; margin: 5px 4px; background: var(--line); }
+  .top { position: relative; height: 0; padding: 0 16px; }
   /* The picture sits over the edge of the banner, framed in the card's color */
-  .pic { position: absolute; left: 14px; top: -44px; display: flex; border: 4px solid var(--bg-1); background: var(--bg-1); }
-  .pic-edit { position: absolute; left: 76px; top: 18px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  .pic { position: absolute; left: 14px; top: -108px; display: flex; border: 4px solid var(--bg-1); background: var(--bg-1); }
+  .pic-edit { position: absolute; left: 76px; top: -46px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
     background: var(--bg-3); color: var(--text); border: 2px solid var(--bg-1); transition: background 120ms var(--ease); }
   .pic-edit:hover:not(:disabled) { background: var(--accent); color: var(--accent-text); }
-  .body { padding: 2px 16px 16px; }
+  .body { padding: 16px 16px 16px; }
   h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.015em; overflow-wrap: anywhere; }
   .sub { display: flex; flex-wrap: wrap; gap: 0 10px; margin: 2px 0 0; font-size: 13px; color: var(--text-dim); }
   .sub span + span::before { content: ''; display: inline-block; width: 3px; height: 3px; margin: 0 10px 3px 0; background: var(--text-faint); }

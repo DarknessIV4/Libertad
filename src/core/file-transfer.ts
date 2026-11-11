@@ -1,4 +1,7 @@
-// Files between mumh5 clients, carried by the Mumble server itself, with no file host.
+// Files between mumh5 clients, with no file host. The pieces go straight from computer to
+// computer over WebRTC data channels (core/file-p2p.ts); only the small requests and the
+// connection setup travel through Mumble. When no direct connection can be made, the pieces
+// are carried by the Mumble server itself, as described below.
 //
 // A file is announced in an ordinary chat message: a marker other clients do not show, then
 // its name, size and a preview picture, which is all regular Mumble clients get. mumh5 clients
@@ -20,7 +23,9 @@ export const FILE = {
   have: 2,   // I have file i: { i }
   want: 3,   // send me these pieces of i: { i, r: ranges }; replaces what was asked before, none stops
   done: 4,   // everything you asked for is sent: { i }
-  gone: 5    // I cannot send file i: { i }
+  gone: 5,   // I cannot send file i: { i }
+  offer: 6,  // direct connection, from the one who wants pieces: { i, sdp }
+  answer: 7  // direct connection, from the one who has them: { i, sdp }
 } as const;
 export type FileType = typeof FILE[keyof typeof FILE];
 
@@ -113,7 +118,9 @@ export function pieceForm(l: Limits): 'img' | 'text' {
 export function pieceBytes(l: Limits): number {
   const text = l.messageLength || UNLIMITED;
   const image = l.allowHtml ? l.imageMessageLength || UNLIMITED : 0;
-  const chars = Math.min(UNLIMITED, Math.max(text, image)) - OVERHEAD;
+  // Use image limit if it allows more than text limit; cap at what Murmur reads in one go
+  const maxChars = l.allowHtml ? (l.imageMessageLength || UNLIMITED) : (l.messageLength || UNLIMITED);
+  const chars = Math.min(UNLIMITED, maxChars) - OVERHEAD;
   return Math.max(0, Math.floor(chars / 8) * 15);
 }
 
@@ -338,5 +345,106 @@ export async function pump(h: PumpHost): Promise<void> {
     if (to.length && h.client.sendBulk({ users: to }, html)) unconfirmed++;
     h.sent?.(job.file, job.piece, to);
     for (const r of job.finished) if (h.client.users.has(r)) h.done(r, job.file);
+  }
+}
+
+// ─── Upload speed limit ──────────────────────────────────────────────────────
+
+// The setting is in Mbit/s like the stream bitrates; 0 is unlimited
+export const uploadRate = (mbit: number): number => mbit > 0 ? mbit * 1_000_000 / 8 : 0;
+
+// A token bucket: take() waits until n bytes may go out. The rate is read each time, so a
+// change in settings applies to what is being sent right now.
+export class RateLimiter {
+  private tokens = 0;
+  private at = Date.now();
+  private rate: () => number;
+  constructor(rate: () => number) {
+    this.rate = rate;
+  }
+
+  async take(n: number, alive: () => boolean = () => true): Promise<void> {
+    for (;;) {
+      const r = this.rate();
+      if (!(r > 0)) { this.tokens = 0; this.at = Date.now(); return; }
+      const now = Date.now();
+      // At most a quarter second may be sent at once, so the limit holds from the first moment
+      const cap = Math.max(n, r / 4);
+      this.tokens = Math.min(cap, this.tokens + (now - this.at) / 1000 * r);
+      this.at = now;
+      if (this.tokens >= n) { this.tokens -= n; return; }
+      await sleep(Math.max(5, Math.min(250, (n - this.tokens) / r * 1000)));
+      if (!alive()) return;
+    }
+  }
+}
+
+// ─── Pieces over a direct connection ─────────────────────────────────────────
+
+// A piece is cut into frames that fit a data channel message: [kind, id length, id, piece, offset, bytes]
+export const FRAME_BYTES = 16 * 1024;
+export const FRAME_PIECE = 1;
+export const FRAME_DONE = 2;
+
+export function encodeFrame(kind: number, file: string, piece = 0, offset = 0, bytes?: Uint8Array): Uint8Array {
+  const id = new TextEncoder().encode(file);
+  const head = 2 + id.length + (kind === FRAME_PIECE ? 8 : 0);
+  const out = new Uint8Array(head + (bytes?.length ?? 0));
+  out[0] = kind;
+  out[1] = id.length;
+  out.set(id, 2);
+  if (kind === FRAME_PIECE) {
+    const v = new DataView(out.buffer);
+    v.setUint32(2 + id.length, piece, false);
+    v.setUint32(6 + id.length, offset, false);
+    out.set(bytes!, head);
+  }
+  return out;
+}
+
+export interface Frame { kind: number; file: string; piece: number; offset: number; bytes: Uint8Array }
+
+export function decodeFrame(data: Uint8Array): Frame | null {
+  if (data.length < 2) return null;
+  const kind = data[0], idLen = data[1];
+  if (!idLen || data.length < 2 + idLen) return null;
+  const file = new TextDecoder().decode(data.subarray(2, 2 + idLen));
+  if (!okId(file)) return null;
+  if (kind === FRAME_DONE) return data.length === 2 + idLen ? { kind, file, piece: 0, offset: 0, bytes: new Uint8Array(0) } : null;
+  if (kind !== FRAME_PIECE || data.length < 10 + idLen) return null;
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return { kind, file, piece: v.getUint32(2 + idLen, false), offset: v.getUint32(6 + idLen, false), bytes: data.subarray(10 + idLen) };
+}
+
+// ─── Sending, routed ─────────────────────────────────────────────────────────
+
+export interface RoutedHost {
+  sender: Sender;
+  // The bytes of a piece, or null when the file cannot be read any more
+  read(file: string, piece: number): Promise<Uint8Array | null>;
+  // Sends a piece to these people, however it can reach each of them; returns those it could not serve
+  deliver(file: string, piece: number, bytes: Uint8Array, to: number[]): Promise<number[]>;
+  done(receivers: number[], file: string): void;
+  gone(receivers: number[], file: string): void;
+  alive(): boolean;
+  sent?(file: string, piece: number, to: number[]): void;
+}
+
+// Sends pieces while anyone wants some, at the speed the person allowed
+export async function pumpRouted(h: RoutedHost): Promise<void> {
+  while (h.alive() && h.sender.busy) {
+    const job = h.sender.next();
+    if (!job) break;
+    const bytes = await h.read(job.file, job.piece).catch(() => null);
+    if (bytes == null) {
+      h.gone([...new Set([...job.to, ...h.sender.dropFile(job.file)])], job.file);
+      continue;
+    }
+    const failed = await h.deliver(job.file, job.piece, bytes, job.to);
+    if (!h.alive()) return;
+    if (failed.length) h.gone(failed, job.file);
+    h.sent?.(job.file, job.piece, job.to);
+    const served = job.finished.filter(r => !failed.includes(r));
+    if (served.length) h.done(served, job.file);
   }
 }

@@ -8,12 +8,10 @@
   import { PERM } from '../core/client.ts';
   import ResizeHandle from './ResizeHandle.svelte';
   import UserBar from './UserBar.svelte';
+  import { customBackgroundItems } from '../lib/custom-bg-menu.ts';
 
   // resizable: false in the phone drawer, which keeps a fixed width
-  // handleEdge: which side the resize handle sits on (left when the list is on the right, classic layout)
-  // fill: take the whole area (stacked layout, where the parent sizes it)
-  let { onnavigate, resizable = true, handleEdge = 'right', fill = false }:
-    { onnavigate: () => void; resizable?: boolean; handleEdge?: 'left' | 'right'; fill?: boolean } = $props();
+  let { onnavigate, resizable = true }: { onnavigate: () => void; resizable?: boolean } = $props();
 
   const MIN_W = 200, DEFAULT_W = 260;
   const maxW = () => Math.max(MIN_W, Math.min(520, window.innerWidth - 520));
@@ -30,12 +28,15 @@
     const here = session.self?.channelId ?? 0;
     const hereName = session.channel(here)?.name || 'Root';
     const noMake = (id: number) => session.can(id, PERM.MakeChannel) === false && session.can(id, PERM.MakeTempChannel) === false;
+    // Free space only (not the heading of the direct messages): the custom background, for this computer
+    const free = e.target instanceof Element && e.target.matches('.scroll');
     menu.show(e, [
       { label: 'Create channel...', disabled: noMake(0), action: () => (ui.channelDialog = { mode: 'create', parent: 0 }) },
       ...(here !== 0 ? [{ label: `Create channel in ${hereName}...`, disabled: noMake(here), action: () => (ui.channelDialog = { mode: 'create', parent: here }) }] : []),
       { separator: true, label: '' },
       { label: 'Expand all', action: () => session.setAllExpanded(true) },
-      { label: 'Collapse all', action: () => session.setAllExpanded(false) }
+      { label: 'Collapse all', action: () => session.setAllExpanded(false) },
+      ...(free ? [{ separator: true, label: '' }, ...customBackgroundItems('left')] : [])
     ]);
   }
 
@@ -54,8 +55,8 @@
   );
 </script>
 
-<aside class="sidebar" class:fill style:width={resizable && !fill ? `${width}px` : undefined}>
-  {#if resizable && !fill}<ResizeHandle bind:width edge={handleEdge} min={MIN_W} max={maxW} initial={DEFAULT_W} storageKey="mumh5.sidebarWidth" label="Resize channel list" />{/if}
+<aside class="sidebar" style:width={resizable ? `${width}px` : undefined}>
+  {#if resizable}<ResizeHandle bind:width edge="right" min={MIN_W} max={maxW} initial={DEFAULT_W} storageKey="mumh5.sidebarWidth" label="Resize channel list" />{/if}
   <header class:trusted>
     <button class="title" onclick={showServerCert} disabled={!cert} title={cert ? (trusted ? 'Valid certificate. Click to view' : 'Self-signed or untrusted certificate. Click to view') : ''}>
       <strong>{#if cert}<Icon name={trusted ? 'lock' : 'shield'} size={14} />{/if}{session.server?.label ?? 'mumh5'}</strong>
@@ -100,13 +101,12 @@
       <button class="btn" onclick={() => sessions.setVoice(sessions.active)}>Talk here</button>
     </div>
   {/if}
-  <UserBar toolbar={fill} />
+  <UserBar />
 </aside>
 
 <style>
-  .sidebar { position: relative; width: 260px; flex: none; display: flex; flex-direction: column; background: var(--bg-1); min-height: 0; }
-  .sidebar.fill { width: 100%; height: 100%; }
-  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 0; border-bottom: 1px solid var(--line); }
+  .sidebar { --rh-shift: 2.5px; position: relative; width: 260px; flex: none; display: flex; flex-direction: column; background: var(--panel-left, var(--bg-1)); min-height: 0; }
+  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 0; border-bottom: 1px solid var(--line); background-color: var(--glass, var(--panel-left, var(--bg-1))); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
   header.trusted { background: #1d5c38; border-bottom-color: #2a7a4c; }
   header.trusted .status, header.trusted .icon-btn { color: #cfeedd; }
   header.trusted .dot { background: #fff; }

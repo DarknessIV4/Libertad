@@ -1,17 +1,21 @@
-// Files sent through the Mumble server (see core/file-transfer.ts): what this computer keeps,
+// Files between mumh5 clients (see core/file-transfer.ts): what this computer keeps,
 // downloads in progress, and the pieces it sends to others. A download asks the sender and
-// everyone else on the server who has the file, and splits the pieces between them; each
-// source is limited by the server to about one message a second, so more sources are faster.
-// The server checked who sent each piece; the file's hash comes with the announcement.
+// everyone else on the server who has the file, and splits the pieces between them. The pieces
+// go straight from computer to computer over WebRTC; only requests and connection setup use
+// Mumble. Where no direct connection can be made, the Mumble server carries the pieces as chat
+// messages, limited by the server to about one a second. The file's hash comes with the
+// announcement, so what arrives is checked either way.
 import {
-  FILE, FILE_DATA_ID, MAX_FILE, MAX_PIECES, FileAssembler, Sender, pump, encodeFileSignal, parseBody, okId, validMeta,
+  FILE, FILE_DATA_ID, MAX_FILE, MAX_PIECES, FileAssembler, Sender, pumpRouted, RateLimiter, uploadRate, encodeFileSignal, parseBody, okId, validMeta,
   pieceBytes, pieceCount, pieceSize, pieceForm, pieceMessage, parsePiece, encode15, decode15,
   toRanges, fromRanges, split, sha256, rootHash, type FileMeta, type FileType
 } from '../core/file-transfer.ts';
 import { newId } from '../core/text-signal.ts';
+import { FileP2P } from '../core/file-p2p.ts';
+import { rtcConfig } from './ice.ts';
 import type { Session } from './session.svelte.ts';
 import { getBlob, putBlob, getData, putData, deleteBlob } from './blobstore.ts';
-import { desktop, type FileBegin } from './native.ts';
+import { desktop, isWeb, type FileBegin } from './native.ts';
 import { formatBytes } from './html.ts';
 import { setRateLimits } from '../core/client.ts';
 import { store } from './settings.svelte.ts';
@@ -70,11 +74,7 @@ const hasPiece = (d: Download, k: number): boolean => (d.disk ? d.have[k] === 1 
 type KeptDisk = Kept & { disk?: boolean };
 
 // Opt-in faster sending for servers where you raised messagelimit / messageburst.
-// Once: localStorage.setItem('mumh5.rate', '30,10')  (burst, messages per second), then restart.
-try {
-  const r = localStorage.getItem('mumh5.rate');
-  if (r) { const [b, p] = r.split(',').map(Number); if (b > 0 && p > 0) setRateLimits(b, p); }
-} catch { /* no storage */ }
+setRateLimits(500, 200);
 // How long answers to "who has it" may take
 const FIND_MS = 3000;
 // A source that sent nothing for this long is asked again, twice, then the download stops
@@ -110,9 +110,20 @@ interface Download {
   rateFrom: { at: number; bytes: number };
 }
 
+// The upload speed limit from the settings, shared by everything this computer sends
+const limiter = new RateLimiter(() => uploadRate(Number(store.settings.uploadLimit) || 0));
+// How long a request waits for the direct connection before the server carries the pieces
+const DIRECT_MS = 6000;
+
+// STUN and relay servers for direct connections: the ones in Settings, like everything else that connects directly
+const p2pConfig = rtcConfig;
+
 interface Runtime {
   assembler: FileAssembler;
   sender: Sender;
+  p2p: FileP2P;
+  // Newest request per person and file, so a late answer to an old one does not replace it
+  wantSeq: Map<string, number>;
   pumping: boolean;
   queue: { to: number[]; packet: Uint8Array }[];
   level: number;
@@ -207,6 +218,11 @@ class Files {
     }
   }
 
+  // The bytes of a file this computer has (sent or received), or null
+  async blobOf(id: string): Promise<Blob | null> {
+    return (await this.find(id))?.blob ?? null;
+  }
+
   private ready(meta: FileMeta, blob: Blob): void {
     this.local.set(meta.i, { meta, blob });
     const url = this.transfers[meta.i]?.url || URL.createObjectURL(new Blob([blob], { type: safeType(meta.m) }));
@@ -249,7 +265,9 @@ class Files {
 
   // Hashes the file and keeps it at hand for whoever asks. Returns the announcement details
   // or why it cannot be sent.
-  async share(s: Session, file: File, progress: (fraction: number) => void): Promise<FileMeta | string> {
+  // stable: the id comes from the content, so sharing the same file again (a banner, on every
+  // connect) gives the same id and people who have it already do not fetch it again
+  async share(s: Session, file: File, progress: (fraction: number) => void, stable = false): Promise<FileMeta | string> {
     const client = s.client;
     if (!client) return 'Not connected.';
     if (!this.supported(s)) return `${file.name}: sending files needs a server running Mumble 1.4 or newer`;
@@ -269,7 +287,8 @@ class Files {
       return `${file.name}: could not be read`;
     }
     const type = /^[\w.+-]+\/[\w.+-]+$/.test(file.type) && file.type.length <= 100 ? file.type : '';
-    const meta = validMeta({ i: newId(), n: file.name.slice(0, 255) || 'file', s: file.size, m: type, c, h: await rootHash(digests) });
+    const h = await rootHash(digests);
+    const meta = validMeta({ i: stable ? 'b' + h.slice(0, 24) : newId(), n: file.name.slice(0, 255) || 'file', s: file.size, m: type, c, h });
     if (!meta) return `${file.name}: cannot be sent`;
     this.checked.add(meta.i);
     this.ready(meta, file);
@@ -290,7 +309,8 @@ class Files {
     });
   }
 
-  download(s: Session, meta: FileMeta, author: number | null): void {
+  // ask: always let the person pick where it goes (when this device can), whatever the size
+  download(s: Session, meta: FileMeta, author: number | null, ask = false): void {
     const client = s.client;
     const t = this.transfers[meta.i];
     if (this.downloads.has(meta.i) || this.choosing.has(meta.i) || t?.state === 'ready') return;
@@ -298,7 +318,7 @@ class Files {
       this.set(meta.i, { state: 'failed', error: 'Downloading needs a server running Mumble 1.4 or newer' });
       return;
     }
-    if (!useDisk(meta)) return this.start(s, meta, author, null);
+    if (!(ask ? !!desktop || !!picker() : useDisk(meta))) return this.start(s, meta, author, null);
     // Where to save comes first, from this very click; nothing is fetched if it is refused
     this.choosing.add(meta.i);
     this.openSink(meta).then(opened => {
@@ -362,6 +382,7 @@ class Files {
     this.set(meta.i, { state: 'finding', got: 0, rate: 0, sources: 0, error: '', saved: undefined });
     if (author != null && author !== client.session && client.users.has(author)) {
       d.sources.set(author, { pieces: new Set(), retries: 0 });
+      this.runtime(s).p2p.connect(author, meta.i);
       this.assign(d);
     }
     const others = [...client.users.keys()].filter(id => id !== client.session && id !== author);
@@ -454,6 +475,13 @@ class Files {
     if (!p || !d || d.s !== s || !d.sources.has(from) || p.index >= d.count || hasPiece(d, p.index)) return;
     const bytes = decode15(p.payload, pieceSize(d.meta, p.index));
     if (!bytes) return;
+    this.ingest(d, from, p.index, bytes);
+  }
+
+  // A piece from a source, however it came
+  private ingest(d: Download, from: number, index: number, bytes: Uint8Array): void {
+    const p = { id: d.meta.i, index };
+    if (!d.sources.has(from) || index >= d.count || hasPiece(d, index)) return;
     if (d.disk) {
       const k = p.index;
       d.have[k] = 1;
@@ -546,7 +574,23 @@ class Files {
   private runtime(s: Session): Runtime {
     let rt = this.runtimes.get(s);
     if (!rt) {
-      rt = { assembler: new FileAssembler(), sender: new Sender(), pumping: false, queue: [], level: 0, levelAt: Date.now(), timer: undefined };
+      rt = {
+        assembler: new FileAssembler(), sender: new Sender(), wantSeq: new Map(), pumping: false, queue: [], level: 0, levelAt: Date.now(), timer: undefined,
+        p2p: new FileP2P({
+          config: p2pConfig,
+          signal: (to, type, file, sdp) => this.signal(s, [to], type === 'offer' ? FILE.offer : FILE.answer, { i: file, sdp }),
+          expect: (from, file, index) => {
+            const d = this.downloads.get(file);
+            return d && d.s === s && d.sources.has(from) && index < d.count ? pieceSize(d.meta, index) : null;
+          },
+          piece: (from, file, index, bytes) => {
+            const d = this.downloads.get(file);
+            if (d && d.s === s) this.ingest(d, from, index, bytes);
+          },
+          done: (from, file) => { void this.sourceDone(s, from, file); },
+          known: id => !!s.client?.users.has(id)
+        })
+      };
       this.runtimes.set(s, rt);
     }
     return rt;
@@ -570,6 +614,7 @@ class Files {
         if (!mine || mine.sources.has(from) || mine.sources.size >= MAX_SOURCES) return;
         mine.sources.set(from, { pieces: new Set(), retries: 0 });
         mine.lastAt = Date.now();
+        rt.p2p.connect(from, id);
         // Answers come in together; share out once they are in
         clearTimeout(mine.rebalance);
         mine.rebalance = setTimeout(() => { if (this.downloads.get(id) === mine) this.assign(mine); }, 400);
@@ -577,29 +622,50 @@ class Files {
       case FILE.want: {
         const found = await this.find(id);
         const pieces = found && fromRanges(body.r, pieceCount(found.meta));
-        if (!found || found.meta.c > pieceBytes(client.config)) return this.signal(s, [from], FILE.gone, { i: id });
+        if (!found) return this.signal(s, [from], FILE.gone, { i: id });
         if (!pieces) return;
+        const key = `${from}:${id}`;
+        const seq = (rt.wantSeq.get(key) ?? 0) + 1;
+        rt.wantSeq.set(key, seq);
+        // The asker is setting up a direct connection; give it a moment so the pieces do not take the server's road
+        if (pieces.length && !await rt.p2p.waitOpen(from, DIRECT_MS) && found.meta.c > pieceBytes(client.config)) {
+          return this.signal(s, [from], FILE.gone, { i: id });
+        }
+        // A newer request arrived while we waited, or the person left
+        if (rt.wantSeq.get(key) !== seq || this.runtimes.get(s) !== rt) return;
+        if (!pieces.length) rt.wantSeq.delete(key);
         rt.sender.want(id, from, pieces);
         this.set(id, { sending: rt.sender.receivers(id) });
         this.pump(s, rt);
         break;
       }
-      case FILE.done: {
-        const src = mine?.sources.get(from);
-        if (!mine || !src) return;
-        mine.lastAt = Date.now();
-        const left = [...src.pieces].filter(k => !hasPiece(mine, k));
-        if (!left.length) return;
-        // Something got lost on the way: ask again, or leave it to the others
-        if (++src.retries > 2) return this.dropSource(mine, from);
-        src.pieces = new Set(left);
-        this.signal(s, [from], FILE.want, { i: id, r: toRanges(left) });
+      case FILE.done:
+        await this.sourceDone(s, from, id);
         break;
-      }
+      case FILE.offer:
+        if (typeof body.sdp === 'string') await rt.p2p.onOffer(from, id, body.sdp);
+        break;
+      case FILE.answer:
+        if (typeof body.sdp === 'string') await rt.p2p.onAnswer(from, body.sdp);
+        break;
       case FILE.gone:
         if (mine) this.dropSource(mine, from);
         break;
     }
+  }
+
+  // A source says it sent everything we asked for (by message or on the direct channel)
+  private async sourceDone(s: Session, from: number, id: string): Promise<void> {
+    const mine = this.downloads.get(id);
+    const src = mine && mine.s === s ? mine.sources.get(from) : undefined;
+    if (!mine || !src) return;
+    mine.lastAt = Date.now();
+    const left = [...src.pieces].filter(k => !hasPiece(mine, k));
+    if (!left.length) return;
+    // Something got lost on the way: ask again, or leave it to the others
+    if (++src.retries > 2) return this.dropSource(mine, from);
+    src.pieces = new Set(left);
+    this.signal(s, [from], FILE.want, { i: id, r: toRanges(left) });
   }
 
   private pump(s: Session, rt: Runtime): void {
@@ -607,16 +673,51 @@ class Files {
     if (rt.pumping || !client) return;
     rt.pumping = true;
     const alive = () => this.runtimes.get(s) === rt && s.client === client;
-    pump({
-      client, sender: rt.sender, alive,
+    // Pieces sent through the server before it confirmed it has read them
+    let unconfirmed = 0;
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const viaServer = async (file: string, k: number, bytes: Uint8Array, to: number[]): Promise<number[]> => {
+      if (bytes.length > pieceBytes(client.config)) return to; // this server's limits are too small for the file's pieces
+      const html = pieceMessage(pieceForm(client.config), file, k, encode15(bytes));
+      await limiter.take(bytes.length, alive);
+      // A slow upload slows the transfer down instead of piling up in front of chat and voice
+      if (unconfirmed >= 3) {
+        await client.flushed();
+        unconfirmed = 0;
+      }
+      for (let w = client.bulkWait(); w > 0; w = client.bulkWait()) {
+        await sleep(w);
+        if (!alive()) return [];
+      }
+      const there = to.filter(r => client.users.has(r));
+      if (there.length && client.sendBulk({ users: there }, html)) unconfirmed++;
+      if (there.length) console.info(`[Files] piece ${k} of ${file} sent through the server (no direct connection to ${there.join(', ')})`);
+      return [];
+    };
+    pumpRouted({
+      sender: rt.sender, alive,
       read: async (file, k) => {
         const found = await this.find(file);
         if (!found) return null;
         const { meta, blob } = found;
-        const bytes = new Uint8Array(await blob.slice(k * meta.c, k * meta.c + pieceSize(meta, k)).arrayBuffer());
-        return pieceMessage(pieceForm(client.config), file, k, encode15(bytes));
+        return new Uint8Array(await blob.slice(k * meta.c, k * meta.c + pieceSize(meta, k)).arrayBuffer());
       },
-      done: (r, file) => this.signal(s, [r], FILE.done, { i: file }),
+      deliver: async (file, k, bytes, to) => {
+        const direct = to.filter(r => rt.p2p.isOpen(r));
+        const rest = to.filter(r => !direct.includes(r));
+        const failed: number[] = [];
+        await Promise.all([
+          ...direct.map(async r => { if (!await rt.p2p.send(r, file, k, bytes, limiter, alive)) rest.push(r); }),
+        ]);
+        if (rest.length && alive()) failed.push(...await viaServer(file, k, bytes, rest));
+        return failed;
+      },
+      done: (rs, file) => {
+        for (const r of rs) {
+          if (!client.users.has(r)) continue;
+          if (!rt.p2p.sendDone(r, file)) this.signal(s, [r], FILE.done, { i: file });
+        }
+      },
       gone: (rs, file) => { this.signal(s, rs, FILE.gone, { i: file }); this.set(file, { sending: 0 }); },
       sent: file => this.set(file, { sending: rt.sender.receivers(file) })
     }).finally(() => {
@@ -658,6 +759,7 @@ class Files {
     const rt = this.runtimes.get(s);
     if (rt) {
       rt.sender.drop(session);
+      rt.p2p.drop(session);
       for (const id of Object.keys(this.transfers)) if (this.transfers[id].sending) this.set(id, { sending: rt.sender.receivers(id) });
     }
     for (const d of [...this.downloads.values()]) if (d.s === s) this.dropSource(d, session);
@@ -665,7 +767,7 @@ class Files {
 
   closed(s: Session): void {
     const rt = this.runtimes.get(s);
-    if (rt) clearTimeout(rt.timer);
+    if (rt) { clearTimeout(rt.timer); rt.p2p.close(); }
     this.runtimes.delete(s);
     for (const d of [...this.downloads.values()]) if (d.s === s) this.fail(d, 'Disconnected');
     for (const id of Object.keys(this.transfers)) if (this.transfers[id].sending) this.set(id, { sending: 0 });

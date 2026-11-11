@@ -95,3 +95,9 @@ export let onWindowVisibility: () => void = () => {};
 export function shouldHideOnClose(): boolean {
   return !!tray && closeToTray && !quitting && process.platform !== 'darwin';
 }
+
+// Quits for real, also with the window hidden to the tray
+export function quitApp(): void {
+  quitting = true;
+  app.quit();
+}

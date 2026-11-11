@@ -13,7 +13,7 @@
 
   // The Rooms interface: one screen at a time with a bar to move between them, made for
   // phones first. Wide windows keep the rooms on the left next to the chosen screen. Same
-  // state, dialogs and menus as the standard interface; only the arrangement differs.
+  // state, dialogs and menus as the standard interface; only the arrangement of the screens differs.
   let { onadd, onedit, onbrowse }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void } = $props();
 
   type Screen = 'rooms' | 'chat' | 'voice' | 'people' | 'you';

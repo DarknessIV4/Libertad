@@ -13,6 +13,7 @@
   --accent-hover: #8f81ff;
   --accent-text: #ffffff;
   --speaking: #3bd16f;
+  --success: #3bd16f;
   --danger: #f0504a;
   --warn: #e8b23c;
   --link: #6fb3ff;
@@ -25,8 +26,6 @@
   --fs-chat: 15px;
   /* Shared height of the bars along the top: sidebar title, chat title, panel title */
   --header-h: 52px;
-  /* Height of the bottom bar of the sidebar when it is a single row (stacked layout) */
-  --footer-h: 52px;
   /* Buttons and single-line fields */
   --control-h: 36px;
   /* Borders of fields and buttons: a step stronger than the dividers between areas */
@@ -84,7 +83,7 @@ input[type=checkbox], input[type=radio] { width: 16px; height: 16px; margin: 0; 
 input[type=range] { padding: 0; border: 0; background: transparent; box-shadow: none; }
 
 /* A flat select with its own arrow; Windows 95 keeps the native one */
-:root:not([data-theme="win95"]) select {
+:root:not([data-theme^="win95"]) select {
   appearance: none;
   padding-right: 32px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5l3.5 3.5 3.5-3.5' fill='none' stroke='%238b8e97' stroke-width='1.6'/%3E%3C/svg%3E");

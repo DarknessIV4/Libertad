@@ -6,6 +6,7 @@
   import { menu } from '../lib/menu.svelte.ts';
   import { channelMenu, userMenu } from '../lib/actions.ts';
   import { stripMark } from '../core/text-signal.ts';
+import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   // back: shown where the rooms are a screen of their own
   let { back, onback }: { back: boolean; onback: () => void } = $props();

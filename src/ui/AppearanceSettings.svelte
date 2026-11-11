@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { store, THEMES, type ThemeId, type Arrangement } from '../lib/settings.svelte.ts';
-
-  const ARRANGEMENTS: { id: Arrangement; name: string; note: string }[] = [
-    { id: 'side', name: 'Modern', note: 'Channels left, members right' },
-    { id: 'classic', name: 'Classic', note: 'Chat left, channels right, like Mumble' },
-    { id: 'stacked', name: 'Stacked', note: 'Channels on top, chat below, like Mumble' }
-  ];
+  import { store, THEMES, type ThemeId } from '../lib/settings.svelte.ts';
+  import { colorPicker } from '../lib/colorpicker.svelte.ts';
+  import { CUSTOM_GROUPS, CUSTOM_KEYS, CUSTOM_DEFAULTS, customStyle, isHex, type CustomKey } from '../lib/theme.ts';
+  import { customBg, type Slot } from '../lib/custom-bg.svelte.ts';
+  import { applyColor, applyFile, removeBackground, panelColor } from '../lib/custom-bg-actions.ts';
+  import { pickFile } from '../lib/pick.ts';
 
   const INTERFACES: { id: 'standard' | 'rooms'; name: string; note: string }[] = [
     { id: 'standard', name: 'Standard', note: 'Channel tree, chat and members side by side' },
@@ -16,34 +15,95 @@
     store.saveSettings();
   }
 
-  function arrange(id: Arrangement) {
-    store.settings.arrangement = id;
+  function pick(id: ThemeId) {
+    store.settings.theme = id;
     store.saveSettings();
   }
 
-  // With this many schemes the list can be narrowed by name and by dark or light
-  let find = $state('');
-  let shade = $state<'all' | 'dark' | 'light'>('all');
-  const shown = $derived(THEMES.filter(t => (shade === 'all' || (shade === 'light') === t.light)
-    && (!find.trim() || `${t.name} ${t.note}`.toLowerCase().includes(find.trim().toLowerCase()))));
+  // ─── Custom colors ───
+  const colors = $derived(store.settings.customColors);
 
-  function pick(id: ThemeId) {
-    store.settings.theme = id;
+  // Shown live while choosing; kept with Apply, put back otherwise
+  async function editColor(key: CustomKey) {
+    const before = colors[key];
+    const c = await colorPicker.open(before, v => { store.settings.customColors[key] = v; });
+    if (c) setColor(key, c); else store.settings.customColors[key] = before;
+  }
+
+  function setColor(key: CustomKey, value: string) {
+    if (!isHex(value)) return;
+    store.settings.customColors[key] = value.toLowerCase();
+    store.saveSettings();
+  }
+
+  // Hex field: applied once it is a complete color, restored on leaving it if it is not
+  function hexInput(key: CustomKey, e: Event) {
+    let v = (e.currentTarget as HTMLInputElement).value.trim();
+    if (v && !v.startsWith('#')) v = '#' + v;
+    setColor(key, v);
+  }
+  function hexDone(key: CustomKey, e: Event) {
+    (e.currentTarget as HTMLInputElement).value = colors[key];
+  }
+
+  // Copy the colors of a built-in scheme into the custom one, to adjust from there
+  let startFrom = $state('');
+  function copyFrom(id: string) {
+    startFrom = '';
+    if (!id) return;
+    const probe = document.createElement('div');
+    probe.setAttribute('data-theme-preview', id);
+    probe.style.display = 'none';
+    document.body.appendChild(probe);
+    const cs = getComputedStyle(probe);
+    const next = { ...store.settings.customColors };
+    for (const k of CUSTOM_KEYS) {
+      const v = cs.getPropertyValue(`--${k}`).trim();
+      if (isHex(v)) next[k] = v.toLowerCase();
+    }
+    probe.remove();
+    store.settings.customColors = next;
+    store.saveSettings();
+  }
+
+  // ─── Background: pictures, GIFs, videos and colors, for the whole space or for each panel ───
+  const BG_ROWS: { scope: Slot; label: string; note: string }[] = [
+    { scope: 'whole', label: 'Whole space', note: 'One background over the channel list, the middle and the right panel' },
+    { scope: 'left', label: 'Left panel', note: 'Channel list' },
+    { scope: 'middle', label: 'Middle', note: 'Chat and user cards' },
+    { scope: 'right', label: 'Right panel', note: 'Members, or the chat when it sits there' }
+  ];
+  let bgError = $state('');
+
+  async function bgColor(scope: Slot) {
+    const start = scope === 'whole' ? (panelColor('middle') ?? colors['bg-2']) : (panelColor(scope) ?? colors[scope === 'middle' ? 'bg-2' : 'bg-1']);
+    const c = await colorPicker.open(start);
+    if (c) { bgError = ''; await applyColor(scope, c); }
+  }
+  async function bgFile(scope: Slot, accept: string) {
+    const f = await pickFile(accept);
+    if (f) bgError = await applyFile(scope, f);
+  }
+  // What a row has now
+  function bgStatus(scope: Slot): string {
+    const e = customBg.slots[scope];
+    if (e.kind === 'image') return 'Picture';
+    if (e.kind === 'video') return 'Video or GIF';
+    if (scope === 'whole') return 'None';
+    if (panelColor(scope)) return 'Color';
+    return customBg.has('whole') ? 'Part of the whole background' : 'Color scheme';
+  }
+  const bgHasAny = (scope: Slot) => customBg.has(scope) || (scope !== 'whole' && !!panelColor(scope));
+
+  function resetCustom() {
+    store.settings.customColors = { ...CUSTOM_DEFAULTS };
     store.saveSettings();
   }
 </script>
 
 <h3>Color scheme</h3>
-<div class="narrow">
-  <input type="search" placeholder="Find a color scheme" aria-label="Find a color scheme" bind:value={find} />
-  <div class="shades" role="group" aria-label="Show">
-    {#each ['all', 'dark', 'light'] as const as k (k)}
-      <button class:on={shade === k} aria-pressed={shade === k} onclick={() => (shade = k)}>{k === 'all' ? `All ${THEMES.length}` : k === 'dark' ? 'Dark' : 'Light'}</button>
-    {/each}
-  </div>
-</div>
 <div class="themes" role="radiogroup" aria-label="Color scheme">
-  {#each shown as t (t.id)}
+  {#each THEMES as t (t.id)}
     <button role="radio" aria-checked={store.settings.theme === t.id} class:active={store.settings.theme === t.id}
       onclick={() => pick(t.id)} aria-label={t.name}>
       <!-- A miniature of the app in that theme -->
@@ -60,8 +120,84 @@
       <span class="note">{t.note}</span>
     </button>
   {/each}
+  <button role="radio" aria-checked={store.settings.theme === 'custom'} class:active={store.settings.theme === 'custom'}
+    onclick={() => pick('custom')} aria-label="Custom">
+    <span class="mini" style={customStyle(colors)} aria-hidden="true">
+      <span class="m-rail"><span></span><span></span></span>
+        <span class="m-side"><i></i><i class="sel"></i><i></i></span>
+        <span class="m-chat">
+          <span class="m-head"></span>
+          <i class="a"></i><i></i><i class="short"></i>
+          <span class="m-box"></span>
+        </span>
+    </span>
+    <span class="name">Custom</span>
+    <span class="note">Choose every color yourself</span>
+  </button>
 </div>
-{#if !shown.length}<p class="nothing">No color scheme matches.</p>{/if}
+
+{#if store.settings.theme === 'custom'}
+  <div class="custom">
+    <div class="custom-bar">
+      <label class="from">
+        <span>Start from</span>
+        <select value={startFrom} onchange={(e) => copyFrom(e.currentTarget.value)} aria-label="Copy the colors of a color scheme">
+          <option value="">Choose a scheme…</option>
+          {#each THEMES as t (t.id)}<option value={t.id}>{t.name}</option>{/each}
+        </select>
+      </label>
+      <button class="reset" onclick={resetCustom}>Reset to Dark</button>
+    </div>
+    {#each CUSTOM_GROUPS as g (g.title)}
+      <h4>{g.title}</h4>
+      <div class="colors">
+        {#each g.items as c (c.key)}
+          <div class="color">
+            <button class="pick" style:background={colors[c.key]} aria-label="{c.label}: change color" title="Change color" onclick={() => editColor(c.key)}></button>
+            <span class="label">{c.label}</span>
+            <input type="text" class="hex" value={colors[c.key]} maxlength="7" spellcheck="false" aria-label="{c.label}, hex value"
+              oninput={(e) => hexInput(c.key, e)} onblur={(e) => hexDone(c.key, e)} />
+          </div>
+        {/each}
+      </div>
+    {/each}
+
+    <h4>Background</h4>
+    <p class="help">A color, picture, GIF or video behind the app, for the whole space or for each panel on its own. Kept on this computer only. A picture always fills its area, and can be darkened and blurred.</p>
+    <div class="bgbox">
+      {#each BG_ROWS as r (r.scope)}
+        {@const e = customBg.slots[r.scope]}
+        <div class="bgrow">
+          <div class="bghead">
+            <span class="bgname">{r.label}<small>{r.note}</small></span>
+            <span class="bgstatus">
+              {#if r.scope !== 'whole' && panelColor(r.scope) && !customBg.has(r.scope)}<i class="sw" style:background={panelColor(r.scope)}></i>{/if}{bgStatus(r.scope)}
+            </span>
+          </div>
+          <div class="bgbtns">
+            <button onclick={() => bgColor(r.scope)}>Color…</button>
+            <button onclick={() => bgFile(r.scope, 'image/png,image/jpeg,image/webp')}>Image…</button>
+            <button onclick={() => bgFile(r.scope, 'video/*,image/gif')}>Video / GIF…</button>
+            <button class="rm" disabled={!bgHasAny(r.scope) && !(r.scope === 'whole' && customBg.any)} onclick={() => removeBackground(r.scope)}>Remove</button>
+          </div>
+          {#if e.kind !== 'none'}
+            <div class="bgsliders">
+              <label>Darkness
+                <input type="range" min="0" max="95" step="1" value={e.darkness} oninput={ev => customBg.setDarkness(r.scope, Number(ev.currentTarget.value))} ondblclick={() => customBg.setDarkness(r.scope, 0)} />
+                <output>{e.darkness}%</output>
+              </label>
+              <label>Blur
+                <input type="range" min="0" max="40" step="1" value={e.blur} oninput={ev => customBg.setBlur(r.scope, Number(ev.currentTarget.value))} ondblclick={() => customBg.setBlur(r.scope, 0)} />
+                <output>{e.blur} px</output>
+              </label>
+            </div>
+          {/if}
+        </div>
+      {/each}
+      {#if bgError}<p class="bgerror">{bgError}</p>{/if}
+    </div>
+  </div>
+{/if}
 
 <h3 class="gap">Interface</h3>
 <div class="themes" role="radiogroup" aria-label="Interface">
@@ -86,49 +222,62 @@
   {/each}
 </div>
 
-{#if (store.settings.interface ?? 'standard') === 'standard'}
-<h3 class="gap">Layout</h3>
-<div class="themes" role="radiogroup" aria-label="Layout">
-  {#each ARRANGEMENTS as a (a.id)}
-    {@const on = (store.settings.arrangement ?? 'side') === a.id}
-    <button role="radio" aria-checked={on} class:active={on} onclick={() => arrange(a.id)} aria-label={a.name}>
-      <span class="mini lay {a.id}" aria-hidden="true">
-        <span class="m-rail"><span></span><span></span></span>
-        {#if a.id === 'side'}<span class="m-side"><i></i><i class="sel"></i><i></i></span>{/if}
-        {#if a.id === 'stacked'}
-          <span class="m-col">
-            <span class="m-side"><i></i><i class="sel"></i></span>
-            <span class="m-chat"><span class="m-head"></span><i class="a"></i><i></i><span class="m-box"></span></span>
-          </span>
-        {:else}
-          <span class="m-chat"><span class="m-head"></span><i class="a"></i><i></i><i class="short"></i><span class="m-box"></span></span>
-        {/if}
-        {#if a.id === 'classic'}<span class="m-side"><i></i><i class="sel"></i><i></i></span>{/if}
-        {#if a.id === 'side'}<span class="m-members"><i></i><i></i></span>{/if}
-      </span>
-      <span class="name">{a.name}</span>
-      <span class="note">{a.note}</span>
-    </button>
-  {/each}
-</div>
-<p class="help">Narrow windows use the phone layout, except Stacked, which stays as it is.</p>
+<label class="check rounded">
+  <input type="checkbox" checked={store.settings.panelClear} onchange={e => { store.settings.panelClear = e.currentTarget.checked; store.saveSettings(); }} />
+  Transparent panels
+</label>
+<p class="help">The bars and title panels (server bar, titles, your own bar, message box edges) let the background show through.</p>
+{#if store.settings.panelClear}
+<label class="check">
+  <input type="checkbox" checked={store.settings.panelDark} onchange={e => { store.settings.panelDark = e.currentTarget.checked; store.saveSettings(); }} />
+  Darker panels
+</label>
+{#if store.settings.panelDark}
+  <div class="round-row">
+    <label for="a-dark">Darkness</label>
+    <input id="a-dark" type="range" min="0" max="95" step="1" value={store.settings.panelDarkness}
+      oninput={e => { store.settings.panelDarkness = Number(e.currentTarget.value); store.saveSettings(); }} />
+    <output for="a-dark">{store.settings.panelDarkness}%</output>
+  </div>
+{/if}
+<label class="check">
+  <input type="checkbox" checked={store.settings.panelBlur} onchange={e => { store.settings.panelBlur = e.currentTarget.checked; store.saveSettings(); }} />
+  Blurred panels
+</label>
+{#if store.settings.panelBlur}
+  <div class="round-row">
+    <label for="a-blur">Blur</label>
+    <input id="a-blur" type="range" min="0" max="40" step="1" value={store.settings.panelBlurPx}
+      oninput={e => { store.settings.panelBlurPx = Number(e.currentTarget.value); store.saveSettings(); }} />
+    <output for="a-blur">{store.settings.panelBlurPx} px</output>
+  </div>
+{/if}
+{/if}
+
+<label class="check rounded">
+  <input type="checkbox" checked={store.settings.rounded} onchange={e => { store.settings.rounded = e.currentTarget.checked; store.saveSettings(); }} />
+  Rounded edges
+</label>
+<p class="help">Rounds menus, windows, server icons and user cards. Applies to both interfaces.</p>
+{#if store.settings.rounded}
+  <div class="round-row">
+    <label for="a-round">Roundness</label>
+    <input id="a-round" type="range" min="0" max="200" step="1" value={store.settings.roundness}
+      oninput={e => { store.settings.roundness = Number(e.currentTarget.value); store.saveSettings(); }} />
+    <output for="a-round">{store.settings.roundness}%</output>
+  </div>
 {/if}
 
 <style>
   .gap { margin-top: 22px; }
-  .narrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-  .narrow input { flex: 1 1 180px; width: auto; }
-  .shades { display: flex; border: 1px solid var(--line); }
-  .shades button { padding: 0 14px; font-size: 14px; color: var(--text-dim); }
-  .shades button.on { background: var(--accent); color: var(--accent-text); }
-  .nothing { margin: 10px 0 0; font-size: 14px; color: var(--text-dim); }
+  .rounded { margin-top: 16px; }
+  .round-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+  .round-row label { margin: 0; flex: none; }
+  .round-row input { flex: 1; min-width: 0; }
+  .round-row output { width: 44px; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--text-dim); }
   .help { margin: 6px 0 0; font-size: 13px; color: var(--text-dim); }
   .m-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .m-col .m-chat { flex: 1; }
-  .m-col .m-side { width: auto; height: 34%; flex: none; padding: 5px; gap: 4px; border-bottom: 1px solid var(--line); }
-  .m-members { width: 18%; background: var(--bg-1); display: flex; flex-direction: column; gap: 5px; padding: 8px 4px; border-left: 1px solid var(--line); }
-  .m-members i { height: 4px; background: var(--text-faint); width: 80%; }
-  .lay.classic .m-side { border-left: 1px solid var(--line); }
   h3 { margin: 8px 0 0; font-size: 15px; font-weight: 650; }
   .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 10px; }
   .themes > button { display: flex; flex-direction: column; gap: 2px; padding: 8px; text-align: left; border: 1px solid var(--line); background: var(--bg-0); }
@@ -144,7 +293,7 @@
   .m-side i.sel { background: var(--accent); width: 85%; }
   .m-chat { flex: 1; background: var(--bg-2); display: flex; flex-direction: column; gap: 5px; padding: 0 6px 6px; }
   .m-head { height: 10px; margin: 0 -6px 2px; background: var(--bg-1); border-bottom: 1px solid var(--line); }
-  [data-theme-preview="win95"] .m-head { background: linear-gradient(90deg, #000080, #1084d0); }
+  [data-theme-preview^="win95"] .m-head { background: var(--w-title); }
   .m-chat i { height: 4px; background: var(--text-dim); width: 80%; }
   .m-chat i.a { background: var(--accent); width: 35%; }
   .m-chat i.short { width: 55%; }
@@ -152,5 +301,32 @@
   .m-tabs { flex: none; height: 12px; display: flex; gap: 6px; align-items: center; justify-content: center; background: var(--bg-0); border-top: 1px solid var(--line); }
   .m-tabs i { width: 10px; height: 4px; background: var(--text-faint); }
   .m-tabs i.sel { background: var(--accent); }
+  .custom { margin-top: 14px; padding: 12px; border: 1px solid var(--line); background: var(--bg-0); }
+  .custom h4 { margin: 14px 0 0; font-size: 13px; font-weight: 650; color: var(--text-dim); }
+  .custom-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+  .from { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .reset { padding: 0 14px; border: 1px solid var(--line); color: var(--text-dim); }
+  .colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 14px; margin-top: 8px; }
+  .color { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .color .label { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick { width: 34px; height: 28px; padding: 0; border: 1px solid var(--line); background: transparent; cursor: pointer; flex: none; }
+  .hex { width: 84px; flex: none; font-family: var(--mono); font-size: 13px; }
+  .bgbox { margin-top: 8px; display: flex; flex-direction: column; border: 1px solid var(--line); background: var(--bg-1); }
+  .bgrow { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .bgrow + .bgrow { border-top: 1px solid var(--line); }
+  .bghead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .bgname { font-size: 14px; font-weight: 600; display: flex; flex-direction: column; min-width: 0; }
+  .bgname small { font-weight: 400; font-size: 12px; color: var(--text-dim); }
+  .bgstatus { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
+  .sw { display: inline-block; width: 14px; height: 14px; border: 1px solid var(--line); }
+  .bgbtns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .bgbtns button { padding: 4px 12px; border: 1px solid var(--line); background: var(--bg-3); color: var(--text); }
+  .bgbtns button:hover:not(:disabled) { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .bgbtns button:disabled { opacity: 0.45; }
+  .bgsliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px 16px; }
+  .bgsliders label { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 13px; color: var(--text-dim); }
+  .bgsliders input { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
+  .bgsliders output { width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+  .bgerror { margin: 0; padding: 8px 12px; font-size: 13px; color: var(--danger); border-top: 1px solid var(--line); }
   .m-box { margin-top: auto; height: 10px; background: var(--bg-3); border: 1px solid var(--line); }
 </style>

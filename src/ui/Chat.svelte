@@ -3,41 +3,13 @@
   import ChatLog from './ChatLog.svelte';
   import Composer from './Composer.svelte';
   import VoiceStage from './VoiceStage.svelte';
-  import ResizeHandle from './ResizeHandle.svelte';
-  import { share } from '../lib/share.svelte.ts';
   import { session } from '../lib/session.svelte.ts';
+  import { chatDock, isChatEmpty } from '../lib/chat-dock.svelte.ts';
+  import { menu } from '../lib/menu.svelte.ts';
+  import { customBackgroundItems } from '../lib/custom-bg-menu.ts';
 
-  // showStage: voice tiles above the chat when the window is too narrow for the member list
-  // videoOnly: streams as a plain picture without the tiles (stacked layout)
-  let { onmenu, onpanel, showMenu, showStage = false, videoOnly = false }: { onmenu: () => void; onpanel: () => void; showMenu: boolean; showStage?: boolean; videoOnly?: boolean } = $props();
-
-  // Stacked layout with a stream above the chat: the chat's height can be dragged larger than
-  // its minimum; the picture gets the rest. Unset until dragged, then the picture decides.
-  const LOG_MIN = 124;
-  // The picture above always keeps its bar and some of the picture (see the styles below)
-  const STREAM_MIN = 156;
-  let chatEl = $state<HTMLElement>();
-  // The message box's real height: it grows with the formatting bar and longer messages
-  let composerH = $state(64);
-  $effect(() => {
-    // The message box only exists while connected
-    void session.status;
-    const box = chatEl?.querySelector<HTMLElement>('.composer');
-    if (!box) return;
-    const ro = new ResizeObserver(() => (composerH = box.offsetHeight));
-    ro.observe(box);
-    return () => ro.disconnect();
-  });
-  // As tall as the chat can get without squeezing the picture under its minimum
-  const logMax = () => {
-    const composer = chatEl?.querySelector<HTMLElement>('.composer')?.offsetHeight ?? 0;
-    return Math.max(LOG_MIN, (chatEl?.clientHeight ?? window.innerHeight) - composer - STREAM_MIN);
-  };
-  const here = (s: { server?: { id: string } | null } | null | undefined) => !!s && s.server?.id === session.server?.id;
-  // Not while the picture is in a window of its own: then only a bar is left above the chat
-  const streamAbove = $derived(videoOnly && session.status === 'connected' && !share.poppedOut && ((!!share.stream && here(share.host)) || share.watches.some(w => here(w.host))));
-  let logHeight = $state(Number((() => { try { return localStorage.getItem('mumh5.stackedChatHeight'); } catch { return null; } })()) || 0);
-  const logFixed = $derived(streamAbove && logHeight >= LOG_MIN);
+  // docked: the chat sits on the right (see ChatPanel); this is then the user cards alone, filling the middle
+  let { onmenu, onpanel, showMenu, docked = false }: { onmenu: () => void; onpanel: () => void; showMenu: boolean; docked?: boolean } = $props();
 
   const isDm = $derived(session.view.startsWith('dm:'));
   const isText = $derived(!isDm && session.isText(Number(session.view.slice(3))));
@@ -48,27 +20,24 @@
   });
 </script>
 
-<section class="chat" class:video-only={videoOnly} class:log-fixed={logFixed} aria-label="Chat" bind:this={chatEl} style:--composer-h="{composerH}px">
-  <!-- Stacked layout: no title bar; the channel list above already names the channel -->
-  {#if !videoOnly}
-  <header>
+<section class="chat" aria-label="Chat" onpointerdown={e => { if (!docked) chatDock.pointerDown(e); }}
+  oncontextmenu={e => { if (!docked && isChatEmpty(e.target)) menu.show(e, customBackgroundItems('middle')); }}>
+  <!-- The chat's name goes with the chat when it is docked on the right -->
+  {#if !docked}
+  <header class="cheader">
     {#if showMenu}<button class="icon-btn" onclick={onmenu} aria-label="Open channels"><Icon name="menu" /></button>{/if}
     <Icon name={isDm ? 'message' : 'hash'} size={20} />
     <h1>{title}</h1>
     {#if topic}<span class="topic" title={topic}>{topic}</span>{/if}
     <span class="grow"></span>
-    <button class="icon-btn" onclick={onpanel} title="Members"><Icon name="users" /></button>
+    {#if !docked}<button class="icon-btn" onclick={onpanel} title="Members"><Icon name="users" /></button>{/if}
   </header>
   {/if}
 
-  {#if session.status === 'connected'}<VoiceStage always={showStage} {videoOnly} />{/if}
+  {#if session.status === 'connected'}<VoiceStage fill={docked} />{/if}
 
-
-  <div class="logbox" style:height={logFixed ? `${logHeight}px` : undefined}>
-  {#if streamAbove}
-    <ResizeHandle bind:width={logHeight} edge="top" min={LOG_MIN} max={logMax} initial={220}
-      storageKey="mumh5.stackedChatHeight" label="Resize the chat" />
-  {/if}
+  {#if !docked}
+  <div class="logbox">
   <ChatLog key={session.view}>
     {#snippet empty()}
       <div class="empty">
@@ -86,25 +55,14 @@
   {#if session.status === 'connected'}
     <Composer target={session.view} placeholder={`Message ${isDm ? '@' : '#'}${title}`} />
   {/if}
+  {/if}
 </section>
 
 <style>
-  /* Stacked layout: room for about five lines of chat whatever the stream above takes */
-  .chat.video-only .logbox { min-height: 124px; flex-shrink: 0; }
-  /* Stacked layout: the shortest chat plus the message box (as tall as it is now) always fit, and
-     the picture's bar and minimum too when one is shown; the channel list gives way instead */
-  .chat.video-only { min-height: calc(124px + var(--composer-h, 64px)); }
-  .chat.video-only:has(:global(.stage.solo .spot:not(.popped))) { min-height: calc(36px + 120px + 124px + var(--composer-h, 64px)); }
   .logbox { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  /* Dragged to a height of its own: the stream above takes what is left */
-  /* Its own height, but it gives way (down to its minimum) when the window gets shorter */
-  .chat.log-fixed .logbox { flex: 0 1 auto; }
-  .chat.log-fixed :global(.stage.solo), .chat.log-fixed :global(.stage.solo .spot), .chat.log-fixed :global(.stage.solo .pic) { flex: 1 1 0; min-height: 0; }
-  /* The picture is never squeezed away: its bar and at least 120 px stay (STREAM_MIN) */
-  .chat.video-only :global(.stage.solo:has(.spot:not(.popped))), .chat.video-only :global(.stage.solo .spot:not(.popped)) { min-height: 156px; }
-  .chat.log-fixed :global(.stage.solo .spot video) { flex: 1 1 0; max-height: none; }
-  .chat { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-2); }
-  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--text-faint); }
+  .chat { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--panel-middle, var(--bg-2)); border-left: 5px solid transparent; }
+  .chat::before { content: ''; position: absolute; left: -5px; top: 0; bottom: 0; width: 5px; background: var(--panel-divider, rgb(0 0 0 / 0.4)); backdrop-filter: blur(var(--panel-blur, 10px)); pointer-events: none; }
+  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--text-faint); background-color: var(--glass, var(--panel-middle, var(--bg-2))); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
   h1 { flex: 0 1 auto; max-width: 60%; font-size: 15px; font-weight: 650; margin: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .topic { flex: 1 1 0; font-size: 13px; color: var(--text-dim); padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .grow { flex: 1; }

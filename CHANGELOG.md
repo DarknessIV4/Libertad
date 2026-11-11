@@ -1,6 +1,44 @@
 # Changelog
  
 All notable changes to mumh5.
+
+## 0.3.0 - 2026-11-11
+
+### Added
+
+- **Watch Together**:
+  - Watch YouTube videos, stream local files, and play torrent streams together in a channel.
+  - Playback is synced between users for time, pause, and resume across all three sources; YouTube and local file streams also sync playback speed.
+  - Built-in YouTube search and YouTube sign-in support.
+  - Built-in torrent search across all Torrentio providers to find streams.
+  - Automatic and manual subtitle support for torrent streams.
+- **P2P file transfer over WebRTC**: Direct peer-to-peer file sharing between users, alongside improved file-saving behavior.
+- **Appearance & UI customization**:
+  - Custom colors in Appearance settings and custom background support.
+  - Profile banners behind user pictures.
+  - Rounded edges across the interface.
+- **Keyboard shortcuts**.
+- **Hardware acceleration** support.
+- **Watching Multiple Screen Shares**: The ability to watch more than wane screen share at once, each with their respective controls, This doeasnt apply to watch together though, you can only open one watch together session as of now, but any number of screen shares.
+- **Dynaimc Fps on screen shareing**: Added dynamic fps that drops the share fps when idle for a while, to preserve resources.
+- **Per user screen share controls**: Any user can edit their own quality and fps for the screen share they are watching, Not exccedint the shared parameters by host.
+- **Hiding Member Cards**: You can hide a member card for yourself if you didnt want to see it, Like bots cards.
+- **Keyboard Shortcuts**: Added keyboard shortcuts in settings.
+
+### Changed
+
+- **Screen sharing**: Replaced vague bitrate settings with clearer, improved screen-sharing controls and quality options.
+- **Leaving Sessions**: For Host, The ability to leave a session (Screen Share, Watch together) without ending the session.
+- **UI & layout**: Multiple visual and layout overhauls, Removed classic and stacked layouts, didn't edit Group interface for mobiles.
+- **Avatar & Banner Sync**: The app saves your friend's avatars and banners for you locally (so the app doeasn't repeatedly download them), and only compares their Hash to see if an update is needed.
+
+### Fixed
+
+- Stacked UI elements and general interface glitches.
+- Banner display and hiding behavior on profile cards.
+- Fullscreen button not working.
+- Pop-out missing features and the inability to fullscreen it.
+- App stuck on fullscreen if the host turns off the session while users were on fullscreen.
  
 ## 0.2.1 - 2026-11-03
  

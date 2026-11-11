@@ -49,7 +49,7 @@
           <span class="slider-label"><span>{item.label}</span><span>{sl.format(sliderValues[i] ?? sl.value)}</span></span>
           <input type="range" min={sl.min} max={sl.max} step={sl.step} value={sl.value} aria-label={item.label}
             oninput={e => { const v = Number(e.currentTarget.value); sliderValues[i] = v; sl.oninput(v); }}
-            ondblclick={() => { sliderValues[i] = 1; sl.oninput(1); }} />
+            ondblclick={() => { const r = sl.reset ?? 1; sliderValues[i] = r; sl.oninput(r); }} />
         </div>
       {:else}
         <button role="menuitem" class:danger={item.danger} disabled={item.disabled}

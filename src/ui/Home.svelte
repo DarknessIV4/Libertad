@@ -6,10 +6,10 @@
   import { ui } from '../lib/ui.svelte.ts';
   import { desktop, isWeb } from '../lib/native.ts';
   import { serverStatus, peopleOn } from '../lib/server-status.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   // The start screen while not connected: your saved servers with who is on them, ready to join.
-  // top: your buttons along the top, where the stacked layout keeps them
-  let { onadd, onedit, onbrowse, top = false }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void; top?: boolean } = $props();
+  let { onadd, onedit, onbrowse }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void } = $props();
 
   const initials = (label: string) =>
     label.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
@@ -33,7 +33,6 @@
 </script>
 
 <section class="home" aria-label="Servers">
-  {#if top}<UserBar toolbar />{/if}
   <div class="scroll">
     <header>
       <div class="title">
@@ -90,7 +89,7 @@
       <p class="none">No saved servers yet.</p>
     {/if}
   </div>
-  {#if !top}<UserBar inline />{/if}
+  <UserBar inline />
 </section>
 
 <style>

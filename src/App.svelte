@@ -1,5 +1,6 @@
 <script lang="ts">
   import ServerRail from './ui/ServerRail.svelte';
+  import { applyCustom, clearCustom, cleanColors } from './lib/theme.ts';
   import Sidebar from './ui/Sidebar.svelte';
   import Chat from './ui/Chat.svelte';
   import RightPanel from './ui/RightPanel.svelte';
@@ -9,6 +10,7 @@
   import CertViewer from './ui/CertViewer.svelte';
   import PromptDialog from './ui/PromptDialog.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
+  import ColorPicker from './ui/ColorPicker.svelte';
   import IdentityWizard from './ui/IdentityWizard.svelte';
   import QuickAudio from './ui/QuickAudio.svelte';
   import UserInfoDialog from './ui/UserInfoDialog.svelte';
@@ -18,54 +20,99 @@
   import ImageViewer from './ui/ImageViewer.svelte';
   import ShareDialog from './ui/ShareDialog.svelte';
   import ProfileCard from './ui/ProfileCard.svelte';
+  import ChatPanel from './ui/ChatPanel.svelte';
+  import ChatDragOverlay from './ui/ChatDragOverlay.svelte';
+  import { chatDock } from './lib/chat-dock.svelte.ts';
+  import BgLayers from './ui/BgLayers.svelte';
+  import { customBg, PANELS } from './lib/custom-bg.svelte.ts';
+  import { isHex } from './lib/theme.ts';
   import Home from './ui/Home.svelte';
   import { share } from './lib/share.svelte.ts';
-  import ResizeHandle from './ui/ResizeHandle.svelte';
   import Shell from './ui2/Shell.svelte';
   import { identities } from './lib/identities.svelte.ts';
-  import { session } from './lib/session.svelte.ts';
+  import { session, sessions } from './lib/session.svelte.ts';
   import { ui } from './lib/ui.svelte.ts';
   import { store, type SavedServer } from './lib/settings.svelte.ts';
+  import { onMount } from 'svelte';
+
+  // Connect on start: once per launch, back to the server and channel you were last in
+  onMount(() => { if (store.settings.connectOnStart) sessions.restoreLast(); });
 
   let width = $state(window.innerWidth);
   // wide: rail + sidebar + chat + panel; medium: panel as an overlay; narrow: everything but chat in drawers
   const layout = $derived(width >= 1100 ? 'wide' : width >= 760 ? 'medium' : 'narrow');
 
-  // Arrangement (Appearance setting): side is the default, classic puts the channel list right
-  // of the chat, stacked above it. Narrow windows use drawers, except stacked, which works at any width.
-  const arrangement = $derived(store.settings.arrangement === 'stacked' ? 'stacked' : layout === 'narrow' ? 'side' : store.settings.arrangement ?? 'side');
-  // The member panel sits inline only in the side arrangement on wide windows, otherwise it overlays
-  const panelInline = $derived(layout === 'wide' && arrangement === 'side');
-  let treeHeight = $state(Math.max(120, Number((() => { try { return localStorage.getItem('mumh5.treeHeight'); } catch { return null; } })()) || 280));
+  // The member panel sits inline on wide windows, otherwise it overlays
+  const panelInline = $derived(layout === 'wide');
 
   let navOpen = $state(false);
-  // Stacked layout: the channel list may grow until the chat below is at its minimum
-  let stackEl = $state<HTMLElement>();
-  const treeMax = () => {
-    const chat = stackEl?.querySelector<HTMLElement>(':scope > .chat');
-    const chatMin = chat ? parseFloat(getComputedStyle(chat).minHeight) || 0 : 220;
-    return Math.max(120, (stackEl?.clientHeight ?? window.innerHeight) - chatMin);
-  };
   let editing = $state<{ server: SavedServer | null } | null>(null);
 
+  // The chat dragged to the right: it takes the member list's place and the user cards take the middle
+  const chatRight = $derived(chatDock.side === 'right' && panelInline && session.status === 'connected');
+  $effect(() => { chatDock.enabled = panelInline && session.status === 'connected' && !home; });
   const showPanel = $derived(ui.panelOpen && session.status === 'connected');
+  // Panels that are on screen, for the backgrounds that sit behind them
+  const present = $derived({ left: layout !== 'narrow', middle: true, right: panelInline && (chatRight || showPanel) });
+  const colored = (k: 'left' | 'middle' | 'right') => store.settings.theme === 'custom' && isHex(store.settings.panelColors?.[k]);
+  // Panels that turn see-through because a picture shows behind them (their own, or the whole background
+  // unless they have a color of their own)
+  const seeThrough = $derived(home ? '' : PANELS.filter(k => present[k] && (customBg.has(k) || (customBg.has('whole') && !colored(k)))).join(' '));
   // Not connected to the server shown: the start screen with the saved servers takes the window
   const home = $derived(session.status === 'idle');
 
   // Color scheme on the root element; dark is the stylesheet default
   $effect(() => {
     const t = store.settings.theme;
-    if (t && t !== 'dark') document.documentElement.dataset.theme = t;
-    else delete document.documentElement.dataset.theme;
+    const root = document.documentElement;
+    if (t && t !== 'dark') root.dataset.theme = t;
+    else delete root.dataset.theme;
+    // The custom scheme is the user's own colors, set as variables on the root
+    if (t === 'custom') applyCustom(root, cleanColors($state.snapshot(store.settings.customColors)));
+    else clearCustom(root);
+  });
+
+  // Rounded edges: a flag and a 0 to 1 factor on the root element, which themes.css turns into radii
+  $effect(() => {
+    const root = document.documentElement;
+    if (store.settings.rounded) {
+      root.dataset.rounded = '';
+      root.style.setProperty('--round', String(Math.min(200, Math.max(0, Number(store.settings.roundness) || 0)) / 100));
+    } else {
+      delete root.dataset.rounded;
+      root.style.removeProperty('--round');
+    }
+  });
+
+  // The bars and title panels: see-through, darkened, blurred (Settings > Appearance)
+  $effect(() => {
+    const st = document.documentElement.style, s = store.settings;
+    const shade = s.panelClear && s.panelDark ? Math.min(95, Math.max(0, Number(s.panelDarkness) || 0)) / 100 : 0;
+    st.setProperty('--panel-shade', String(shade));
+    st.setProperty('--panel-blur', `${s.panelClear && s.panelBlur ? Math.min(40, Math.max(0, Number(s.panelBlurPx) || 0)) : 0}px`);
+    if (s.panelClear) st.setProperty('--glass', 'transparent'); else st.removeProperty('--glass');
+    st.setProperty('--glass-0', s.panelClear ? 'transparent' : 'var(--bg-0)');
+    st.setProperty('--glass-1', s.panelClear ? 'transparent' : 'var(--bg-1)');
+    st.setProperty('--panel-divider', s.panelClear ? `rgb(0 0 0 / ${shade})` : 'var(--line)');
+  });
+
+  // A color chosen for one panel (custom scheme only)
+  $effect(() => {
+    const root = document.documentElement;
+    const custom = store.settings.theme === 'custom';
+    for (const k of PANELS) {
+      const v = store.settings.panelColors?.[k];
+      if (custom && isHex(v)) root.style.setProperty(`--panel-${k}`, v);
+      else root.style.removeProperty(`--panel-${k}`);
+    }
   });
 
   // The panel starts open only where it sits inline
   let lastLayout = '';
   $effect(() => {
-    const key = `${layout}/${arrangement}`;
-    if (key === lastLayout) return;
+    if (layout === lastLayout) return;
     ui.panelOpen = panelInline;
-    lastLayout = key;
+    lastLayout = layout;
   });
   // On phones one drawer at a time
   $effect(() => { if (layout === 'narrow' && ui.panelOpen) navOpen = false; });
@@ -102,31 +149,17 @@
     onsettings={() => (ui.settingsOpen = true)} />
 {/snippet}
 {#snippet chat()}
-  <Chat showMenu={layout === 'narrow' && arrangement === 'side'} showStage={!panelInline && arrangement === 'side'} videoOnly={arrangement === 'stacked'}
-    onmenu={() => (navOpen = true)} onpanel={togglePanel} />
+  <Chat showMenu={layout === 'narrow'} onmenu={() => (navOpen = true)} onpanel={togglePanel} docked={chatRight && !home} />
 {/snippet}
 
 {#if store.settings.interface === 'rooms'}
 <Shell onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} />
 {:else}
-<div class="app {layout} {arrangement}" class:home>
+<div class="app {layout}" class:home data-wb={seeThrough}>
+  {#if !home && customBg.any}<BgLayers {present} watch="{layout}{chatRight}{ui.panelOpen}{chatDock.width}{session.status}" />{/if}
   {#if home}
     {@render rail()}
-    <Home top={arrangement === 'stacked'} onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} />
-  {:else if arrangement === 'classic'}
-    {@render rail()}
-    {@render chat()}
-    <Sidebar handleEdge="left" onnavigate={() => {}} />
-  {:else if arrangement === 'stacked'}
-    {@render rail()}
-    <div class="stack" bind:this={stackEl}>
-      <div class="tree" style:height="{treeHeight}px">
-        <Sidebar fill onnavigate={() => {}} />
-        <ResizeHandle bind:width={treeHeight} edge="bottom" min={120} max={treeMax} initial={280}
-          storageKey="mumh5.treeHeight" label="Resize channel list" />
-      </div>
-      {@render chat()}
-    </div>
+    <Home onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} />
   {:else}
     {#if layout !== 'narrow' || navOpen}
       <div class="nav" class:drawer={layout === 'narrow'}>
@@ -138,7 +171,9 @@
     {@render chat()}
   {/if}
 
-  {#if showPanel}
+  {#if chatRight && !home}
+    <ChatPanel />
+  {:else if showPanel}
     {#if panelInline}
       <RightPanel onnavigate={() => {}} onclose={() => (ui.panelOpen = false)} />
     {:else}
@@ -168,19 +203,19 @@
 {#if share.dialog}<ShareDialog onclose={() => (share.dialog = null)} />{/if}
 {#if ui.prompt}<PromptDialog {...ui.prompt} onclose={() => { const p = ui.prompt; ui.prompt = null; p?.oncancel?.(); }} />{/if}
 <ProfileCard />
+<ChatDragOverlay />
 <ImageViewer />
 <ContextMenu />
+<ColorPicker />
 
 <style>
-  .app { position: relative; height: 100%; display: flex; overflow: hidden; }
+  .app { position: relative; height: 100%; display: flex; overflow: hidden; isolation: isolate; }
+  /* Where a picture shows behind a panel, the panel lets it through */
+  .app[data-wb~='left'] :global(.sidebar), .app[data-wb~='middle'] :global(section.chat),
+  .app[data-wb~='right'] :global(aside.panel), .app[data-wb~='right'] :global(aside.cpanel) { background: transparent; }
   .nav { display: flex; flex: none; min-height: 0; }
   .nav.drawer { position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; max-width: calc(100% - 48px); box-shadow: 8px 0 32px rgb(0 0 0 / 0.4); }
   .nav.drawer :global(.sidebar) { width: min(260px, calc(100vw - 68px - 48px)); }
-  .stack { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  /* Its minimum (the shortest chat and the message box) comes from Chat.svelte; the list above gives way to it */
-  .stack > :global(.chat) { flex: 1; }
-  /* Its chosen height while there is room; on short windows it gives way first, down to its toolbar */
-  .tree { position: relative; z-index: 1; flex: 0 1 auto; display: flex; min-height: var(--footer-h); border-bottom: 1px solid var(--line); }
   .scrim { position: absolute; inset: 0; z-index: 15; background: rgb(0 0 0 / 0.5); }
   .panel-drawer { position: absolute; z-index: 20; top: 0; right: 0; bottom: 0; max-width: calc(100% - 48px); display: flex; box-shadow: -8px 0 32px rgb(0 0 0 / 0.4); }
 </style>

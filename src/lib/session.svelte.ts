@@ -2,13 +2,20 @@ import { createCodec } from '../core/proto.ts';
 import { MumbleClient, describeDenial, type Channel, type User, type TextMessage } from '../core/client.ts';
 import { native, openTransport } from './native.ts';
 import { share, type ShareKind } from './share.svelte.ts';
+import { thumbs } from './thumbs.svelte.ts';
+import { watchTogether, type WatchMode } from './watch-together.svelte.ts';
 import { textChannels } from './text-channels.ts';
 import { MAX_HTML, type TextMsg } from '../core/text-signal.ts';
+import { PROFILE_DATA_ID, encodeProfilePing, isProfilePing, isAvatarPing } from '../core/profile-signal.ts';
 import type { ServerCertInfo } from '../core/transport.ts';
 import { store, type SavedServer } from './settings.svelte.ts';
 import { renderIncoming, textToHtml, escapeHtml, formatBytes, type Embed } from './html.ts';
 import { makeInlineImage, originalImage, videoPoster } from './images.ts';
 import { ownAvatar } from './avatar.svelte.ts';
+import { OWN, ownBanner, ownCard, type OwnBannerInput } from './banner.svelte.ts';
+import { profileCache, type CachedSlot, type CachedProfile } from './profile-cache.ts';
+import { parseBanner, withBanners, stripBanner, sameBanner, dataMime, bannerSignature, type Banner, type BannerView, type Slot } from '../core/banner.ts';
+import type { FileMeta } from '../core/file-transfer.ts';
 import { files, fileKind } from './files.svelte.ts';
 import { announce, isPiece } from '../core/file-transfer.ts';
 import { voice } from './audio/voice.svelte.ts';
@@ -68,6 +75,10 @@ export class Session {
   rtt = $state(0);
   // Who in our channel is sharing their screen, by session (mumh5 clients only)
   sharing = $state<Record<number, ShareKind>>({});
+  // A small frame of what someone hosts (see thumbs.svelte.ts), as an object URL, by session
+  frames = $state<Record<number, string>>({});
+  // Who in our channel is hosting a watch together session, by session
+  watchTogether = $state<Record<number, { mode: WatchMode; title: string }>>({});
   // Why the last connection ended, shown with a Reconnect button (null after a normal disconnect)
   disconnectInfo = $state<{ kind: 'kicked' | 'banned' | 'lost' | 'rejected'; by: string; reason: string } | null>(null);
   private removedBy: { kind: 'kicked' | 'banned'; by: string; reason: string } | null = null;
@@ -93,6 +104,8 @@ export class Session {
   private lastImageSend: { key: string; fallback: string; at: number } | null = null;
   // Channel we asked to move to; the chat view switches when the server confirms it
   private pendingJoin: number | null = null;
+  // A channel to enter as soon as the login is done (connect on start); the name guards against ids that changed
+  autoJoin: { id: number; name: string } | null = null;
   // Mute and deafen the app set by itself (your choice from before connecting, or restored when
   // voice comes back here); the server's confirmation of exactly that plays no sound
   private applied: { mute: boolean; deaf: boolean } | null = null;
@@ -312,15 +325,22 @@ export class Session {
   }
 
   disconnect(): void {
+    this.autoJoin = null;
     this.attempt++;
     const client = this.client;
     this.client = null;
     client?.disconnect();
     share.closed(this);
+    thumbs.closed(this);
     textChannels.closed(this);
     files.closed(this);
+    watchTogether.closed(this);
     this.dropPictures();
+    this.dropFrames();
     this.sharing = {};
+    this.bannerWait = false;
+    this.bannerFiles = {};
+    this.dropProfiles();
     sessions.onClosed(this);
     this.status = 'idle';
     this.tick++;
@@ -344,18 +364,33 @@ export class Session {
       for (const u of client.users.values()) this.lastChannel.set(u.session, u.channelId);
       // What we may do per channel, for menus (not rate limited by the server)
       for (const id of client.channels.keys()) client.requestPermissions(id);
+      // Connect on start: go back to the channel you were last in, if it is still there
+      if (!this.autoJoin && this.server && client.self) store.rememberChannel(this.server.id, client.self.channelId, client.channels.get(client.self.channelId)?.name ?? '');
+      const back = this.autoJoin;
+      this.autoJoin = null;
+      if (back) {
+        const ch = client.channels.get(back.id);
+        if (ch && (ch.name || 'Root') === (back.name || 'Root') && client.self?.channelId !== back.id) this.joinChannel(back.id);
+      }
       if (client.welcomeText) this.system(this.view, client.welcomeText, true);
       // Your picture, kept on this device (servers drop it when you leave unless you are registered)
       ownAvatar.loaded.then(() => { if (live() && ownAvatar.bytes) this.sendPicture(ownAvatar.bytes); });
+      // Your banner rides in your description
+      Promise.all([ownBanner.loaded, ownCard.loaded]).then(() => { if (live()) this.syncBanner(); });
       share.entered(this);
+      thumbs.entered(this);
       textChannels.entered(this);
+      watchTogether.entered(this);
       bump();
     });
     client.on('pluginData', (sender, dataId, data) => {
       if (!live()) return;
       share.receive(this, sender, dataId, data);
+      thumbs.receive(this, sender, dataId, data);
       textChannels.receive(this, sender, dataId, data);
       files.receive(this, sender, dataId, data);
+      watchTogether.receive(this, sender, dataId, data);
+      this.receiveProfilePing(sender, dataId, data);
     });
     client.on('channel', ch => {
       if (live() && client.synced && !client.permissions.has(ch.id)) client.requestPermissions(ch.id);
@@ -387,10 +422,16 @@ export class Session {
       const before = this.lastChannel.get(user.session);
       this.lastChannel.set(user.session, user.channelId);
       if (client.synced && self && (isNew || changed.includes('channelId'))) {
-        if (user.session === self.session) share.entered(this);
-        else share.userMoved(this, user);
+        if (user.session === self.session) {
+          share.entered(this); watchTogether.selfMoved(this);
+          // Not while a channel is still being entered on start: that would overwrite where we are going
+          if (this.server && !this.autoJoin) store.rememberChannel(this.server.id, user.channelId, client.channels.get(user.channelId)?.name ?? '');
+        }
+        else { share.userMoved(this, user); thumbs.userMoved(this, user); }
       }
       let flips = { mute: false, deaf: false };
+      // Our own description arrived after we asked for it: now the banner can be put into it
+      if (self && user.session === self.session && this.bannerWait && changed.includes('comment')) this.syncBanner();
       if (self && user.session === self.session) {
         const was = this.own;
         this.own = { mute: user.selfMute, deaf: user.selfDeaf };
@@ -432,6 +473,7 @@ export class Session {
       share.userMoved(this, user, true);
       textChannels.userLeft(this, user.session);
       files.userLeft(this, user.session);
+      watchTogether.userMoved(this, user, true);
       if (self && user.session !== self.session && this.isVoice() && user.channelId === self.channelId) {
         const byOther = actor != null && actor !== user.session;
         sounds.play(ban ? 'userBanned' : byOther ? 'userKicked' : 'userDisconnected');
@@ -445,6 +487,8 @@ export class Session {
       if (this.panel.kind === 'user' && this.panel.session === user.session) this.panel = { kind: 'members' };
       const pic = this.pictures.get(user.session);
       if (pic) { URL.revokeObjectURL(pic.url); this.pictures.delete(user.session); }
+      this.dropFrame(user.session);
+      this.dropProfile(user.session);
       bump();
     });
 
@@ -490,6 +534,7 @@ export class Session {
       this.client = null;
       textChannels.closed(this);
       files.closed(this);
+      watchTogether.closed(this);
       sessions.onClosed(this);
       this.status = 'idle';
       this.error = reason === 'Disconnected' ? '' : reason;
@@ -594,6 +639,26 @@ export class Session {
     });
   }
 
+  // The frame of what someone hosts, for their tile
+  frame(session: number): string | null {
+    return this.frames[session] ?? null;
+  }
+  setFrame(session: number, bytes: Uint8Array): void {
+    const old = this.frames[session];
+    this.frames[session] = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/jpeg' }));
+    if (old) URL.revokeObjectURL(old);
+  }
+  dropFrame(session: number): void {
+    const old = this.frames[session];
+    if (!old) return;
+    URL.revokeObjectURL(old);
+    delete this.frames[session];
+  }
+  private dropFrames(): void {
+    for (const url of Object.values(this.frames)) URL.revokeObjectURL(url);
+    this.frames = {};
+  }
+
   private dropPictures(): void {
     for (const p of this.pictures.values()) URL.revokeObjectURL(p.url);
     this.pictures.clear();
@@ -623,9 +688,288 @@ export class Session {
     this.connect(updated);
   }
 
-  // html comes from the rich editor, already sanitized XHTML
+  // html comes from the rich editor, already sanitized XHTML. Your banner and card background are kept in it.
   setComment(html: string): void {
-    this.client?.setComment(html);
+    const client = this.client;
+    if (!client) return;
+    const text = stripBanner(html);
+    const limit = client.config.imageMessageLength;
+    const withIt = withBanners(text, { banner: this.currentWire('banner'), card: this.currentWire('card') });
+    client.setComment(limit > 0 && withIt.length > limit ? text : withIt);
+    this.pingProfile();
+  }
+
+  // ─── Other people's banners and card backgrounds ────────────────────────────
+
+  // What each person in view has, as it can be drawn (see ensureProfile)
+  profiles = $state<Record<number, Record<Slot, BannerView | null>>>({});
+  private profileKey = new Map<number, string>();
+  private profileUrls = new Map<number, string[]>();
+
+  // Someone's banner (or card background) as the card draws it; null: none, not here yet, or too large to fetch
+  banner(session: number | null | undefined, slot: Slot = 'banner'): BannerView | null {
+    void this.tick;
+    const client = this.client;
+    if (!client || session == null) return null;
+    if (session === client.session) return OWN[slot].view();
+    return this.profiles[session]?.[slot] ?? null;
+  }
+
+  // What a tile shows behind someone: their card background, else their banner
+  cardBackground(session: number | null | undefined): BannerView | null {
+    return this.banner(session, 'card') ?? this.banner(session, 'banner');
+  }
+
+  // Gets someone's banner and card background ready: from the description when it is here, else from
+  // what this computer kept of them when their description has not changed (compared by its hash),
+  // else the description is fetched. A picture too big for a description is fetched from them over
+  // WebRTC, within the limit in Settings, unless the copy kept here has the same hash.
+  ensureProfile(user: { session: number; name: string; comment: string; commentHash: Uint8Array | null }): void {
+    const client = this.client;
+    if (!client || user.session === client.session) return;
+    if (!user.comment && !user.commentHash) {
+      this.profileKey.delete(user.session);
+      if (this.profiles[user.session]) this.dropProfile(user.session);
+      return;
+    }
+    const hash = user.commentHash ? [...user.commentHash].map(b => b.toString(16).padStart(2, '0')).join('') : '';
+    // The text itself counts too: a short description arrives without a new hash, so the hash alone says nothing
+    const key = `${hash}:${user.comment ? 'text:' + bannerSignature(user.comment) : 'hash'}:${user.name}`;
+    if (this.profileKey.get(user.session) === key) return;
+    this.profileKey.set(user.session, key);
+    void this.buildProfile(user.session, user.name, hash, user.comment, key).catch(() => {});
+  }
+
+  private setProfile(session: number, key: string, slot: Slot, view: BannerView | null): void {
+    if (this.profileKey.get(session) !== key) return;
+    this.profiles = { ...this.profiles, [session]: { ...(this.profiles[session] ?? { banner: null, card: null }), [slot]: view } };
+  }
+
+  private async buildProfile(session: number, name: string, hash: string, comment: string, key: string): Promise<void> {
+    const stale = () => this.profileKey.get(session) !== key || !this.client;
+    const cached = await profileCache.read(name);
+    if (stale()) return;
+    if (!comment) {
+      // Only the hash is known: the same hash as last time is the same profile
+      if (cached && hash && cached.commentHash === hash) {
+        const urls: string[] = [];
+        for (const slot of ['banner', 'card'] as const) {
+          const c = cached[slot];
+          const view = c ? await this.cachedView(name, slot, c, urls) : null;
+          if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
+          this.setProfile(session, key, slot, view);
+        }
+        this.keepUrls(session, urls);
+        return;
+      }
+      this.loadComment(session);
+      return;
+    }
+    const urls: string[] = [];
+    const results = await Promise.all((['banner', 'card'] as const).map(async slot => {
+      const r = await this.resolveSlot(session, name, slot, parseBanner(comment, slot), cached, urls);
+      this.setProfile(session, key, slot, r.view);
+      return r;
+    }));
+    if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
+    this.keepUrls(session, urls);
+    // Kept for next time, when the description has a hash to compare by. Short descriptions are sent as text
+    // without a new hash, so the hash here could be an old one: those are not kept.
+    if (hash && comment.length > 128) {
+      const meta: CachedProfile = { v: 1, commentHash: hash, banner: results[0].saved, card: results[1].saved };
+      await profileCache.write(name, meta, { banner: results[0].blob, card: results[1].blob });
+    }
+  }
+
+  private keepUrls(session: number, urls: string[]): void {
+    for (const u of this.profileUrls.get(session) ?? []) URL.revokeObjectURL(u);
+    if (urls.length) this.profileUrls.set(session, urls); else this.profileUrls.delete(session);
+  }
+
+  private async cachedView(name: string, slot: Slot, c: CachedSlot, urls: string[]): Promise<BannerView | null> {
+    if (c.kind === 'color' && c.color) return { kind: 'color', color: c.color };
+    if (!c.mime) return null;
+    const blob = await profileCache.readBlob(name, slot, c.mime);
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    urls.push(url);
+    return { kind: 'image', src: url, mime: c.mime };
+  }
+
+  private async resolveSlot(session: number, name: string, slot: Slot, wire: Banner | null, cached: CachedProfile | null,
+    urls: string[]): Promise<{ view: BannerView | null; saved: CachedSlot | null; blob: Blob | null }> {
+    const none = { view: null, saved: null, blob: null };
+    if (!wire) return none;
+    if (wire.kind === 'color') return { view: wire, saved: { kind: 'color', color: wire.color }, blob: null };
+    if (wire.kind === 'image') {
+      const mime = dataMime(wire.src);
+      const bytes = Uint8Array.from(atob(wire.src.slice(wire.src.indexOf(',') + 1)), c => c.charCodeAt(0));
+      return { view: { kind: 'image', src: wire.src, mime }, saved: { kind: 'image', mime }, blob: new Blob([bytes], { type: mime }) };
+    }
+    const meta = wire.meta;
+    // The copy kept here, when it is the same picture
+    const c = cached?.[slot];
+    if (c?.kind === 'file' && c.hash === meta.h && c.mime) {
+      const view = await this.cachedView(name, slot, c, urls);
+      if (view?.kind === 'image') return { view, saved: c, blob: await profileCache.readBlob(name, slot, c.mime) };
+    }
+    // Fetched from them, if the limit in Settings allows it
+    const limit = store.settings.bannerMaxMbit * 1_000_000 / 8;
+    if (!(limit > 0) || meta.s > limit || !files.supported(this)) return none;
+    await files.check(meta);
+    const t = files.transfers[meta.i];
+    if (!t || t.state === 'idle' || t.state === 'failed') files.download(this, meta, session);
+    const url = await this.waitReady(meta.i);
+    const blob = url ? await files.blobOf(meta.i) : null;
+    if (!url || !blob) return none;
+    return { view: { kind: 'image', src: url, mime: meta.m }, saved: { kind: 'file', hash: meta.h, mime: meta.m }, blob };
+  }
+
+  // The address of a file once it has arrived; null when the transfer fails or takes too long
+  private waitReady(id: string): Promise<string | null> {
+    return new Promise(resolve => {
+      let stop: (() => void) | undefined;
+      let done = false;
+      const finish = (v: string | null) => { if (done) return; done = true; clearTimeout(timer); queueMicrotask(() => stop?.()); resolve(v); };
+      const timer = setTimeout(() => finish(null), 120000);
+      stop = $effect.root(() => {
+        $effect(() => {
+          const t = files.transfers[id];
+          if (t?.state === 'ready' && t.url) finish(t.url);
+          else if (t?.state === 'failed') finish(null);
+        });
+      });
+    });
+  }
+
+  // ─── Telling others our profile changed, and hearing the same from them ──────
+
+  // Everyone else on the server looks at our banner, card background and description again
+  pingProfile(avatar = false): void {
+    const client = this.client;
+    if (!client || this.status !== 'connected' || client.session == null) return;
+    const others = [...client.users.keys()].filter(s => s !== client.session);
+    if (others.length) client.sendPluginData(others, PROFILE_DATA_ID, encodeProfilePing(avatar));
+  }
+
+  private profilePings = new Map<number, ReturnType<typeof setTimeout>>();
+  private avatarPings = new Map<number, ReturnType<typeof setTimeout>>();
+  private receiveProfilePing(sender: number, dataId: string, data: Uint8Array): void {
+    if (dataId !== PROFILE_DATA_ID || !isProfilePing(data)) return;
+    const client = this.client;
+    if (!client || sender === client.session || !client.users.has(sender)) return;
+    if (isAvatarPing(data)) {
+      if (this.avatarPings.has(sender)) return;
+      this.avatarPings.set(sender, setTimeout(() => { this.avatarPings.delete(sender); this.refreshAvatar(sender); }, 300));
+      return;
+    }
+    // Several in a row count as one; the short wait lets the server's news of the new description arrive first
+    if (this.profilePings.has(sender)) return;
+    this.profilePings.set(sender, setTimeout(() => { this.profilePings.delete(sender); this.refreshProfile(sender); }, 300));
+  }
+
+  // Forgets the picture we asked for and asks the server for their current one
+  private refreshAvatar(session: number): void {
+    const u = this.client?.users.get(session);
+    if (!u) return;
+    for (const tag of this.requested) if (tag.startsWith(`t:${session}:`)) this.requested.delete(tag);
+    if (u.textureHash) { u.texture = null; this.wantPicture(session, u.textureHash); }
+    this.tick++;
+  }
+
+  // Forgets what we kept of someone's profile and builds it again from their description as it is now
+  private refreshProfile(session: number): void {
+    const user = this.client?.users.get(session);
+    if (!user) return;
+    this.profileKey.delete(session);
+    // Asked-for marks of their description are forgotten too, so it is fetched again if it must be
+    for (const tag of this.requested) if (tag.startsWith(`c:${session}:`)) this.requested.delete(tag);
+    void profileCache.forget(user.name);
+    this.ensureProfile(user);
+  }
+
+  private dropProfile(session: number): void {
+    this.profileKey.delete(session);
+    this.keepUrls(session, []);
+    if (this.profiles[session]) {
+      const { [session]: _, ...rest } = this.profiles;
+      this.profiles = rest;
+    }
+  }
+  private dropProfiles(): void {
+    for (const t of this.profilePings.values()) clearTimeout(t);
+    this.profilePings.clear();
+    for (const t of this.avatarPings.values()) clearTimeout(t);
+    this.avatarPings.clear();
+    for (const urls of this.profileUrls.values()) for (const u of urls) URL.revokeObjectURL(u);
+    this.profileUrls.clear();
+    this.profileKey.clear();
+    this.profiles = {};
+  }
+
+  // ─── Our own banner and card background ─────────────────────────────────────
+
+  // As other people read them on this server. A file one is shared first, under an id from its
+  // content, so it stays the same from connect to connect.
+  private bannerFiles: Partial<Record<Slot, { blob: Blob; meta: FileMeta }>> = {};
+  private async wireBanner(slot: Slot): Promise<Banner | null> {
+    const own = OWN[slot].value;
+    if (!own) return null;
+    if (own.kind !== 'file') return own;
+    const have = this.bannerFiles[slot];
+    if (have?.blob === own.blob) return { kind: 'file', meta: have.meta };
+    if (!files.supported(this)) return null;
+    const meta = await files.share(this, new File([own.blob], slot, { type: own.mime }), () => {}, true);
+    if (typeof meta === 'string') return null;
+    this.bannerFiles[slot] = { blob: own.blob, meta };
+    return { kind: 'file', meta };
+  }
+  // The same without waiting: what is known now, or what our description says already
+  private currentWire(slot: Slot): Banner | null {
+    const own = OWN[slot].value;
+    if (!own) return null;
+    if (own.kind !== 'file') return own;
+    const have = this.bannerFiles[slot];
+    return have?.blob === own.blob ? { kind: 'file', meta: have.meta } : parseBanner(this.client?.self?.comment, slot);
+  }
+
+  // Makes our description carry our banner and card background (or none). Our description has to be
+  // known first, so it is fetched when the server only announced its hash, and this runs again when it arrives.
+  private bannerWait = false;
+  // ping: you changed it just now (not the automatic one on connecting), so everyone else is told to look again
+  private bannerPing = false;
+  syncBanner(ping = false): void {
+    if (ping) this.bannerPing = true;
+    void this.runBannerSync();
+  }
+  private async runBannerSync(): Promise<void> {
+    const client = this.client;
+    const first = client?.self;
+    if (!client || !first || this.status !== 'connected') return;
+    if (first.commentHash && !first.comment) {
+      this.bannerWait = true;
+      this.loadComment(first.session);
+      return;
+    }
+    this.bannerWait = false;
+    const [banner, card] = await Promise.all([this.wireBanner('banner').catch(() => null), this.wireBanner('card').catch(() => null)]);
+    // The connection or our description may have changed while a file was being prepared
+    const self = client.self;
+    if (this.client !== client || this.status !== 'connected' || !self) return;
+    if (self.commentHash && !self.comment) return;
+    const ping = this.bannerPing;
+    this.bannerPing = false;
+    // Nothing to write, but someone who could not load it before gets another go
+    if (sameBanner(parseBanner(self.comment, 'banner'), banner) && sameBanner(parseBanner(self.comment, 'card'), card)) {
+      if (ping) this.pingProfile();
+      return;
+    }
+    const next = withBanners(self.comment, { banner, card });
+    const limit = client.config.imageMessageLength;
+    // A server with a smaller limit keeps the description as it is
+    if (limit > 0 && next.length > limit) return;
+    client.setComment(next);
+    if (ping) this.pingProfile();
   }
 
   // Largest description or image message the server accepts (0: no limit)
@@ -811,9 +1155,20 @@ export class Session {
 
   setSharing(session: number, kind: ShareKind | false): void {
     if (kind) this.sharing[session] = kind;
-    else delete this.sharing[session];
+    else { delete this.sharing[session]; if (!this.watchTogether[session]) this.dropFrame(session); }
   }
   clearSharing(): void { this.sharing = {}; }
+
+  setWatchTogether(session: number, info: { mode: WatchMode; title: string } | false): void {
+    if (info) {
+      this.watchTogether = { ...this.watchTogether, [session]: info };
+    } else {
+      const { [session]: _, ...rest } = this.watchTogether;
+      this.watchTogether = rest;
+      if (!this.sharing[session]) this.dropFrame(session);
+    }
+  }
+  clearWatchTogether(): void { this.watchTogether = {}; }
 
   // The choice is remembered, so it also works while disconnected and carries to the next connect
   setSelfMute(v: boolean) {
@@ -872,7 +1227,23 @@ class Sessions {
   // Your picture for every server: saved here and sent to the ones you are on (null removes it)
   async setAvatar(bytes: Uint8Array | null): Promise<void> {
     await ownAvatar.save(bytes);
-    for (const s of this.list) if (s.status === 'connected') s.sendPicture(bytes ?? new Uint8Array(0));
+    for (const s of this.list) if (s.status === 'connected' && s.sendPicture(bytes ?? new Uint8Array(0))) s.pingProfile(true);
+  }
+
+  // Your banner for every server: saved here and written into your description on the ones you are on
+  async setBanner(slot: Slot, b: OwnBannerInput | null): Promise<void> {
+    await OWN[slot].set(b);
+    for (const s of this.list) if (s.status === 'connected') s.syncBanner(true);
+  }
+
+  // At app start: reconnect to the server and channel you were last in
+  restoreLast(): void {
+    const l = store.lastChannel;
+    const server = l.serverId ? store.servers.find(x => x.id === l.serverId) : undefined;
+    if (!server || this.byServer(server.id)) return;
+    this.open(server);
+    const s = this.byServer(server.id);
+    if (s) s.autoJoin = { id: l.channelId, name: l.name };
   }
 
   // Show a server, connecting if needed

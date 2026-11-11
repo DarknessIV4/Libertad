@@ -1,5 +1,14 @@
 import { load, loadList, save } from './storage.ts';
-import { GENERATED_THEMES } from './themes-generated.ts';
+import { cleanColors, CUSTOM_DEFAULTS, isHex, type CustomColors } from './theme.ts';
+
+function cleanPanelColors(raw: unknown): Settings['panelColors'] {
+  const out: Settings['panelColors'] = {};
+  if (raw && typeof raw === 'object') for (const k of ['left', 'middle', 'right'] as const) {
+    const v = (raw as Record<string, unknown>)[k];
+    if (isHex(v)) out[k] = v.toLowerCase();
+  }
+  return out;
+}
 
 export interface SavedServer {
   id: string;
@@ -15,68 +24,119 @@ export interface SavedServer {
 export interface Settings {
   embedHosts: string[];    // hosts whose media links render inline
   sendThumbnails: boolean; // a preview picture with sent pictures and videos (all that other clients see)
+  uploadLimit: number;     // fastest we send files, Mbit/s; 0: unlimited
   autoDownload: number;    // fetch announced files up to this many MB by themselves; 0: never
+  bannerMaxMbit: number;   // fetch other people's banners shared over WebRTC up to this many Mbit; 0: never
   compact: boolean;
   youtube: 'off' | 'click' | 'thumbnail'; // YouTube links: plain, click-to-play card, card with thumbnail
   // Link previews: fetched by this computer (reveals IP to the linked site), or none
   linkPreviews: 'direct' | 'off';
   theme: ThemeId;
+  customColors: CustomColors; // the colors of the "custom" scheme, each one freely chosen
+  // A color chosen for a panel on its own (left: channels, middle: chat, right: members or chat); only in the custom scheme
+  panelColors: Partial<Record<'left' | 'middle' | 'right', string>>;
   publicListUrl: string;  // where the public server list comes from
-  arrangement: Arrangement;
-  // standard: the channel tree in one of the layouts above. rooms: one screen at a time, made for phones.
+  // standard: the channel tree, chat and members side by side. rooms: one screen at a time, made for phones.
   interface: 'standard' | 'rooms';
-  shareQuality: 'low' | 'medium' | 'high'; // bitrate and frame rate of our own stream
+  rounded: boolean;       // rounded corners on menus, windows, server icons and cards
+  roundness: number;      // how round, 0 to 200 percent (only used while rounded is on)
+  panelClear: boolean;    // the bars and title panels let the background through
+  panelDark: boolean;     // the bars and title panels are darkened
+  panelDarkness: number;  // how dark, 0 to 95 percent
+  panelBlur: boolean;     // the bars and title panels blur what is behind them
+  panelBlurPx: number;    // how much, 0 to 40 pixels
+  shareBitrate: number;   // upper limit of our stream's bitrate, Mbit/s
+  shareHeight: number;    // largest picture height of our stream, in pixels (never above what the source has)
+  shareFps: number;       // frame rate of our stream
+  shareMode: 'fps' | 'quality'; // when the connection is tight: keep the frame rate (smooth) or the sharpness
   autoCameras: boolean;   // show other people's cameras as they come on
+  shareDynamicFps: boolean; // a screen share that shows nothing new is sent at 1 frame per second until something moves
   shareVolume: number;    // volume of streams we watch, 0 to 1
   relayServer: string;    // a mumh5 web proxy whose STUN and relay to use for screen sharing
   stunServer: string;     // helps screen sharing connect through routers; empty contacts nobody
   shareNoticeSeen: boolean; // the note that screen sharing reveals IP addresses was confirmed
   hints: boolean;         // tooltips (title attributes) when resting the pointer on buttons
+  connectOnStart: boolean; // at app start, connect to the server and channel you were last in
+  subtitleLang: string;   // Torrent Together: the subtitle language to start with ('' = the system's languages, 'off' = none)
+  subtitleSize: number;   // Torrent Together: subtitle text size, percent of the normal size
+  subtitleX: number;      // Torrent Together: where the subtitles sit, 0 to 1 across the picture (their middle)
+  subtitleY: number;      // ... and 0 to 1 down the picture (their bottom edge)
+  subtitleOpacity: number; // Torrent Together: how solid the subtitles are, percent
+  subtitleBg: boolean;     // Torrent Together: a dark box behind the subtitles
+  subtitleBgOpacity: number; // Torrent Together: how dark that box is, percent
+  shortcuts: Record<string, string>; // keyboard shortcuts by action id (see lib/shortcuts.svelte.ts), like "Ctrl+Shift+M"
+  shortcutsGlobal: boolean;  // desktop app: they also work while mumh5 is in the background
 }
 
-// Window layouts; classic and stacked follow the Mumble desktop client's layouts of the same name
-export type Arrangement = 'side' | 'classic' | 'stacked';
+export type ThemeId = 'dark' | 'light' | 'midnight' | 'contrast' | 'abyss' | 'win95-light' | 'win95-dark' | 'custom';
 
-export type ThemeId = 'dark' | 'light' | 'midnight' | 'frost' | 'forest' | 'ember' | 'ocean' | 'plum' | 'paper' | 'contrast' | 'win95' | typeof GENERATED_THEMES[number]['id'];
-
-// Hand-made schemes first, then the generated ones (scripts/gen-themes.mjs), dark before light
 export const THEMES: { id: ThemeId; name: string; note: string; light: boolean }[] = [
   { id: 'dark', name: 'Dark', note: 'The default', light: false },
   { id: 'light', name: 'Light', note: 'For bright rooms', light: true },
   { id: 'midnight', name: 'Midnight', note: 'True black, red accents', light: false },
-  { id: 'frost', name: 'Frost', note: 'Cool blue-grey', light: false },
-  { id: 'forest', name: 'Forest', note: 'Deep green, warm light', light: false },
-  { id: 'ember', name: 'Ember', note: 'Warm dark, orange accents', light: false },
-  { id: 'ocean', name: 'Ocean', note: 'Deep navy, cyan accents', light: false },
-  { id: 'plum', name: 'Plum', note: 'Dark purple, pink accents', light: false },
-  { id: 'paper', name: 'Paper', note: 'Warm light, easy on the eyes', light: true },
   { id: 'contrast', name: 'High contrast', note: 'Black and white, strong lines', light: false },
-  { id: 'win95', name: 'Windows 95', note: 'Start me up', light: true },
-  ...GENERATED_THEMES
+  { id: 'abyss', name: 'Abyss', note: 'Blue-black, turquoise accents', light: false },
+  { id: 'win95-light', name: 'Windows 95 Light', note: 'Start me up', light: true },
+  { id: 'win95-dark', name: 'Windows 95 Dark', note: 'Start me up, after dark', light: false }
 ];
+
+// A saved scheme that no longer exists: Windows 95 became Windows 95 Light, the removed ones become Dark
+const KNOWN: string[] = [...THEMES.map(t => t.id), 'custom'];
+export function normalizeTheme(id: unknown): ThemeId {
+  if (id === 'win95') return 'win95-light';
+  return typeof id === 'string' && KNOWN.includes(id) ? id as ThemeId : 'dark';
+}
 
 const defaults: Settings = {
   embedHosts: [],
   sendThumbnails: true,
+  uploadLimit: 0,
   autoDownload: 20,
+  bannerMaxMbit: 8,
   compact: false,
   youtube: 'off',
   linkPreviews: 'off',
   theme: 'dark',
+  customColors: { ...CUSTOM_DEFAULTS },
+  panelColors: {},
   publicListUrl: 'https://publist.mumble.info/v1/list?version=1.5.0',
-  arrangement: 'stacked',
   interface: 'standard',
-  shareQuality: 'medium',
+  rounded: false,
+  roundness: 50,
+  panelClear: true,
+  panelDark: true,
+  panelDarkness: 40,
+  panelBlur: true,
+  panelBlurPx: 10,
+  shareBitrate: 4,
+  shareHeight: 1080,
+  shareFps: 30,
+  shareMode: 'quality',
   autoCameras: true,
+  shareDynamicFps: true,
   shareVolume: 1,
   relayServer: '',
   stunServer: '',
   shareNoticeSeen: false,
-  hints: false
+  hints: false,
+  connectOnStart: false,
+  subtitleLang: '',
+  subtitleSize: 100,
+  subtitleX: 0.5,
+  subtitleY: 0.92,
+  subtitleOpacity: 100,
+  subtitleBg: true,
+  subtitleBgOpacity: 65,
+  shortcuts: {},
+  shortcutsGlobal: false
 };
 
 class SettingsStore {
-  settings = $state<Settings>(load('mumh5.settings', defaults));
+  settings = $state<Settings>(this.fix(load('mumh5.settings', defaults)));
+
+  private fix(s: Settings): Settings {
+    return { ...s, theme: normalizeTheme(s.theme), customColors: cleanColors(s.customColors), panelColors: cleanPanelColors(s.panelColors), bannerMaxMbit: Math.min(1000, Math.max(0, Number(s.bannerMaxMbit) || 0)), roundness: Math.min(200, Math.max(0, Math.round(Number(s.roundness)) || 0)), panelClear: s.panelClear ?? true, panelDark: s.panelDark ?? true, panelDarkness: Math.min(95, Math.max(0, Math.round(Number(s.panelDarkness ?? 40)) || 0)), panelBlur: s.panelBlur ?? true, panelBlurPx: Math.min(40, Math.max(0, Math.round(Number(s.panelBlurPx ?? 10)) || 0)) };
+  }
   servers = $state<SavedServer[]>(loadList('mumh5.servers'));
   // Pinned sha256 fingerprints of server certificates, keyed by host:port (trust on first use)
   pins = $state<Record<string, string>>(load('mumh5.pins', {}));
@@ -92,6 +152,16 @@ class SettingsStore {
   }
 
   saveSettings() { save('mumh5.settings', $state.snapshot(this.settings)); }
+
+  // The server and channel you were last in (serverId '' until there is one); kept whether or not
+  // "connect on start" is on, so turning it on has something to go back to
+  lastChannel = $state<{ serverId: string; channelId: number; name: string }>(load('mumh5.lastChannel', { serverId: '', channelId: 0, name: '' }));
+  rememberChannel(serverId: string, channelId: number, name: string) {
+    const l = this.lastChannel;
+    if (l.serverId === serverId && l.channelId === channelId && l.name === name) return;
+    this.lastChannel = { serverId, channelId, name };
+    save('mumh5.lastChannel', $state.snapshot(this.lastChannel));
+  }
 
   upsertServer(s: SavedServer) {
     const i = this.servers.findIndex(x => x.id === s.id);

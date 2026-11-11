@@ -1,6 +1,9 @@
 import { registerFileStore } from './filestore.ts';
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, shell, session, systemPreferences, type WebContents } from 'electron';
-import { promises as fs } from 'node:fs';
+import { registerTorrent } from './torrent.ts';
+import { registerProfiles } from './profiles.ts';
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, shell, session, systemPreferences, type WebContents } from 'electron';
+import { promises as fs, readFileSync, existsSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { IdentityStore } from './identity-store.ts';
@@ -10,14 +13,121 @@ import { fetchLinkPreview } from './link-preview.ts';
 import { fetchPublicListWith, pingServer } from './publist.ts';
 import { openTls } from './tls-transport.ts';
 import { udpChannel } from './udp-voice.ts';
+import { registerYoutubeAccount } from './youtube-account.ts';
+import { setYoutubeQuality, setYoutubeRate, getYoutubeVideoSize, getYoutubeFrame, hideYoutubeIndicator } from './yt-quality.ts';
 import { ShareAudio, pipewireAvailable, VIRTUAL_MIC_LABEL, type AudioTarget } from './pipewire.ts';
 
 const devUrl = process.env.VITE_DEV_SERVER_URL;
+
+// The built app is served from a small local web server instead of file://. YouTube's embeds look at the
+// page that embeds them: from file:// there is no referrer and no origin, which looks nothing like a browser.
+// The port is fixed so cookies and localStorage belong to the same origin on every start.
+const APP_PORT = 47931;
+let appOrigin = '';
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.wasm': 'application/wasm',
+  '.json': 'application/json', '.woff2': 'font/woff2', '.ico': 'image/x-icon'
+};
+function serveDist(): Promise<string> {
+  const root = path.resolve(__dirname, '../dist');
+  const server = http.createServer(async (req, res) => {
+    try {
+      const rel = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
+      const file = path.resolve(root, '.' + (rel === '/' ? '/index.html' : rel));
+      if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
+      const body = await fs.readFile(file);
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream' }).end(body);
+    } catch { res.writeHead(404).end(); }
+  });
+  const listen = (port: number) => new Promise<string>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}/`));
+  });
+  // If the fixed port is taken, any free one still works (only the saved localStorage starts over)
+  return listen(APP_PORT).catch(() => listen(0));
+}
 
 // Screen sharing connects mumh5 users directly. Chromium would hide this computer's addresses
 // behind names that only resolve on the local network, so two people on IPv6 could not reach
 // each other without a helper server. Only this app's own page runs here.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
+// Lets the page list and switch the audio tracks of a video (the voice-over menu of Torrent Together)
+app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
+
+// System settings live in a file of their own: Chromium decides about the graphics card before
+// the window exists, long before the page (and its localStorage) can be asked.
+const systemFile = path.join(app.getPath('userData'), 'system.json');
+const readSystem = (): { hardwareAcceleration?: boolean } => {
+  try { return JSON.parse(readFileSync(systemFile, 'utf8')); } catch { return {}; }
+};
+const hardwareAcceleration = readSystem().hardwareAcceleration !== false;
+if (!hardwareAcceleration) {
+  app.disableHardwareAcceleration();
+} else if (process.platform === 'linux') {
+  // Chromium keeps video encoding and decoding on the processor on Linux unless asked; streams
+  // then cost a lot of CPU. Names a Chromium version does not know are ignored.
+  app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxGL,VaapiVideoEncoder,VaapiVideoDecodeLinuxGL');
+}
+// Run on system startup. Windows and macOS have login items; Electron has none on Linux, where the
+// desktop environments start what is listed in ~/.config/autostart.
+const autostartFile = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'autostart', 'mumh5.desktop');
+// An AppImage runs from a mounted copy of itself; the file it came from is what to start
+const startCommand = () => process.env.APPIMAGE || process.execPath;
+const launchOnStartup = (): boolean =>
+  process.platform === 'linux' ? existsSync(autostartFile) : app.getLoginItemSettings().openAtLogin;
+async function setLaunchOnStartup(on: boolean): Promise<void> {
+  if (process.platform !== 'linux') {
+    app.setLoginItemSettings({ openAtLogin: on });
+    return;
+  }
+  if (!on) { await fs.rm(autostartFile, { force: true }); return; }
+  // Desktop Entry Exec values: quote the path and escape the characters the spec reserves
+  const exec = '"' + startCommand().replace(/(["`$\\])/g, '\\$1') + '"';
+  await fs.mkdir(path.dirname(autostartFile), { recursive: true });
+  await fs.writeFile(autostartFile, [
+    '[Desktop Entry]', 'Type=Application', 'Name=mumh5', 'Comment=Modern Mumble client',
+    `Exec=${exec}`, 'Icon=mumh5', 'Terminal=false', 'X-GNOME-Autostart-enabled=true', ''
+  ].join('\n'));
+}
+ipcMain.handle('system:get', () => ({ hardwareAcceleration, launchOnStartup: launchOnStartup(), platform: process.platform }));
+ipcMain.handle('system:setLaunchOnStartup', async (_e, on: boolean) => {
+  // A development run would register Electron itself, not the app
+  if (!app.isPackaged) throw new Error('only the installed app can do this');
+  await setLaunchOnStartup(!!on);
+});
+ipcMain.handle('system:setHardwareAcceleration', async (_e, on: boolean) => {
+  await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), hardwareAcceleration: !!on }));
+});
+ipcMain.handle('system:relaunch', () => { app.relaunch(); app.exit(0); });
+ipcMain.handle('system:quit', () => { tray.quitApp(); });
+// Chromium writes localStorage to disk a few seconds after a change, or on a clean quit; killing the app
+// (pkill, a crash, the system closing it) loses what was still waiting. The page asks for a flush after saving.
+ipcMain.handle('storage:flush', () => { session.defaultSession.flushStorageData(); });
+
+// Keyboard shortcuts that also work while mumh5 is in the background. The renderer sends the whole
+// list each time it changes; each press goes back as a 'tray:action' of the form "shortcut:<id>".
+// Resolves to the ones the system would not give us (another program has them), and whether this is
+// Wayland, where the desktop decides about such shortcuts and may not offer them at all.
+let globalActive = false;
+ipcMain.handle('shortcuts:setGlobal', (_e, list: { id: string; accelerator: string }[]) => {
+  const failed: string[] = [];
+  const wayland = onWayland();
+  const items = Array.isArray(list) ? list.slice(0, 20) : [];
+  // Nothing registered and nothing wanted: leave the system alone (on Wayland even that makes noise in the desktop portal)
+  if (!items.length && !globalActive) return { failed, wayland };
+  globalShortcut.unregisterAll();
+  globalActive = false;
+  for (const item of items) {
+    const id = String(item?.id ?? ''), accelerator = String(item?.accelerator ?? '');
+    if (!/^[a-z-]{1,20}$/.test(id) || !accelerator) continue;
+    let ok = false;
+    try { ok = globalShortcut.register(accelerator, () => mainWindow?.webContents.send('tray:action', `shortcut:${id}`)); } catch { /* not a key combination the system knows */ }
+    if (ok) globalActive = true; else failed.push(id);
+  }
+  return { failed, wayland };
+});
+app.on('will-quit', () => { if (globalActive) globalShortcut.unregisterAll(); });
 
 let identityStore: IdentityStore | null = null;
 const identities = () => (identityStore ??= new IdentityStore(app.getPath('userData')));
@@ -30,6 +140,8 @@ const conns = new Map<string, Conn>();
 // ─── Identities (client certificates) ─────────────────────────────────────────
 
 registerFileStore();
+registerProfiles();
+registerTorrent();
 ipcMain.handle('identities:list', () => identities().list());
 ipcMain.handle('identities:create', (_e, name: string, email: string) => identities().create(String(name), String(email ?? '')));
 ipcMain.handle('identities:import', (_e, bytes: Uint8Array, password: string, name: string) =>
@@ -126,6 +238,22 @@ ipcMain.on('edit:action', (e, action: string, arg?: unknown) => {
 ipcMain.handle('publist:fetch', (_e, url: string) => fetchPublicListWith(u => net.fetch(u), String(url)));
 ipcMain.handle('publist:ping', (_e, host: string, port: number) => pingServer(String(host), Number(port)));
 
+ipcMain.handle('yt:quality', (_e, level: string) => setYoutubeQuality(String(level)));
+ipcMain.handle('yt:size', () => getYoutubeVideoSize());
+ipcMain.handle('yt:frame', () => getYoutubeFrame());
+// The video's own preview picture (320x180, no black bars), as a data address; null when it cannot be had
+ipcMain.handle('yt:thumbnail', async (_e, id: string) => {
+  if (!/^[\w-]{11}$/.test(String(id))) return null;
+  // The picture link previews show (the large one), else the smaller one every video has
+  for (const name of ['maxresdefault', 'mqdefault']) {
+    try {
+      const res = await net.fetch(`https://i.ytimg.com/vi/${id}/${name}.jpg`);
+      if (res.ok) return `data:image/jpeg;base64,${Buffer.from(await res.arrayBuffer()).toString('base64')}`;
+    } catch { /* the next one */ }
+  }
+  return null;
+});
+ipcMain.handle('yt:rate', (_e, rate: number) => setYoutubeRate(Number(rate)));
 ipcMain.handle('preview:fetch', (_e, url: string) => fetchLinkPreview(String(url).slice(0, 2048)));
 
 // ─── Screen sharing ───────────────────────────────────────────────────────────
@@ -181,6 +309,26 @@ ipcMain.on('tray:update', (_e, state: tray.TrayState) => tray.update(state));
 
 ipcMain.handle('platform:info', () => ({ os: process.platform, osVersion: os.release() }));
 
+ipcMain.handle('window:setFullScreen', (_e, fullscreen: boolean) => {
+  if (mainWindow) mainWindow.setFullScreen(fullscreen);
+});
+ipcMain.handle('window:isFullScreen', () => mainWindow?.isFullScreen() ?? false);
+
+// The pop-out windows (one per picture, named by the frame name the app opened them with): full screen
+// of that window alone, and back to the window it was when it ends. Returns the state asked for.
+const popups = new Map<string, BrowserWindow>();
+ipcMain.handle('popout:setFullScreen', (_e, name: string, fullscreen?: boolean) => {
+  const win = popups.get(String(name));
+  if (!win || win.isDestroyed()) return false;
+  const want = typeof fullscreen === 'boolean' ? fullscreen : !win.isFullScreen();
+  win.setFullScreen(want);
+  return want;
+});
+ipcMain.handle('popout:isFullScreen', (_e, name: string) => {
+  const win = popups.get(String(name));
+  return !!win && !win.isDestroyed() && win.isFullScreen();
+});
+
 // ─── Window ────────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
@@ -199,7 +347,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
       nodeIntegration: false,
       // Voice must play without a click first
       autoplayPolicy: 'no-user-gesture-required',
@@ -216,11 +364,21 @@ function createWindow() {
     if (frameName === 'mumh5-stream' && (url === 'about:blank' || url === '')) {
       return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', autoHideMenuBar: true, title: 'mumh5' } };
     }
+    // The pop-out windows: YouTube, and one for each screen, camera or watch together picture
+    if ((frameName === 'mumh5-watch' || frameName.startsWith('mumh5-pop-')) && (url === 'about:blank' || url === '')) {
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', autoHideMenuBar: true, title: 'mumh5 Watch Together' } };
+    }
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  win.webContents.on('did-create-window', (child, { frameName }) => {
+    if (!frameName) return;
+    popups.set(frameName, child);
+    child.on('closed', () => { if (popups.get(frameName) === child) popups.delete(frameName); });
+  });
   win.webContents.on('will-navigate', (e, url) => {
     if (devUrl && url.startsWith(devUrl)) return;
+    if (appOrigin && url.startsWith(appOrigin)) return;
     e.preventDefault();
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
@@ -246,17 +404,19 @@ function createWindow() {
   win.on('closed', () => { if (mainWindow === win) mainWindow = null; });
 
   if (devUrl) win.loadURL(devUrl);
-  else win.loadFile(path.join(__dirname, '../dist/index.html'));
+  else serveDist().then(url => { appOrigin = url; return win.loadURL(url); }).catch(err => console.error('could not start the app server:', err));
 }
+
+// YouTube's bot check ("Sign in to confirm you're not a bot") looks at who is asking: the default user
+// agent names Electron and this app, which no browser does. Ask like the plain Chromium this is.
+app.userAgentFallback = app.userAgentFallback.replace(/\s(Electron|mumh5)\/\S+/g, '');
 
 app.whenReady().then(async () => {
   // macOS asks once per app for microphone access
   if (process.platform === 'darwin') await systemPreferences.askForMediaAccess('microphone').catch(() => false);
-  // YouTube refuses embeds without a referrer (error 153); a file:// app sends none
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['https://www.youtube-nocookie.com/*'] }, (details, cb) => {
-    if (!details.requestHeaders.Referer) details.requestHeaders.Referer = 'https://mumh5.app/';
-    cb({ requestHeaders: details.requestHeaders });
-  });
+  hideYoutubeIndicator();
+  registerYoutubeAccount(() => mainWindow);
+  // (the referrer YouTube's embeds need is added in youtube-account.ts, which owns the session's header listener)
 
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const source = screenSources.find(s => s.id === pickedSource);

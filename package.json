@@ -1,8 +1,8 @@
 {
   "name": "mumh5",
   "productName": "mumh5",
-  "version": "0.2.1",
-  "description": "A modern Mumble client: Discord-like interface, file sharing, voice and more, for any Mumble server",
+  "version": "0.3.0",
+  "description": "A modern Mumble client: Supports screen sharing, watch together, and more.",
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -23,13 +23,13 @@
     "test:e2e:share": "node test/e2e/share.e2e.ts",
     "test:e2e:files": "node test/e2e/files-disk.e2e.ts",
     "test:e2e:files:web": "node test/e2e/files-disk-web.e2e.ts",
-    "themes": "node scripts/gen-themes.mjs",
     "proto": "pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-comments --force-number proto/Mumble.proto -o src/core/mumble-pb.js && pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-comments --force-number proto/MumbleUDP.proto -o src/core/mumble-udp-pb.js",
     "screenshots": "node test/e2e/screenshots.ts"
   },
   "build": {
     "appId": "dev.f0ck.mumh5",
     "productName": "mumh5",
+    "npmRebuild": false,
     "files": [
       "dist/**",
       "dist-electron/**",
@@ -127,11 +127,13 @@
     "@fontsource-variable/inter": "^5.3.0",
     "dompurify": "^3.4.17",
     "node-forge": "^1.4.0",
-    "protobufjs": "^8.8.0"
+    "protobufjs": "^8.8.0",
+    "webtorrent": "^3.0.21"
   },
   "allowScripts": {
     "electron@44.5.1": true,
     "esbuild@0.28.2": true,
+    "node-datachannel@0.32.3": true,
     "electron-winstaller": false
   },
   "author": {

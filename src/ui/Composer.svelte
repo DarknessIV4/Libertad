@@ -126,7 +126,7 @@
 <style>
   /* A framed field set in from the edges; grows for longer messages */
   .composer { flex: none; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 16px 16px; }
-  .frame { display: flex; flex-direction: column; background: var(--bg-3); border: 1px solid var(--line-strong); transition: border-color 120ms var(--ease); }
+  .frame { display: flex; flex-direction: column; background: var(--bg-3); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); border: 1px solid var(--line-strong); transition: border-color 120ms var(--ease); }
   .frame:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); }
   /* The formatting row is part of the same field: same background, its buttons over the paperclip and send */
   .composer .frame :global(.toolbar) { background: transparent; padding: 4px 8px; border-bottom-color: var(--line); }

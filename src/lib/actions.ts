@@ -5,6 +5,11 @@ import { store } from './settings.svelte.ts';
 import { voice, userKey } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
 import { menu, type MenuItem } from './menu.svelte.ts';
+import { ownCard } from './banner.svelte.ts';
+import { bgPause } from './still.svelte.ts';
+import { hiddenCards } from './hidden-cards.svelte.ts';
+import { pickColor, pickFile } from './pick.ts';
+import { setBannerFromFile } from './banner-actions.ts';
 import { PERM, type Channel, type User } from '../core/client.ts';
 
 // A person's profile card, next to the element that was clicked (or at a point, from a menu)
@@ -78,8 +83,12 @@ export function userMenu(u: User): MenuItem[] {
     { header: true, label: store.displayName(u) },
     { label: 'View profile', action: () => openProfile(u.session, menu.last) }
   ];
+  // Only on this computer: their tile leaves your voice view. Unhide it here, from the channel list.
+  if (!isSelf) items.push({ label: 'Hide card', checked: hiddenCards.has(u), action: () => hiddenCards.set(u, !hiddenCards.has(u)) });
   if (isSelf) {
     items.push(
+      { label: 'Change Card Background', action: () => menu.showAt(menu.last.x, menu.last.y, cardBackgroundMenu()) },
+      pauseBackgroundItem(u),
       { label: 'Mute', checked: u.selfMute, action: () => session.setSelfMute(!u.selfMute) },
       { label: 'Deafen', checked: u.selfDeaf, action: () => session.setSelfDeaf(!u.selfDeaf) },
       { label: 'Change name...', action: () => changeNamePrompt(u) }
@@ -93,6 +102,7 @@ export function userMenu(u: User): MenuItem[] {
       items.push({ label: hidden ? 'Show camera' : 'Hide camera', action: () => share.hideCamera(sessions.active, u.session, !hidden) });
     } else if (sharing) items.push({ label: `Watch ${sharing}`, action: () => share.watch(sessions.active, u.session) });
     items.push(
+      pauseBackgroundItem(u),
       { label: 'Send message', action: () => session.selectView(`dm:${u.session}`) },
       { label: 'Mute for me', checked: !!voice.settings.localMutes[userKey(u)], action: () => voice.setLocalMute(u, !voice.settings.localMutes[userKey(u)]) },
       {
@@ -127,6 +137,47 @@ export function userMenu(u: User): MenuItem[] {
   if (u.hash) items.push({ label: 'Copy certificate hash', action: () => navigator.clipboard.writeText(u.hash) });
   items.push({ separator: true, label: '' }, { label: 'Information', action: () => (ui.userInfo = u.session) });
   return items;
+}
+
+// Pause Background: only on this computer, nobody else sees a change. Checked while this person's
+// background is stopped; a click then brings it back, otherwise it asks what to stop.
+function pauseBackgroundItem(u: User): MenuItem {
+  const paused = bgPause.paused(u);
+  return {
+    label: 'Pause Background', checked: paused,
+    action: () => {
+      if (paused) {
+        bgPause.setUser(u, false);
+        bgPause.setAll(false);
+        return;
+      }
+      menu.showAt(menu.last.x, menu.last.y, [
+        { header: true, label: 'Pause Background' },
+        { label: 'Stop for this user', action: () => bgPause.setUser(u, true) },
+        { label: 'Stop for all users', action: () => bgPause.setAll(true) }
+      ]);
+    }
+  };
+}
+
+// The picture behind your tile: a color, a picture or a GIF of its own, or your banner
+export function cardBackgroundMenu(): MenuItem[] {
+  const own = ownCard.value;
+  const file = (accept: string) => async () => {
+    const f = await pickFile(accept);
+    if (f) await setBannerFromFile('card', f);
+  };
+  return [
+    { header: true, label: 'Card background' },
+    { label: 'Choose a color...', action: async () => {
+      const c = await pickColor(own?.kind === 'color' ? own.color : '#26282d');
+      if (c) await sessions.setBanner('card', { kind: 'color', color: c.toLowerCase() });
+    } },
+    { label: 'Use an image...', action: file('image/png,image/jpeg,image/webp') },
+    { label: 'Use a GIF...', action: file('image/gif') },
+    { separator: true, label: '' },
+    { label: 'Same as my banner', checked: !own, action: () => sessions.setBanner('card', null) }
+  ];
 }
 
 export function changeNamePrompt(u: User): void {

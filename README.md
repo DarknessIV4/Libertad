@@ -4,67 +4,60 @@
 
 mumh5 works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It runs on Windows and Linux, and in a browser.
 
-![mumh5: channels on the left, the chat with a link preview and a YouTube card, the people on the right](docs/screenshots/main.png)
+https://github.com/user-attachments/assets/832434a1-2b63-4d36-b25f-2f67f1e0feed
 
 ## Why mumh5
 
 - **Talk.** Clear, low-delay voice, with push to talk, voice activity or always on, and noise suppression.
 - **Chat like you are used to.** Messages, pictures, files, link previews and YouTube cards, in every channel and in private.
 - **Share your screen or your camera** with the people in your channel.
-- **Send files**, up to 100 GB, through the Mumble server itself. No upload sites.
-- **See who is who.** Profile pictures and profile cards, and before you connect, how many people are on each of your servers.
-- **Make it yours.** 100 color schemes, from dark and light to Windows 95, and three layouts.
-- **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose.
+- **Send files**, up to 100 GB, through WebRTC. No upload sites.
+- **See who is who.** Profile pictures and profile cards, and banners.
+- **Make it yours.** Custom Color schemes to your liking, add background image or video,cahnge how corners look, and control trasnparecny, darkness, and blur effects.
+- **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose, Unless you choose to login with your youtbe account in settings.
 
 ## Share your screen
 
 Stream a game, show a bug, watch something together. Pick a screen or a window, choose the quality and whether to send its sound, and everyone in your channel who uses mumh5 can watch with one click, as large as they like or in a window of its own.
 
-![v0id streams a racing game to three people in the channel](docs/screenshots/sharing.png)
+![Streaming to friends](docs/screenshots/sharing.png)
 
-The picture goes straight from you to the people watching, not through a company's servers. Good to know: people on the classic Mumble app do not see streams. On a network or across the internet both sides may need a STUN server (Settings, Voice); the browser version brings its own. So far it has been tried between copies of mumh5 on one machine.
+## Watch Together
+
+Host a youtube watch together session "supprots search", a file watch together session, or even past a torrent link to start a session, evetyone can control the playback of the video, pause, resume, and seek.
+
+![watching with friends](docs/screenshots/watch-together.png)
 
 ## Get started
 
-1. **Download mumh5** from the [releases page](https://github.com/DarknessIV4/mumh5/releases) and install it (the files are listed below).
+1. **Download mumh5** from the [releases page](https://github.com/DarknessIV4/mumh5/releases) and install it for your system (appimage might require fuse2, if you don't have it already).
 2. **Create your identity.** mumh5 asks for it on the first start: give it a name and it is made, or, if you used Mumble on this computer before, keep that one with all your registrations.
 3. **Add a server** with the plus button, using the address your friends gave you, or find one in the public server list (desktop app).
 
 | System | File |
 |---|---|
-| Windows | `mumh5-<version>-win-x64.exe` (installer; not signed yet, so Windows SmartScreen warns once) |
-| Linux, any distribution | `mumh5-<version>-linux-x86_64.AppImage` (make it executable, then run it) |
-| Debian, Ubuntu | `mumh5-<version>-linux-amd64.deb` |
-| Linux, portable | `mumh5-<version>-linux-x64.tar.gz` (runs from its folder, or installs with the script inside) |
+| Windows | `mumh5-win.exe` (installer; not signed yet, so Windows SmartScreen warns once) |
+| Linux, any distribution | `mumh5-x86_64.AppImage` (make it executable, then run it) |
+| Debian, Ubuntu | `mumh5-amd64.deb` |
+| Linux, portable | `mumh5-x64.tar.gz` (runs from its folder, or installs with the script inside) |
 
 The `.tar.gz` comes with an installer and an uninstaller. Unpack it and run the installer from that folder; it adds the app, a `mumh5` command and a menu entry, and running it again with a newer version updates it:
 
-```bash
-tar xzf mumh5-<version>-linux-x64.tar.gz
-cd mumh5-<version>-linux-x64
-./install.sh                 # for you only, in ~/.local
-sudo ./install.sh --system   # or for everyone, in /opt
-```
-
-To remove it, run `~/.local/share/mumh5/uninstall.sh` (or `sudo /opt/mumh5/uninstall.sh`). Your settings and identities stay in `~/.config/mumh5`; `uninstall.sh --purge` deletes them too, after asking. Back up your identity first. The Windows installer has its own uninstaller in the system settings; the `.deb` is removed with `sudo apt remove mumh5`.
+To remove it, run `uninstall.sh`. Your settings and identities stay in `~/.config/mumh5`; `uninstall.sh --purge` deletes them too, after asking. Back up your identity first. The Windows installer has its own uninstaller in the system settings; the `.deb` is removed with `sudo apt remove mumh5`.
 
 There is no macOS build yet; it can be built on a Mac from the source (see [For developers](#for-developers)).
 
 ## A look around
 
-| Profile cards | Settings |
+| Profile cards |
 |---|---|
-| ![Profile card with a picture and a formatted description](docs/screenshots/profile.png) | ![Voice settings](docs/screenshots/voice-settings.png) |
+| ![Profile card with a picture and a formatted description](docs/screenshots/profile.png) |
 
-Pick a color scheme, or one of the 100 others:
+Pick a color scheme, or Customize it yourself:
 
-| Windows 95 | Light | Frost | Midnight |
+| Windows 95 | Light | Midnight | Custom |
 |---|---|---|---|
-| ![Windows 95](docs/screenshots/theme-win95.png) | ![Light](docs/screenshots/theme-light.png) | ![Frost](docs/screenshots/theme-frost.png) | ![Midnight](docs/screenshots/theme-midnight.png) |
-
-On a phone or in a narrow window, everything fits on one screen:
-
-<p align="center"><img src="docs/screenshots/mobile.png" alt="mumh5 in a narrow window" width="300"></p>
+| ![Appearance cards](docs/screenshots/settings-appearance.png) | ![Appearance settings](docs/screenshots/settings-appearance-2.png) |
 
 ## Good to know
 
@@ -72,86 +65,6 @@ On a phone or in a narrow window, everything fits on one screen:
 - **A few extras only work between mumh5 users**, because Mumble itself has no such thing: screen and camera sharing, text channels, and players for shared files. Everyone else sees a normal channel, a normal link, or nothing.
 - **Not in mumh5 yet:** push to talk while mumh5 is in the background, whisper and shout, positional audio, the in-game overlay, recording, and the ban list and registered-user editors. The Mumble desktop app has these.
 - **Back up your identity.** It is how servers recognize you. mumh5 offers a password-protected backup right after you create it, and in Settings, Identities.
-
-## More
-
-<details>
-<summary><b>All features</b></summary>
-
-### Voice
-- Voice activity detection with a live level meter and an adjustable threshold, push to talk, or always on
-- Noise suppression, echo cancellation and automatic gain control
-- Microphone and output selection, input and output volume
-- Per-person volume (0 to 300%) and "mute for me"
-- Speaking indicators in the channel tree, the member list and your own panel
-- Encrypted UDP (Mumble's OCB2-AES128), with fallback to the TCP connection and a TCP-only switch
-- Bitrate limited to what the server allows
-- Right-click mute or deafen for quick device and volume options
-- Microphone test that plays your voice back to you
-- Optional: give the microphone back while muted, so a Bluetooth headset stays out of its telephone mode. On by default on phones; not yet tried on a real phone
-
-### Channels and people
-- Channel tree that starts collapsed; channels with people in them open up
-- Single click selects a channel, double click joins; its description shows when you rest on it or click the marker next to it
-- Side chat: write in any channel without leaving yours
-- Profile cards next to the person you click, with their picture, channel and formatted description; local nicknames and registration status
-- Profile pictures (Mumble avatars), cut square and sized for the server; the desktop Mumble client has them too
-- Change your name (mumh5 reconnects for you) and register on a server
-- Connection information: ping, packet loss, client version and, for admins, the certificate chain
-- Moderation from the right-click menu: move, server mute and deafen, priority speaker, kick, ban, register
-- Create, edit, delete and link channels. Drag a channel into another, or in front of or behind it; drag people between channels
-- Permission editor: rules per channel with inheritance, groups and members
-- If you are kicked, you see who did it and why, with a Reconnect button
-
-### Chat
-- Messages grouped by author, direct messages, unread badges
-- Files of any kind by drag and drop, paste or the attach button, carried by the Mumble server itself, no file host needed ([how](#file-sharing))
-- Inline pictures, video and audio for shared files
-- YouTube links as click-to-play players (off by default)
-- Link previews with title, description and picture
-- Incoming HTML is sanitized, and pictures from unknown hosts are never loaded
-- Messages stay readable in the Mumble desktop client
-
-### Text channels
-- A channel marked as a text channel is read and written without joining it, from any voice channel
-- It is a normal Mumble channel on the server, created and removed with the usual channel permissions
-- The server keeps no messages. Each client keeps the last 200 per channel and passes the last 50 to people who connect later
-- Everyone on the server who uses mumh5 can read them; there are no private text channels yet
-- Needs a server from version 1.4 that allows HTML
-
-### Screen and camera sharing
-- Share a screen, a window or a camera with the mumh5 users in your channel. A dialog shows a preview and lets you choose the sound and the quality first
-- Cameras appear in the voice tiles, several at once; a click enlarges one
-- A screen opens large, with the people as a strip of tiles below, and can move to its own window
-- Sound: on Linux one program or everything except mumh5 (through PipeWire); on Windows the whole system; in a browser what the browser offers
-- The stream goes directly between the two clients (WebRTC), up to 8 viewers per stream. Only the setup messages pass through the Mumble server
-- Sharer and viewer see each other's IP address; mumh5 says so before the first use
-- Across the internet both sides need a STUN server. The browser version uses its proxy's, with a relay when no direct connection works. In the desktop app you set one in Settings, Voice. Nothing is contacted unless you set it
-- Tested between two instances on one machine with a test picture. Sound capture, real screens, connections across the internet, Windows and the browser build are untested
-
-### Interfaces and look
-- Standard interface in three layouts: channels on top (the default), channels left and members right, or chat left and channels right
-- Rooms interface: rooms as a list with the people inside, a voice screen, a people screen, and mute and deafen always in reach. New and not complete: channels and people cannot be moved by dragging there yet
-- 100 color schemes with a search box. Eleven are made by hand, the rest are generated from a hue and an accent
-
-### Sounds
-- Notification sounds for joins, leaves, messages, mute, push to talk, kicks and more
-- Replace any sound with your own file, or load a sound pack at once (matched by file name)
-
-### Servers and identity
-- Server list with custom icons, your own order, connection status and unread counts
-- A start screen with your servers, how many people are on each and the ping, before you connect
-- Public server browser with user counts and ping (desktop app)
-- Identity setup: create a certificate, import a `.p12`, or reuse the one from the Mumble desktop client
-- Several identities, and a different one per server if you like
-- Password-protected backups of an identity
-- Server certificates are pinned on first use; a certificate viewer shows the chain
-- Tray icon that shows whether you are talking, muted or deafened
-
-</details>
-
-<details>
-<summary><b>Use it in a browser (host it yourself)</b></summary>
 
 mumh5 also runs in a browser. Browsers cannot open the TLS connection Mumble uses or present a client certificate, so a small proxy you host yourself does that part: it serves the web app and bridges each browser connection to a Mumble server.
 
@@ -287,7 +200,7 @@ Servers can raise the limits for faster transfers: `imagemessagelength` (larger 
 You need [Node.js](https://nodejs.org/) 22 or newer and git.
 
 ```bash
-git clone gitea@git.lat:kibi/mumh5.git
+git clone https://github.com/DarknessIV4/mumh5.git
 cd mumh5
 npm install
 npm run dev
@@ -343,7 +256,7 @@ test/       unit, server and end-to-end tests
 
 mumh5 is built by **Kibi** together with **Claude**, Anthropic's AI model, working in Claude Code. Kibi decides what mumh5 should be and whether a result is good enough. Claude writes most of the code, the tests and this documentation. Commits written with Claude carry a `Co-Authored-By: Claude` line.
 
-Features are covered by automated tests, including end-to-end tests against a real Mumble server. If something is wrong, please open an issue.
+Windows version, deb, has not been testes thoroughly, i mainly tested on my Arch machine.
 
 ## License
 

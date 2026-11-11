@@ -8,7 +8,7 @@ export interface MenuItem {
   // Non-interactive title at the top (e.g. the server's name)
   header?: boolean;
   // Inline slider instead of a clickable item; the menu stays open while dragging
-  slider?: { value: number; min: number; max: number; step: number; format: (v: number) => string; oninput: (v: number) => void };
+  slider?: { reset?: number; value: number; min: number; max: number; step: number; format: (v: number) => string; oninput: (v: number) => void };
 }
 
 // One context menu for the whole app, opened at the pointer position

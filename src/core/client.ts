@@ -10,10 +10,11 @@ const PING_INTERVAL_MS = 15000;
 // (leaky bucket, defaults messageburst=5 and messagelimit=1/s). Its bucket restarts its timer
 // on every limited message and only leaks whole seconds, discarding the rest; the client
 // mirrors exactly that and queues instead of losing messages. The margin absorbs network jitter.
+// PluginDataTransmission is also rate-limited by Murmur (burst 15, then ~4/sec) so we must queue it.
 let RATE_BURST = 5;
 let RATE_LEAK_MS = 1000;
 let RATE_MARGIN_MS = 250;
-const RATE_LIMITED = new Set<MessageName>(['TextMessage', 'ChannelState', 'ACL', 'Version']);
+const RATE_LIMITED = new Set<MessageName>(['TextMessage', 'ChannelState', 'ACL', 'Version', 'PluginDataTransmission']);
 // File pieces (bulk chat messages) use the bucket only up to here, so two of the user's own
 // messages always go out at once
 let BULK_CAP = RATE_BURST - 2;
@@ -267,12 +268,16 @@ export class MumbleClient extends Emitter<ClientEvents> {
     this.handleClose(reason);
   }
 
-  send(name: MessageName, payload: Record<string, unknown>): void {
+  // If true, this message type is rate-limited by Murmur and must be queued
+  // PluginDataTransmission has its own burst limit (15 packets, then 4/sec)
+  // Use sendPriority for critical control signals that should bypass the queue
+  send(name: MessageName, payload: Record<string, unknown>, options?: { priority?: boolean }): void {
     if (!this.transport || this.closed) return;
     const bytes = this.codec.encode(name, payload);
     // Only changes to our own user state count against the bucket
     const ownState = name === 'UserState' && (payload.session == null || payload.session === this.session);
-    if (RATE_LIMITED.has(name) || ownState) this.sendPaced(bytes);
+    const isRateLimited = RATE_LIMITED.has(name) || ownState;
+    if (isRateLimited && !options?.priority) this.sendPaced(bytes);
     else this.transport.send(bytes);
   }
 
@@ -470,14 +475,14 @@ export class MumbleClient extends Emitter<ClientEvents> {
     });
   }
 
-  sendPluginData(receivers: number[], dataId: string, data: Uint8Array): void {
+  sendPluginData(receivers: number[], dataId: string, data: Uint8Array, options?: { priority?: boolean }): void {
     if (this.session == null || !receivers.length) return;
     this.send('PluginDataTransmission', {
       senderSession: this.session,
       receiverSessions: receivers,
       data,
       dataID: dataId
-    });
+    }, { priority: options?.priority });
   }
 
   // Voice over UDP when it works, else through the TCP tunnel
