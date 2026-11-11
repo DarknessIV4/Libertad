@@ -20,6 +20,7 @@ import { files, fileKind } from './files.svelte.ts';
 import { announce, isPiece } from '../core/file-transfer.ts';
 import { voice } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
+import { mentions } from './mentions.ts';
 
 const codec = createCodec();
 
@@ -35,6 +36,8 @@ export interface ChatEntry {
   html: string;
   embeds: Embed[];
   time: number;
+  // Someone else's message that mentions us (@name or @all)
+  mention?: boolean;
 }
 
 // A file being read before it is announced
@@ -500,7 +503,9 @@ export class Session {
         return;
       }
       this.receive(client, msg);
-      if (msg.actor != null && msg.actor !== client.session) sounds.play(msg.channels.length || msg.trees.length ? 'message' : 'privateMessage');
+      if (msg.actor != null && msg.actor !== client.session) {
+        sounds.play(this.mentionsMe(msg.html) ? 'mention' : msg.channels.length || msg.trees.length ? 'message' : 'privateMessage');
+      }
     });
 
     client.on('permissionDenied', d => {
@@ -694,7 +699,7 @@ export class Session {
     if (!client) return;
     const text = stripBanner(html);
     const limit = client.config.imageMessageLength;
-    const withIt = withBanners(text, { banner: this.currentWire('banner'), card: this.currentWire('card') });
+    const withIt = withBanners(text, { banner: this.currentWire('banner'), card: this.currentWire('card'), profile: this.currentWire('profile') });
     client.setComment(limit > 0 && withIt.length > limit ? text : withIt);
     this.pingProfile();
   }
@@ -742,7 +747,7 @@ export class Session {
 
   private setProfile(session: number, key: string, slot: Slot, view: BannerView | null): void {
     if (this.profileKey.get(session) !== key) return;
-    this.profiles = { ...this.profiles, [session]: { ...(this.profiles[session] ?? { banner: null, card: null }), [slot]: view } };
+    this.profiles = { ...this.profiles, [session]: { ...(this.profiles[session] ?? { banner: null, card: null, profile: null }), [slot]: view } };
   }
 
   private async buildProfile(session: number, name: string, hash: string, comment: string, key: string): Promise<void> {
@@ -753,7 +758,7 @@ export class Session {
       // Only the hash is known: the same hash as last time is the same profile
       if (cached && hash && cached.commentHash === hash) {
         const urls: string[] = [];
-        for (const slot of ['banner', 'card'] as const) {
+        for (const slot of ['banner', 'card', 'profile'] as const) {
           const c = cached[slot];
           const view = c ? await this.cachedView(name, slot, c, urls) : null;
           if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
@@ -766,7 +771,7 @@ export class Session {
       return;
     }
     const urls: string[] = [];
-    const results = await Promise.all((['banner', 'card'] as const).map(async slot => {
+    const results = await Promise.all((['banner', 'card', 'profile'] as const).map(async slot => {
       const r = await this.resolveSlot(session, name, slot, parseBanner(comment, slot), cached, urls);
       this.setProfile(session, key, slot, r.view);
       return r;
@@ -776,8 +781,8 @@ export class Session {
     // Kept for next time, when the description has a hash to compare by. Short descriptions are sent as text
     // without a new hash, so the hash here could be an old one: those are not kept.
     if (hash && comment.length > 128) {
-      const meta: CachedProfile = { v: 1, commentHash: hash, banner: results[0].saved, card: results[1].saved };
-      await profileCache.write(name, meta, { banner: results[0].blob, card: results[1].blob });
+      const meta: CachedProfile = { v: 1, commentHash: hash, banner: results[0].saved, card: results[1].saved, profile: results[2].saved };
+      await profileCache.write(name, meta, { banner: results[0].blob, card: results[1].blob, profile: results[2].blob });
     }
   }
 
@@ -793,7 +798,7 @@ export class Session {
     if (!blob) return null;
     const url = URL.createObjectURL(blob);
     urls.push(url);
-    return { kind: 'image', src: url, mime: c.mime };
+    return { kind: 'image', src: url, mime: c.mime, ...(c.scope && { scope: c.scope }) };
   }
 
   private async resolveSlot(session: number, name: string, slot: Slot, wire: Banner | null, cached: CachedProfile | null,
@@ -804,14 +809,15 @@ export class Session {
     if (wire.kind === 'image') {
       const mime = dataMime(wire.src);
       const bytes = Uint8Array.from(atob(wire.src.slice(wire.src.indexOf(',') + 1)), c => c.charCodeAt(0));
-      return { view: { kind: 'image', src: wire.src, mime }, saved: { kind: 'image', mime }, blob: new Blob([bytes], { type: mime }) };
+      return { view: { kind: 'image', src: wire.src, mime, ...(wire.scope && { scope: wire.scope }) }, saved: { kind: 'image', mime, ...(wire.scope && { scope: wire.scope }) }, blob: new Blob([bytes], { type: mime }) };
     }
     const meta = wire.meta;
     // The copy kept here, when it is the same picture
     const c = cached?.[slot];
     if (c?.kind === 'file' && c.hash === meta.h && c.mime) {
       const view = await this.cachedView(name, slot, c, urls);
-      if (view?.kind === 'image') return { view, saved: c, blob: await profileCache.readBlob(name, slot, c.mime) };
+      // The same picture, perhaps with another scope now
+      if (view?.kind === 'image') return { view: { ...view, scope: wire.scope }, saved: { ...c, scope: wire.scope }, blob: await profileCache.readBlob(name, slot, c.mime) };
     }
     // Fetched from them, if the limit in Settings allows it
     const limit = store.settings.bannerMaxMbit * 1_000_000 / 8;
@@ -822,7 +828,7 @@ export class Session {
     const url = await this.waitReady(meta.i);
     const blob = url ? await files.blobOf(meta.i) : null;
     if (!url || !blob) return none;
-    return { view: { kind: 'image', src: url, mime: meta.m }, saved: { kind: 'file', hash: meta.h, mime: meta.m }, blob };
+    return { view: { kind: 'image', src: url, mime: meta.m, ...(wire.scope && { scope: wire.scope }) }, saved: { kind: 'file', hash: meta.h, mime: meta.m, ...(wire.scope && { scope: wire.scope }) }, blob };
   }
 
   // The address of a file once it has arrived; null when the transfer fails or takes too long
@@ -917,12 +923,12 @@ export class Session {
     if (!own) return null;
     if (own.kind !== 'file') return own;
     const have = this.bannerFiles[slot];
-    if (have?.blob === own.blob) return { kind: 'file', meta: have.meta };
+    if (have?.blob === own.blob) return { kind: 'file', meta: have.meta, ...(own.scope && { scope: own.scope }) };
     if (!files.supported(this)) return null;
     const meta = await files.share(this, new File([own.blob], slot, { type: own.mime }), () => {}, true);
     if (typeof meta === 'string') return null;
     this.bannerFiles[slot] = { blob: own.blob, meta };
-    return { kind: 'file', meta };
+    return { kind: 'file', meta, ...(own.scope && { scope: own.scope }) };
   }
   // The same without waiting: what is known now, or what our description says already
   private currentWire(slot: Slot): Banner | null {
@@ -930,7 +936,7 @@ export class Session {
     if (!own) return null;
     if (own.kind !== 'file') return own;
     const have = this.bannerFiles[slot];
-    return have?.blob === own.blob ? { kind: 'file', meta: have.meta } : parseBanner(this.client?.self?.comment, slot);
+    return have?.blob === own.blob ? { kind: 'file', meta: have.meta, ...(own.scope && { scope: own.scope }) } : parseBanner(this.client?.self?.comment, slot);
   }
 
   // Makes our description carry our banner and card background (or none). Our description has to be
@@ -952,7 +958,7 @@ export class Session {
       return;
     }
     this.bannerWait = false;
-    const [banner, card] = await Promise.all([this.wireBanner('banner').catch(() => null), this.wireBanner('card').catch(() => null)]);
+    const [banner, card, profile] = await Promise.all((['banner', 'card', 'profile'] as const).map(s => this.wireBanner(s).catch(() => null)));
     // The connection or our description may have changed while a file was being prepared
     const self = client.self;
     if (this.client !== client || this.status !== 'connected' || !self) return;
@@ -960,11 +966,11 @@ export class Session {
     const ping = this.bannerPing;
     this.bannerPing = false;
     // Nothing to write, but someone who could not load it before gets another go
-    if (sameBanner(parseBanner(self.comment, 'banner'), banner) && sameBanner(parseBanner(self.comment, 'card'), card)) {
+    if (sameBanner(parseBanner(self.comment, 'banner'), banner) && sameBanner(parseBanner(self.comment, 'card'), card) && sameBanner(parseBanner(self.comment, 'profile'), profile)) {
       if (ping) this.pingProfile();
       return;
     }
-    const next = withBanners(self.comment, { banner, card });
+    const next = withBanners(self.comment, { banner, card, profile });
     const limit = client.config.imageMessageLength;
     // A server with a smaller limit keeps the description as it is
     if (limit > 0 && next.length > limit) return;
@@ -994,6 +1000,12 @@ export class Session {
     if (!opts.quiet && !entry.self) for (const e of entry.embeds) if (e.file) files.offered(this, e.file, entry.authorSession);
   }
 
+  // Does this message name us (@name) or everybody (@all)?
+  mentionsMe(html: string): boolean {
+    const me = this.client?.self;
+    return !!me && mentions(html, [me.name]);
+  }
+
   // A text channel message: live, kept from earlier, or handed over by another client
   addText(m: TextMsg, self: boolean, quiet: boolean, sender: number | null = null): void {
     const client = this.client;
@@ -1001,6 +1013,7 @@ export class Session {
     const online = sender != null ? client.users.get(sender) : self ? client.self : m.k ? [...client.users.values()].find(u => u.hash === m.k) : undefined;
     this.push(`ch:${m.c}`, {
       kind: 'text', author: online ? store.displayName(online) : m.n, authorSession: online?.session ?? null, self,
+      mention: !self && this.mentionsMe(m.h),
       ...renderIncoming(m.h, store.trustedHosts)
     }, { time: m.t, quiet });
   }
@@ -1022,7 +1035,7 @@ export class Session {
     if (msg.actor == null) {
       this.push(key, { kind: 'system', author: '', authorSession: null, self: false, ...rendered });
     } else {
-      this.push(key, { kind: 'text', author: sender ? store.displayName(sender) : `#${msg.actor}`, authorSession: msg.actor, self: false, ...rendered });
+      this.push(key, { kind: 'text', author: sender ? store.displayName(sender) : `#${msg.actor}`, authorSession: msg.actor, self: false, mention: msg.actor !== client.session && this.mentionsMe(msg.html), ...rendered });
     }
   }
 
@@ -1232,6 +1245,8 @@ class Sessions {
 
   // Your banner for every server: saved here and written into your description on the ones you are on
   async setBanner(slot: Slot, b: OwnBannerInput | null): Promise<void> {
+    // A card background over the whole card would hide a new banner: it gives way
+    if (slot === 'banner' && b && OWN.profile.value && OWN.profile.value.kind !== 'color' && OWN.profile.value.scope === 'whole') await OWN.profile.set(null);
     await OWN[slot].set(b);
     for (const s of this.list) if (s.status === 'connected') s.syncBanner(true);
   }

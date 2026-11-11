@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import { playerKey } from '../lib/player-keys.ts';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { YtTracker, YT_UNSTARTED, YT_CUED, YT_PAUSED } from '../core/yt-tracker.ts';
@@ -6,6 +7,7 @@
   import Icon from './Icon.svelte';
   import { desktop } from '../lib/native.ts';
   import { spotState, spotAction } from '../lib/spot-state.svelte.ts';
+  import FsMuteDeafen from './FsMuteDeafen.svelte';
   import { youtubeHost } from '../lib/youtube-account.svelte.ts';
   import { RATES, rateLabel, qualityLabel, IDLE_MS, DEFAULT_QUALITIES } from '../lib/yt-controls.ts';
 
@@ -511,8 +513,10 @@
       <span class="big"><Icon name={playingNow ? 'pause' : 'play'} size={36} /></span>
     </button>
     <div class="top">
+      <!-- Full screen: mute and deafen, left of everything else -->
+      {#if spotState.fullscreen}<FsMuteDeafen dark={false} />{/if}
       <div class="menu-wrap">
-        <button class="ibtn" class:on={menu === 'quality'} onclick={() => toggleMenu('quality')} aria-label="Quality" title="Quality"><Icon name="settings" size={20} /></button>
+        <button use:tip class="ibtn" class:on={menu === 'quality'} onclick={() => toggleMenu('quality')} aria-label="Quality" title="Quality"><Icon name="settings" size={20} /></button>
         {#if menu === 'quality'}
           <div class="menu" role="menu">
             {#each ['auto', ...qualities] as q (q)}
@@ -521,9 +525,9 @@
           </div>
         {/if}
       </div>
-      <button class="ibtn" class:on={captions} onclick={() => setCaptions(!captions)} aria-label="Captions" aria-pressed={captions} title="Captions"><Icon name="captions" size={20} /></button>
+      <button use:tip class="ibtn" class:on={captions} onclick={() => setCaptions(!captions)} aria-label="Captions" aria-pressed={captions} title="Captions"><Icon name="captions" size={20} /></button>
       <div class="menu-wrap">
-        <button class="ibtn" class:on={menu === 'speed' || rate !== 1} onclick={() => toggleMenu('speed')} aria-label="Playback speed" title="Playback speed"><Icon name="speed" size={20} /></button>
+        <button use:tip class="ibtn" class:on={menu === 'speed' || rate !== 1} onclick={() => toggleMenu('speed')} aria-label="Playback speed" title="Playback speed"><Icon name="speed" size={20} /></button>
         {#if menu === 'speed'}
           <div class="menu" role="menu">
             {#each RATES as r (r)}
@@ -534,8 +538,8 @@
       </div>
       {#if spotState.fullscreen}
         <!-- Full screen: the spotlight's own bar is hidden, so its pop-out and full screen buttons are here -->
-        <button class="ibtn" class:on={spotState.poppedOut} onclick={() => spotAction('popout')} aria-label="Pop out" title="Pop out"><Icon name="popout" size={20} /></button>
-        <button class="ibtn" onclick={() => spotAction('fullscreen')} aria-label="Exit full screen" title="Exit full screen"><Icon name="expand" size={20} /></button>
+        <button use:tip class="ibtn" class:on={spotState.poppedOut} onclick={() => spotAction('popout')} aria-label="Pop out" title="Pop out"><Icon name="popout" size={20} /></button>
+        <button use:tip class="ibtn" onclick={() => spotAction('fullscreen')} aria-label="Exit full screen" title="Exit full screen"><Icon name="expand" size={20} /></button>
       {/if}
     </div>
     <div class="bar">

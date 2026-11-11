@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import Icon from './Icon.svelte';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { session } from '../lib/session.svelte.ts';
@@ -55,7 +56,7 @@
 <div class="watch-bar" onmouseenter={() => (showControls = true)} onmouseleave={() => (showControls = false)}>
   <div class="left">
     <span class="title">{currentVideo?.title || meta?.title || 'Watch Together'}</span>
-    <button class="icon-btn playlist-toggle" onclick={openPlaylist} aria-label={showPlaylist ? 'Close playlist' : 'Open playlist'} title={showPlaylist ? 'Close playlist' : 'Open playlist'}>
+    <button use:tip class="icon-btn playlist-toggle" onclick={openPlaylist} aria-label={showPlaylist ? 'Close playlist' : 'Open playlist'} title={showPlaylist ? 'Close playlist' : 'Open playlist'}>
       <Icon name="menu" size={18} />
     </button>
   </div>
@@ -63,17 +64,17 @@
   <div class="right">
     <div class="controls">
       {#if currentIndex > 0}
-      <button class="icon-btn" onclick={skipPrevious} aria-label="Previous video" title="Previous video">
+      <button use:tip class="icon-btn" onclick={skipPrevious} aria-label="Previous video" title="Previous video">
         <Icon name="skip-previous" size={18} />
       </button>
       {/if}
 
-      <button class="icon-btn play-pause" onclick={() => watchTogether.play()} aria-label={watchTogether.playing ? 'Pause' : 'Play'} title={watchTogether.playing ? 'Pause' : 'Play'}>
+      <button use:tip class="icon-btn play-pause" onclick={() => watchTogether.play()} aria-label={watchTogether.playing ? 'Pause' : 'Play'} title={watchTogether.playing ? 'Pause' : 'Play'}>
         <Icon name={watchTogether.playing ? 'pause' : 'play'} size={20} />
       </button>
 
       {#if currentIndex < playlist.length - 1}
-      <button class="icon-btn" onclick={skipNext} aria-label="Next video" title="Next video">
+      <button use:tip class="icon-btn" onclick={skipNext} aria-label="Next video" title="Next video">
         <Icon name="skip-next" size={18} />
       </button>
       {/if}

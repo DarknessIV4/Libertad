@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import Icon from './Icon.svelte';
   import { store } from '../lib/settings.svelte.ts';
 
@@ -15,7 +16,7 @@
 </script>
 
 <div class="corner" role="presentation" ondblclick={e => e.stopPropagation()} oncontextmenu={e => e.stopPropagation()}>
-  <button class="mute" onclick={toggleMute} aria-label={volume === 0 ? 'Unmute' : 'Mute'} title={volume === 0 ? 'Unmute' : 'Mute'}>
+  <button use:tip class="mute" onclick={toggleMute} aria-label={volume === 0 ? 'Unmute' : 'Mute'} title={volume === 0 ? 'Unmute' : 'Mute'}>
     <Icon name={volume === 0 ? 'volume-off' : 'volume'} size={18} />
   </button>
   <input class="vol" type="range" min="0" max="1" step="0.05" value={volume} style="--pct: {volume * 100}%" aria-label="Volume"

@@ -6,7 +6,7 @@ import { load, save } from './storage.ts';
 export type DockSide = 'middle' | 'right';
 
 // Only the chat's empty places start a drag, never a message, text, button or the message box
-const EMPTY = '.chat, .logbox, .wrap, .list, .end, .empty, .cpanel, .cheader, .cheader .grow, .msg, .gutter, .content, .system';
+const EMPTY = '.chat, .logbox, .wrap, .list, .end, .empty, .cpanel, .cheader, .cheader .grow, .msg, .gutter, .content, .system, .msg header, .embed';
 // Whether a click landed on the chat's empty space (not on a message, text or a control)
 export const isChatEmpty = (t: EventTarget | null): boolean => t instanceof Element && t.matches(EMPTY);
 // Letting go further right than this docks the chat on the right, anywhere left of it puts it in the middle

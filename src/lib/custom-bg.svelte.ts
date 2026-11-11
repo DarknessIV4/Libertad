@@ -1,5 +1,6 @@
 import { putBlob, getBlob, deleteBlob } from './blobstore.ts';
 import { load, save } from './storage.ts';
+import type { Crop } from './image-edit.ts';
 
 // Pictures, GIFs and videos used as the app's background, kept on this computer only (nothing is sent to
 // anyone). 'whole' is one background spread over the left panel, the middle and the right panel, cut
@@ -14,10 +15,20 @@ export type MediaKind = 'none' | 'image' | 'video';
 const MAX_BYTES = 300 * 1024 * 1024;
 const key = (slot: Slot) => `custom-bg-${slot}`;
 
-interface Entry { kind: MediaKind; darkness: number; blur: number; url: string | null }
-type Saved = Record<Slot, { kind: MediaKind; darkness: number; blur: number }>;
+// crop: the part of a GIF or video that shows (0 to 1 of the picture), cut when it is drawn; null shows all of it
+interface Entry { kind: MediaKind; darkness: number; blur: number; crop: Crop | null; url: string | null }
+type Saved = Record<Slot, { kind: MediaKind; darkness: number; blur: number; crop?: Crop | null }>;
 
 const clamp = (v: unknown, max: number) => Math.min(max, Math.max(0, Math.round(Number(v)) || 0));
+
+// A crop that is a real part of the picture, else null (all of it)
+function validCrop(c: unknown): Crop | null {
+  const o = c as Partial<Crop> | null | undefined;
+  if (!o || ![o.x, o.y, o.w, o.h].every(n => typeof n === 'number' && Number.isFinite(n))) return null;
+  const { x, y, w, h } = o as Crop;
+  if (x < 0 || y < 0 || w < 0.01 || h < 0.01 || x + w > 1.0001 || y + h > 1.0001) return null;
+  return x < 0.002 && y < 0.002 && w > 0.996 && h > 0.996 ? null : { x, y, w, h };
+}
 
 class CustomBackground {
   slots = $state<Record<Slot, Entry>>(this.initial());
@@ -28,12 +39,12 @@ class CustomBackground {
   }
 
   private initial(): Record<Slot, Entry> {
-    const empty = { kind: 'none', darkness: 0, blur: 0 } as const;
+    const empty = { kind: 'none', darkness: 0, blur: 0, crop: null } as const;
     const saved = load<Partial<Saved>>('mumh5.customBgs', {});
     const out = {} as Record<Slot, Entry>;
     for (const s of SLOTS) {
       const e = saved[s] ?? empty;
-      out[s] = { kind: e.kind === 'image' || e.kind === 'video' ? e.kind : 'none', darkness: clamp(e.darkness, 95), blur: clamp(e.blur, 40), url: null };
+      out[s] = { kind: e.kind === 'image' || e.kind === 'video' ? e.kind : 'none', darkness: clamp(e.darkness, 95), blur: clamp(e.blur, 40), crop: validCrop(e.crop), url: null };
     }
     return out;
   }
@@ -49,7 +60,7 @@ class CustomBackground {
 
   private persist(): void {
     const out = {} as Saved;
-    for (const s of SLOTS) out[s] = { kind: this.slots[s].kind, darkness: this.slots[s].darkness, blur: this.slots[s].blur };
+    for (const s of SLOTS) out[s] = { kind: this.slots[s].kind, darkness: this.slots[s].darkness, blur: this.slots[s].blur, crop: this.slots[s].crop };
     save('mumh5.customBgs', out);
   }
 
@@ -62,7 +73,8 @@ class CustomBackground {
   }
 
   // A picture, GIF or video from a file. Returns what went wrong, or ''.
-  async setFile(slot: Slot, file: File): Promise<string> {
+  // crop: the part of a GIF or video to show (see Entry)
+  async setFile(slot: Slot, file: File, crop?: Crop | null): Promise<string> {
     const kind: MediaKind | null = file.type.startsWith('video/') ? 'video' : /^image\/(gif|png|jpeg|webp)$/.test(file.type) ? 'image' : null;
     if (!kind) return 'This file is not a picture, GIF or video that can be used.';
     if (file.size > MAX_BYTES) return 'This file is too large (the limit is 300 MB).';
@@ -71,6 +83,7 @@ class CustomBackground {
     if (e.url) URL.revokeObjectURL(e.url);
     e.url = URL.createObjectURL(file);
     e.kind = kind;
+    e.crop = validCrop(crop);
     this.persist();
     return '';
   }
@@ -80,6 +93,7 @@ class CustomBackground {
     if (e.url) URL.revokeObjectURL(e.url);
     e.url = null;
     e.kind = 'none';
+    e.crop = null;
     await deleteBlob(key(slot)).catch(() => {});
     this.persist();
   }

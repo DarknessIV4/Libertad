@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import Icon from '../ui/Icon.svelte';
   import { session, sessions } from '../lib/session.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
@@ -36,7 +37,7 @@
     {#if large}<span>{deafened ? 'Deafened' : 'Deafen'}</span>{/if}
   </button>
   {#if large}
-    <button class:live={sharing} disabled={!sharing && !canShare} aria-label={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'}
+    <button use:tip class:live={sharing} disabled={!sharing && !canShare} aria-label={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'}
       title={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
       onclick={() => (hostingWatch ? watchTogether.end() : sharing ? share.stop() : share.start(sessions.active))}>
       <Icon name={sharing && !hostingWatch ? share.kind : 'screen'} size={24} />

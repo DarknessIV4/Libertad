@@ -6,19 +6,21 @@
 import { desktop } from './native.ts';
 import { getData, putData, getBlob, putBlob, deleteBlob } from './blobstore.ts';
 import { isBannerColor } from '../core/banner.ts';
-import type { Slot } from '../core/banner.ts';
+import type { CardScope, Slot } from '../core/banner.ts';
 
 export interface CachedSlot {
   kind: 'color' | 'image' | 'file';
   color?: string;  // kind color
   hash?: string;   // kind file: the picture's hash from its announcement
   mime?: string;   // kind image and file
+  scope?: CardScope; // kind image and file, card background only
 }
 export interface CachedProfile {
   v: 1;
   commentHash: string; // hash of the description it was made from
   banner: CachedSlot | null;
   card: CachedSlot | null;
+  profile?: CachedSlot | null;
 }
 
 const MIME = /^image\/(gif|png|jpeg|webp)$/;
@@ -29,7 +31,7 @@ function validSlot(v: unknown): CachedSlot | null {
   if (s.kind === 'color') return isBannerColor(s.color) ? { kind: 'color', color: s.color } : null;
   if ((s.kind === 'image' || s.kind === 'file') && typeof s.mime === 'string' && MIME.test(s.mime)) {
     if (s.kind === 'file' && !(typeof s.hash === 'string' && /^[0-9a-f]{64}$/.test(s.hash))) return null;
-    return { kind: s.kind, mime: s.mime, hash: s.hash };
+    return { kind: s.kind, mime: s.mime, hash: s.hash, ...((s.scope === 'under' || s.scope === 'whole') && { scope: s.scope }) };
   }
   return null;
 }
@@ -37,7 +39,7 @@ function validSlot(v: unknown): CachedSlot | null {
 function validMeta(v: unknown): CachedProfile | null {
   const m = v as Partial<CachedProfile> | null;
   if (!m || typeof m !== 'object' || m.v !== 1 || typeof m.commentHash !== 'string') return null;
-  return { v: 1, commentHash: m.commentHash, banner: validSlot(m.banner), card: validSlot(m.card) };
+  return { v: 1, commentHash: m.commentHash, banner: validSlot(m.banner), card: validSlot(m.card), profile: validSlot(m.profile) };
 }
 
 const key = (name: string, file: string) => `user-profiles/${name}/${file}`;
@@ -79,7 +81,7 @@ class ProfileCache {
   // The pictures go first, so a profile that is cut off halfway never looks complete
   async write(name: string, meta: CachedProfile, blobs: Partial<Record<Slot, Blob | null>>): Promise<void> {
     try {
-      for (const slot of ['banner', 'card'] as const) {
+      for (const slot of ['banner', 'card', 'profile'] as const) {
         const blob = blobs[slot];
         if (desktop?.profiles) await desktop.profiles.write(name, slot, blob ? new Uint8Array(await blob.arrayBuffer()) : null);
         else if (blob) await putBlob(key(name, slot), blob);

@@ -30,6 +30,7 @@ export const ICON_PATHS: Record<string, string> = {
   power: 'M18.4 6.6a9 9 0 1 1-12.8 0M12 2v10',
   lock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4',
   file: 'M14 2H6v20h12V8zM14 2v6h6',
+  gif: 'M3 5h18v14H3zM10 10H7v4h3v-2H8.5M13 10v4M16 14v-4h3M16 12h2.5',
   send: 'M22 2L11 13M22 2l-7 20-4-9-9-4z',
   message: 'M21 15H7l-4 4V3h18z',
   trash: 'M3 6h18M8 6V3h8v3M19 6l-1 15H6L5 6',

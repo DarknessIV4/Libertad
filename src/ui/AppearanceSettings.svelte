@@ -3,7 +3,7 @@
   import { colorPicker } from '../lib/colorpicker.svelte.ts';
   import { CUSTOM_GROUPS, CUSTOM_KEYS, CUSTOM_DEFAULTS, customStyle, isHex, type CustomKey } from '../lib/theme.ts';
   import { customBg, type Slot } from '../lib/custom-bg.svelte.ts';
-  import { applyColor, applyFile, removeBackground, panelColor } from '../lib/custom-bg-actions.ts';
+  import { applyColor, applyFile, cropBackground, removeBackground, panelColor } from '../lib/custom-bg-actions.ts';
   import { pickFile } from '../lib/pick.ts';
 
   const INTERFACES: { id: 'standard' | 'rooms'; name: string; note: string }[] = [
@@ -81,8 +81,9 @@
     if (c) { bgError = ''; await applyColor(scope, c); }
   }
   async function bgFile(scope: Slot, accept: string) {
-    const f = await pickFile(accept);
-    if (f) bgError = await applyFile(scope, f);
+    const picked = await pickFile(accept);
+    const f = picked && await cropBackground(picked);
+    if (f) bgError = await applyFile(scope, f.file, f.crop);
   }
   // What a row has now
   function bgStatus(scope: Slot): string {
@@ -94,6 +95,21 @@
     return customBg.has('whole') ? 'Part of the whole background' : 'Color scheme';
   }
   const bgHasAny = (scope: Slot) => customBg.has(scope) || (scope !== 'whole' && !!panelColor(scope));
+
+  // ─── See-through windows, buttons and panels ───
+  type GlassGroup = 'window' | 'button' | 'panel';
+  const GLASS: { id: GlassGroup; label: string }[] = [
+    { id: 'window', label: 'Windows and menus' },
+    { id: 'button', label: 'Buttons' },
+    { id: 'panel', label: 'Panels' }
+  ];
+  const glass = (g: GlassGroup, kind: 'Transparency' | 'Darkness' | 'BlurPx'): number => (store.settings as unknown as Record<string, number>)[g + kind];
+  // With Sync on, the same slider of all three moves together
+  function setGlass(g: GlassGroup, kind: 'Transparency' | 'Darkness' | 'BlurPx', v: number) {
+    const rec = store.settings as unknown as Record<string, number>;
+    for (const x of store.settings.glassSync ? GLASS.map(y => y.id) : [g]) rec[x + kind] = v;
+    store.saveSettings();
+  }
 
   function resetCustom() {
     store.settings.customColors = { ...CUSTOM_DEFAULTS };
@@ -222,37 +238,35 @@
   {/each}
 </div>
 
-<label class="check rounded">
-  <input type="checkbox" checked={store.settings.panelClear} onchange={e => { store.settings.panelClear = e.currentTarget.checked; store.saveSettings(); }} />
-  Transparent panels
-</label>
-<p class="help">The bars and title panels (server bar, titles, your own bar, message box edges) let the background show through.</p>
-{#if store.settings.panelClear}
+<h4 class="gap">Transparency</h4>
+<p class="help">How much the background shows through windows and menus, buttons, and the bars and title panels. At 0% a surface is solid.</p>
 <label class="check">
-  <input type="checkbox" checked={store.settings.panelDark} onchange={e => { store.settings.panelDark = e.currentTarget.checked; store.saveSettings(); }} />
-  Darker panels
+  <input type="checkbox" checked={store.settings.glassSync} onchange={e => { store.settings.glassSync = e.currentTarget.checked; store.saveSettings(); }} />
+  Sync
 </label>
-{#if store.settings.panelDark}
+<p class="help">Changing one slider changes the same slider in the other two.</p>
+{#each GLASS as g (g.id)}
   <div class="round-row">
-    <label for="a-dark">Darkness</label>
-    <input id="a-dark" type="range" min="0" max="95" step="1" value={store.settings.panelDarkness}
-      oninput={e => { store.settings.panelDarkness = Number(e.currentTarget.value); store.saveSettings(); }} />
-    <output for="a-dark">{store.settings.panelDarkness}%</output>
+    <label for="g-{g.id}-t">{g.label}</label>
+    <input id="g-{g.id}-t" type="range" min="0" max="100" step="1" value={glass(g.id, 'Transparency')}
+      oninput={e => setGlass(g.id, 'Transparency', Number(e.currentTarget.value))} />
+    <output for="g-{g.id}-t">{glass(g.id, 'Transparency')}%</output>
   </div>
-{/if}
-<label class="check">
-  <input type="checkbox" checked={store.settings.panelBlur} onchange={e => { store.settings.panelBlur = e.currentTarget.checked; store.saveSettings(); }} />
-  Blurred panels
-</label>
-{#if store.settings.panelBlur}
-  <div class="round-row">
-    <label for="a-blur">Blur</label>
-    <input id="a-blur" type="range" min="0" max="40" step="1" value={store.settings.panelBlurPx}
-      oninput={e => { store.settings.panelBlurPx = Number(e.currentTarget.value); store.saveSettings(); }} />
-    <output for="a-blur">{store.settings.panelBlurPx} px</output>
-  </div>
-{/if}
-{/if}
+  {#if glass(g.id, 'Transparency') > 0}
+    <div class="round-row sub">
+      <label for="g-{g.id}-d">Darkness</label>
+      <input id="g-{g.id}-d" type="range" min="0" max="95" step="1" value={glass(g.id, 'Darkness')}
+        oninput={e => setGlass(g.id, 'Darkness', Number(e.currentTarget.value))} />
+      <output for="g-{g.id}-d">{glass(g.id, 'Darkness')}%</output>
+    </div>
+    <div class="round-row sub">
+      <label for="g-{g.id}-b">Blurriness</label>
+      <input id="g-{g.id}-b" type="range" min="0" max="40" step="1" value={glass(g.id, 'BlurPx')}
+        oninput={e => setGlass(g.id, 'BlurPx', Number(e.currentTarget.value))} />
+      <output for="g-{g.id}-b">{glass(g.id, 'BlurPx')} px</output>
+    </div>
+  {/if}
+{/each}
 
 <label class="check rounded">
   <input type="checkbox" checked={store.settings.rounded} onchange={e => { store.settings.rounded = e.currentTarget.checked; store.saveSettings(); }} />
@@ -272,7 +286,9 @@
   .gap { margin-top: 22px; }
   .rounded { margin-top: 16px; }
   .round-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
-  .round-row label { margin: 0; flex: none; }
+  .round-row label { margin: 0; flex: none; min-width: 120px; }
+  .round-row.sub { padding-left: 16px; }
+  .round-row.sub label { min-width: 104px; }
   .round-row input { flex: 1; min-width: 0; }
   .round-row output { width: 44px; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--text-dim); }
   .help { margin: 6px 0 0; font-size: 13px; color: var(--text-dim); }

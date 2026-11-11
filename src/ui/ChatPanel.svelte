@@ -43,7 +43,7 @@
   .cpanel { --rh-shift: 2.5px; position: relative; max-width: 100%; height: 100%; flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--panel-right, var(--bg-2)); border-left: 5px solid transparent; }
   .cpanel::before { content: ''; position: absolute; left: -5px; top: 0; bottom: 0; width: 5px; background: var(--panel-divider, rgb(0 0 0 / 0.4)); backdrop-filter: blur(var(--panel-blur, 10px)); pointer-events: none; }
   .logbox { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--text-faint); background-color: var(--glass, var(--panel-right, var(--bg-2))); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
+  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--text-faint); background-color: color-mix(in srgb, var(--panel-right, var(--bg-2)) var(--panel-solid, 100%), transparent); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
   h1 { flex: 0 1 auto; min-width: 0; font-size: 15px; font-weight: 650; margin: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .grow { flex: 1; align-self: stretch; }
   .empty { padding: 28px 16px 8px; }

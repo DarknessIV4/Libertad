@@ -7,6 +7,7 @@ import App from './App.svelte';
 // After the components' styles, so themes override them
 import './themes.css';
 import './rounded.css';
+import './glass.css';
 import { startTray } from './lib/tray.svelte.ts';
 import { startTextMenu } from './lib/text-menu.ts';
 import { startShortcuts } from './lib/shortcuts.svelte.ts';

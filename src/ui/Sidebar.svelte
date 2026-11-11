@@ -106,7 +106,7 @@
 
 <style>
   .sidebar { --rh-shift: 2.5px; position: relative; width: 260px; flex: none; display: flex; flex-direction: column; background: var(--panel-left, var(--bg-1)); min-height: 0; }
-  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 0; border-bottom: 1px solid var(--line); background-color: var(--glass, var(--panel-left, var(--bg-1))); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
+  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 0; border-bottom: 1px solid var(--line); background-color: color-mix(in srgb, var(--panel-left, var(--bg-1)) var(--panel-solid, 100%), transparent); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
   header.trusted { background: #1d5c38; border-bottom-color: #2a7a4c; }
   header.trusted .status, header.trusted .icon-btn { color: #cfeedd; }
   header.trusted .dot { background: #fff; }

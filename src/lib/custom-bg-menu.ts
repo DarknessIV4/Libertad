@@ -1,5 +1,5 @@
 import { customBg, PANELS, type Panel, type Slot } from './custom-bg.svelte.ts';
-import { applyColor, applyFile, removeBackground, panelColor } from './custom-bg-actions.ts';
+import { applyColor, applyFile, cropBackground, removeBackground, panelColor } from './custom-bg-actions.ts';
 import { menu, type MenuItem } from './menu.svelte.ts';
 import { ui } from './ui.svelte.ts';
 import { pickColor, pickFile } from './pick.ts';
@@ -14,10 +14,13 @@ function askScope(panel: Panel, apply: (scope: Slot) => void | Promise<void>): v
 }
 
 async function chooseFile(panel: Panel, accept: string): Promise<void> {
-  const f = await pickFile(accept);
+  const picked = await pickFile(accept);
+  if (!picked) return;
+  // Offered for cropping first
+  const f = await cropBackground(picked);
   if (!f) return;
   askScope(panel, async scope => {
-    const error = await applyFile(scope, f);
+    const error = await applyFile(scope, f.file, f.crop);
     if (error) ui.prompt = { title: 'Custom background', label: '', confirm: 'OK', input: 'none', text: error, onsubmit: () => {} };
   });
 }

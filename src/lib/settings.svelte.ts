@@ -40,11 +40,18 @@ export interface Settings {
   interface: 'standard' | 'rooms';
   rounded: boolean;       // rounded corners on menus, windows, server icons and cards
   roundness: number;      // how round, 0 to 200 percent (only used while rounded is on)
-  panelClear: boolean;    // the bars and title panels let the background through
-  panelDark: boolean;     // the bars and title panels are darkened
-  panelDarkness: number;  // how dark, 0 to 95 percent
-  panelBlur: boolean;     // the bars and title panels blur what is behind them
-  panelBlurPx: number;    // how much, 0 to 40 pixels
+  // See-through surfaces (Settings > Appearance): each of windows and menus, buttons and the bars and title
+  // panels has how see-through it is (0 to 100 percent), and while it is, how dark and how blurred
+  glassSync: boolean;           // changing one slider changes the same slider of the other two
+  windowTransparency: number;
+  windowDarkness: number;       // 0 to 95 percent
+  windowBlurPx: number;         // 0 to 40 pixels
+  buttonTransparency: number;
+  buttonDarkness: number;
+  buttonBlurPx: number;
+  panelTransparency: number;
+  panelDarkness: number;
+  panelBlurPx: number;
   shareBitrate: number;   // upper limit of our stream's bitrate, Mbit/s
   shareHeight: number;    // largest picture height of our stream, in pixels (never above what the source has)
   shareFps: number;       // frame rate of our stream
@@ -103,10 +110,15 @@ const defaults: Settings = {
   interface: 'standard',
   rounded: false,
   roundness: 50,
-  panelClear: true,
-  panelDark: true,
+  glassSync: false,
+  windowTransparency: 0,
+  windowDarkness: 40,
+  windowBlurPx: 10,
+  buttonTransparency: 0,
+  buttonDarkness: 40,
+  buttonBlurPx: 10,
+  panelTransparency: 100,
   panelDarkness: 40,
-  panelBlur: true,
   panelBlurPx: 10,
   shareBitrate: 4,
   shareHeight: 1080,
@@ -131,11 +143,27 @@ const defaults: Settings = {
   shortcutsGlobal: false
 };
 
+// The see-through settings as numbers in range. Older settings had a Transparent panels checkbox with
+// Darker and Blurred checkboxes: off meant solid, and a dark or blur checkbox off meant none of it.
+function glassFix(s: Settings): Partial<Settings> {
+  const old = s as unknown as { panelClear?: boolean; panelDark?: boolean; panelBlur?: boolean };
+  const num = (v: unknown, max: number, d: number) => Math.min(max, Math.max(0, Math.round(Number(v ?? d)) || 0));
+  const migrate = s.panelTransparency === undefined;
+  return {
+    glassSync: !!s.glassSync,
+    windowTransparency: num(s.windowTransparency, 100, 0), windowDarkness: num(s.windowDarkness, 95, 40), windowBlurPx: num(s.windowBlurPx, 40, 10),
+    buttonTransparency: num(s.buttonTransparency, 100, 0), buttonDarkness: num(s.buttonDarkness, 95, 40), buttonBlurPx: num(s.buttonBlurPx, 40, 10),
+    panelTransparency: num(migrate ? (old.panelClear === false ? 0 : 100) : s.panelTransparency, 100, 100),
+    panelDarkness: migrate && old.panelDark === false ? 0 : num(s.panelDarkness, 95, 40),
+    panelBlurPx: migrate && old.panelBlur === false ? 0 : num(s.panelBlurPx, 40, 10)
+  };
+}
+
 class SettingsStore {
   settings = $state<Settings>(this.fix(load('mumh5.settings', defaults)));
 
   private fix(s: Settings): Settings {
-    return { ...s, theme: normalizeTheme(s.theme), customColors: cleanColors(s.customColors), panelColors: cleanPanelColors(s.panelColors), bannerMaxMbit: Math.min(1000, Math.max(0, Number(s.bannerMaxMbit) || 0)), roundness: Math.min(200, Math.max(0, Math.round(Number(s.roundness)) || 0)), panelClear: s.panelClear ?? true, panelDark: s.panelDark ?? true, panelDarkness: Math.min(95, Math.max(0, Math.round(Number(s.panelDarkness ?? 40)) || 0)), panelBlur: s.panelBlur ?? true, panelBlurPx: Math.min(40, Math.max(0, Math.round(Number(s.panelBlurPx ?? 10)) || 0)) };
+    return { ...s, theme: normalizeTheme(s.theme), customColors: cleanColors(s.customColors), panelColors: cleanPanelColors(s.panelColors), bannerMaxMbit: Math.min(1000, Math.max(0, Number(s.bannerMaxMbit) || 0)), roundness: Math.min(200, Math.max(0, Math.round(Number(s.roundness)) || 0)), ...glassFix(s) };
   }
   servers = $state<SavedServer[]>(loadList('mumh5.servers'));
   // Pinned sha256 fingerprints of server certificates, keyed by host:port (trust on first use)

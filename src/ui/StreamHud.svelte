@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import Icon from './Icon.svelte';
+  import FsMuteDeafen from './FsMuteDeafen.svelte';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { RATES, rateLabel } from '../lib/yt-controls.ts';
   import { CAP_FPS, CAP_HEIGHTS, capFpsLabel, capHeightLabel, isCapped, type ViewerCap } from '../lib/stream-quality.ts';
@@ -29,9 +31,11 @@
 
 {#if cap || speed || fullscreen || popped}
 <div class="hud" class:open={!!open} bind:this={root} role="presentation" ondblclick={e => e.stopPropagation()} oncontextmenu={e => e.stopPropagation()}>
+    <!-- Full screen: mute and deafen, left of everything else -->
+    {#if fullscreen}<FsMuteDeafen />{/if}
     {#if cap}
       <div class="wrap">
-        <button class="ibtn" class:on={open === 'quality' || isCapped(current)} onclick={() => toggle('quality')}
+        <button use:tip class="ibtn" class:on={open === 'quality' || isCapped(current)} onclick={() => toggle('quality')}
           aria-label="Stream quality" aria-expanded={open === 'quality'} title="Stream quality (for you only)"><Icon name="settings" size={20} /></button>
         {#if open === 'quality'}
           <div class="menu" role="dialog" aria-label="Stream quality">
@@ -52,7 +56,7 @@
     {/if}
     {#if speed}
       <div class="wrap">
-        <button class="ibtn" class:on={open === 'speed' || rate !== 1} onclick={() => toggle('speed')}
+        <button use:tip class="ibtn" class:on={open === 'speed' || rate !== 1} onclick={() => toggle('speed')}
           aria-label="Playback speed" aria-expanded={open === 'speed'} title="Playback speed (for everyone)"><Icon name="speed" size={20} /></button>
         {#if open === 'speed'}
           <div class="menu list" role="menu">
@@ -64,8 +68,8 @@
         {/if}
       </div>
     {/if}
-    {#if fullscreen}<button class="ibtn" onclick={onfullscreen} aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} title={fullscreen ? 'Exit full screen' : 'Full screen'}><Icon name="expand" size={20} /></button>{/if}
-    {#if fullscreen || popped}<button class="ibtn" class:on={popped} onclick={onpopout} aria-label={popped ? 'Bring back into the window' : 'Open in a separate window'} title={popped ? 'Bring back into the window' : 'Open in a separate window'}><Icon name="popout" size={20} /></button>{/if}
+    {#if fullscreen}<button use:tip class="ibtn" onclick={onfullscreen} aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} title={fullscreen ? 'Exit full screen' : 'Full screen'}><Icon name="expand" size={20} /></button>{/if}
+    {#if fullscreen || popped}<button use:tip class="ibtn" class:on={popped} onclick={onpopout} aria-label={popped ? 'Bring back into the window' : 'Open in a separate window'} title={popped ? 'Bring back into the window' : 'Open in a separate window'}><Icon name="popout" size={20} /></button>{/if}
 </div>
 {/if}
 

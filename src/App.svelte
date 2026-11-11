@@ -11,6 +11,7 @@
   import PromptDialog from './ui/PromptDialog.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import ColorPicker from './ui/ColorPicker.svelte';
+  import ImageEditor from './ui/ImageEditor.svelte';
   import IdentityWizard from './ui/IdentityWizard.svelte';
   import QuickAudio from './ui/QuickAudio.svelte';
   import UserInfoDialog from './ui/UserInfoDialog.svelte';
@@ -84,16 +85,26 @@
     }
   });
 
-  // The bars and title panels: see-through, darkened, blurred (Settings > Appearance)
+  // Windows and menus, buttons, and the bars and title panels: see-through, darkened, blurred (Settings > Appearance).
+  // Each is a share of solid color (100 minus the transparency), a black shade and a blur, as variables on the root;
+  // glass.css and the panels read them. At 0 percent transparency nothing is changed, so darkness and blur do not count.
   $effect(() => {
-    const st = document.documentElement.style, s = store.settings;
-    const shade = s.panelClear && s.panelDark ? Math.min(95, Math.max(0, Number(s.panelDarkness) || 0)) / 100 : 0;
-    st.setProperty('--panel-shade', String(shade));
-    st.setProperty('--panel-blur', `${s.panelClear && s.panelBlur ? Math.min(40, Math.max(0, Number(s.panelBlurPx) || 0)) : 0}px`);
-    if (s.panelClear) st.setProperty('--glass', 'transparent'); else st.removeProperty('--glass');
-    st.setProperty('--glass-0', s.panelClear ? 'transparent' : 'var(--bg-0)');
-    st.setProperty('--glass-1', s.panelClear ? 'transparent' : 'var(--bg-1)');
-    st.setProperty('--panel-divider', s.panelClear ? `rgb(0 0 0 / ${shade})` : 'var(--line)');
+    const root = document.documentElement, st = root.style, s = store.settings;
+    const n = (v: unknown, max: number) => Math.min(max, Math.max(0, Number(v) || 0));
+    const set = (key: 'window' | 'button' | 'panel', t: number, d: number, b: number) => {
+      st.setProperty(`--${key === 'panel' ? 'panel' : key === 'button' ? 'btn' : 'win'}-solid`, `${100 - t}%`);
+      st.setProperty(`--${key === 'panel' ? 'panel' : key === 'button' ? 'btn' : 'win'}-shade`, String(t > 0 ? d / 100 : 0));
+      st.setProperty(`--${key === 'panel' ? 'panel' : key === 'button' ? 'btn' : 'win'}-blur`, `${t > 0 ? b : 0}px`);
+    };
+    const pt = n(s.panelTransparency, 100), bt = n(s.buttonTransparency, 100), wt = n(s.windowTransparency, 100);
+    set('panel', pt, n(s.panelDarkness, 95), n(s.panelBlurPx, 40));
+    set('button', bt, n(s.buttonDarkness, 95), n(s.buttonBlurPx, 40));
+    set('window', wt, n(s.windowDarkness, 95), n(s.windowBlurPx, 40));
+    st.setProperty('--glass-0', `color-mix(in srgb, var(--bg-0) ${100 - pt}%, transparent)`);
+    st.setProperty('--glass-1', `color-mix(in srgb, var(--bg-1) ${100 - pt}%, transparent)`);
+    st.setProperty('--panel-divider', pt > 0 ? `rgb(0 0 0 / ${n(s.panelDarkness, 95) / 100})` : 'var(--line)');
+    root.toggleAttribute('data-btn-glass', bt > 0);
+    root.toggleAttribute('data-win-glass', wt > 0);
   });
 
   // A color chosen for one panel (custom scheme only)
@@ -207,6 +218,7 @@
 <ImageViewer />
 <ContextMenu />
 <ColorPicker />
+<ImageEditor />
 
 <style>
   .app { position: relative; height: 100%; display: flex; overflow: hidden; isolation: isolate; }

@@ -151,7 +151,7 @@ class TextChannels {
         if (!this.keep(st, [msg]).length) return;
         if (st.shown.has(m.c)) {
           s.addText(msg, false, false, sender);
-          sounds.play('message');
+          sounds.play(s.mentionsMe(msg.h) ? 'mention' : 'message');
         }
         break;
       }

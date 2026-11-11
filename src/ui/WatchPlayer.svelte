@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import { playerKey } from '../lib/player-keys.ts';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { watchFileStream } from '../core/watch-stream.ts';
@@ -377,7 +378,7 @@
 
 {#snippet bar()}
   <div class="controls">
-    <button class="ctl" onclick={toggle} aria-label={playingNow ? 'Pause' : 'Play'} title={playingNow ? 'Pause' : 'Play'}>
+    <button use:tip class="ctl" onclick={toggle} aria-label={playingNow ? 'Pause' : 'Play'} title={playingNow ? 'Pause' : 'Play'}>
       <Icon name={playingNow ? 'pause' : 'play'} size={20} />
     </button>
     <span class="time">{clock(dragTo ?? pos)}{duration ? ` / ${clock(duration)}` : ''}</span>
@@ -385,28 +386,28 @@
       value={Math.min(dragTo ?? pos, duration || 1)} aria-label="Seek"
       oninput={e => { dragTo = Number(e.currentTarget.value); }}
       onchange={e => { const to = Number(e.currentTarget.value); watchTogether.seek(to); pos = to; dragTo = null; e.currentTarget.blur(); }} />
-    <button class="ctl" onclick={() => setVolume(volume === 0 || needsUnmute ? 1 : 0)} aria-label="Mute" title="Mute">
+    <button use:tip class="ctl" onclick={() => setVolume(volume === 0 || needsUnmute ? 1 : 0)} aria-label="Mute" title="Mute">
       <Icon name={volume === 0 ? 'volume-off' : 'volume'} size={18} />
     </button>
     <input class="vol" type="range" min="0" max="1" step="0.05" value={volume} aria-label="Volume"
       oninput={e => setVolume(Number(e.currentTarget.value))} onchange={e => e.currentTarget.blur()} />
     {#if watchTogether.mode === 3 && hasNext}
-      <button class="ctl" onclick={goNext} aria-label="Next link" title="Next link">
+      <button use:tip class="ctl" onclick={goNext} aria-label="Next link" title="Next link">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5l10 7-10 7V5zM18 5h2v14h-2V5z" /></svg>
       </button>
     {/if}
     {#if watchTogether.mode === 3}
-      <button class="ctl" class:on={tp.chosen !== 'off'} onclick={() => { subsOpen = !subsOpen; voiceOpen = false; }} aria-label="Subtitles" aria-expanded={subsOpen}
+      <button use:tip class="ctl" class:on={tp.chosen !== 'off'} onclick={() => { subsOpen = !subsOpen; voiceOpen = false; }} aria-label="Subtitles" aria-expanded={subsOpen}
         title={tp.chosen === 'off' ? 'Subtitles' : 'Subtitles are on'}>
         <Icon name="captions" size={18} />
       </button>
-      <button class="ctl" onclick={() => { voiceOpen = !voiceOpen; subsOpen = false; }} aria-label="Voice" aria-expanded={voiceOpen}
+      <button use:tip class="ctl" onclick={() => { voiceOpen = !voiceOpen; subsOpen = false; }} aria-label="Voice" aria-expanded={voiceOpen}
         title={tp.audio.find(a => a.on)?.label ? `Voice: ${tp.audio.find(a => a.on)?.label}` : 'Voice'}>
         <Icon name="voiceover" size={18} />
       </button>
     {/if}
     {#if share && !watchTogether.isHost}
-      <button class="ctl dl" onclick={download} aria-label={dlBusy ? 'Stop downloading' : 'Download the video'}
+      <button use:tip class="ctl dl" onclick={download} aria-label={dlBusy ? 'Stop downloading' : 'Download the video'}
         title={dlBusy ? `Downloading ${dlPct}% (click to stop)` : dl?.state === 'ready' ? (dl.saved ? `Saved as ${dl.saved}` : 'Save the video') : dl?.state === 'failed' ? `${dl.error} (click to try again)` : `Download the whole video (${share.n})`}>
         {#if dlBusy}<span class="pct">{dlPct}%</span>{/if}
         <Icon name={dlBusy ? 'x' : 'download'} size={18} />
@@ -434,19 +435,20 @@
             <div class="spinner"></div>
             <p>Finding people who share this torrent...</p>
             {#if tp.stats}<p class="sub">{tp.stats.peers} {tp.stats.peers === 1 ? 'peer' : 'peers'}{tp.stats.ready ? `, ${speed(tp.stats.down)}` : ''}</p>{/if}
+            {#if tp.converting}<p class="sub">Converting {tp.converting} so it can be played. The first seconds take a while.</p>{/if}
           </div>
         {:else}
           {#if tp.buffering && !tEnded}
             <div class="buffer"><div class="spinner small"></div></div>
           {/if}
           {#if tEnded && hasNext}
-            <button class="next-big" onclick={goNext} aria-label="Next link" title="Next link">
+            <button use:tip class="next-big" onclick={goNext} aria-label="Next link" title="Next link">
               <svg width="44" height="44" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5l10 7-10 7V5zM18 5h2v14h-2V5z" /></svg>
               <span>Next</span>
             </button>
           {/if}
           {#if tp.stats}
-            <span class="chip" aria-live="off">{speed(tp.stats.down)} · {tp.stats.peers} {tp.stats.peers === 1 ? 'peer' : 'peers'} · {Math.floor(tp.stats.progress * 100)}%</span>
+            <span class="chip" aria-live="off">{speed(tp.stats.down)} · {tp.stats.peers} {tp.stats.peers === 1 ? 'peer' : 'peers'} · {Math.floor(tp.stats.progress * 100)}%{tp.converting ? ' · converted' : ''}</span>
           {/if}
           {#if !playingNow && pos < 1000}
             <p class="hint">{watchTogether.isHost ? 'Press play when everybody has joined' : 'Waiting for the host to press play'}</p>

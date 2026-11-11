@@ -5,6 +5,7 @@ import { desktop, torrentError } from './native.ts';
 import { store } from './settings.svelte.ts';
 import type { TorrentMeta, TorrentStats } from '../core/torrent-meta.ts';
 import { decodeSubtitle, langLabel, normLang, parseSubtitles, preferredLangs, type Cue, type SubtitleOption } from '../core/subtitles.ts';
+import { pickAudio, planPlayback, type MediaInfo } from '../core/transcode.ts';
 import type { EmbeddedBatch, EmbeddedTrack } from '../core/mkv.ts';
 
 const MAX_DELAY_MS = 60000;
@@ -22,6 +23,9 @@ interface AudioTrackListLike {
   addEventListener(ev: string, fn: () => void): void;
   removeEventListener(ev: string, fn: () => void): void;
 }
+
+// The <video> gave up on the file itself
+class MediaFailure extends Error {}
 
 export class TorrentPlay {
   status = $state<TorrentStatus>('idle');
@@ -44,6 +48,11 @@ export class TorrentPlay {
   // The voices of the video: always at least one (the file's own sound), the chosen one marked
   audio = $state<AudioOption[]>([]);
 
+  // Why the video is being converted ("HEVC video", "DTS audio"), or '' when it plays as it is
+  converting = $state('');
+
+  private hls: { destroy(): void } | null = null;
+  private conv: { base: string; info: MediaInfo; voice: number } | null = null;
   private video: HTMLVideoElement | null = null;
   private meta: TorrentMeta | null = null;
   private track: TextTrack | null = null;
@@ -89,18 +98,30 @@ export class TorrentPlay {
     try {
       const play = await api.play({ magnet: meta.magnet, fileIdx: meta.fileIdx });
       if (run !== this.run) return;
-      await new Promise<void>((resolve, reject) => {
-        const loaded = () => { video.removeEventListener('error', failed); resolve(); };
-        const failed = () => { video.removeEventListener('loadedmetadata', loaded); reject(new Error(this.mediaError(video))); };
-        video.addEventListener('loadedmetadata', loaded, { once: true });
-        video.addEventListener('error', failed, { once: true });
-        video.src = play.url;
-        video.load();
-      });
+      // What is in the file decides whether the page can play it itself or it has to be converted first (HEVC,
+      // DTS, an AVI ...). Without ffmpeg there is no probe, and the file is simply tried.
+      const probe = await api.probe?.(meta.infoHash, meta.fileIdx).catch(() => null) ?? null;
+      if (run !== this.run) return;
+      const info = probe?.info ?? null;
+      const base = probe?.hls ?? null;
+      const plan = info ? planPlayback(info, play.fileName, m => video.canPlayType(m) !== '') : { direct: true, reason: '' };
+      if (!plan.direct && base && info) {
+        this.converting = plan.reason;
+        await this.loadConverted(video, base, info, pickAudio(info.audio, preferredLangs(navigator.languages, '')), 0, run);
+      } else {
+        try {
+          await this.loadDirect(video, play.url);
+        } catch (e) {
+          // The page's guess was wrong (or there was no probe): convert it after all
+          if (!(e instanceof MediaFailure) || !base || !info) throw new Error(this.mediaError(video, !!base));
+          this.converting = 'this format';
+          await this.loadConverted(video, base, info, pickAudio(info.audio, preferredLangs(navigator.languages, '')), 0, run);
+        }
+      }
       if (run !== this.run) return;
       this.status = 'ready';
       ready();
-      this.watchAudio(video);
+      if (!this.conv) this.watchAudio(video);
       void this.findSubtitles(meta, run, undefined, this.loadEmbedded(meta, run));
     } catch (e) {
       if (run !== this.run) return;
@@ -109,11 +130,60 @@ export class TorrentPlay {
     }
   }
 
-  private mediaError(video: HTMLVideoElement): string {
+  private loadDirect(video: HTMLVideoElement, url: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const loaded = () => { video.removeEventListener('error', failed); resolve(); };
+      const failed = () => { video.removeEventListener('loadedmetadata', loaded); reject(new MediaFailure()); };
+      video.addEventListener('loadedmetadata', loaded, { once: true });
+      video.addEventListener('error', failed, { once: true });
+      video.src = url;
+      video.load();
+    });
+  }
+
+  // Plays the converted video (H.264 + AAC, cut into HLS segments by ffmpeg) through hls.js; `at` is where to start, in seconds
+  private async loadConverted(video: HTMLVideoElement, base: string, info: MediaInfo, voice: number, at: number, run: number): Promise<void> {
+    const { default: Hls } = await import('hls.js');
+    if (run !== this.run) return;
+    if (!Hls.isSupported()) throw new Error('This video has to be converted, and this computer can not play converted video.');
+    this.destroyHls();
+    video.removeAttribute('src');
+    const slow = { maxTimeToFirstByteMs: 180000, maxLoadTimeMs: 240000, timeoutRetry: { maxNumRetry: 1, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: { maxNumRetry: 2, retryDelayMs: 1000, maxRetryDelayMs: 4000 } };
+    // The first piece of a 4K film takes a while to make: be patient with it. No worker: the page's policy allows none.
+    const hls = new Hls({ enableWorker: false, startPosition: at, maxBufferLength: 40, backBufferLength: 30, manifestLoadPolicy: { default: slow }, fragLoadPolicy: { default: slow } });
+    this.hls = hls;
+    this.conv = { base, info, voice };
+    this.audio = info.audio.length
+      ? info.audio.map(a => ({
+          index: a.ord, on: a.ord === voice,
+          label: a.lang && a.lang !== 'und' ? langLabel(a.lang) : a.title || `Track ${a.ord + 1}`,
+          detail: [a.title && a.lang ? a.title : '', a.codec.toUpperCase(), a.channels > 2 ? `${a.channels - 1}.1` : ''].filter(Boolean).join(' · ')
+        }))
+      : [{ index: 0, label: 'Default', detail: '', on: true }];
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      video.addEventListener('loadedmetadata', () => { settled = true; resolve(); }, { once: true });
+      hls.on(Hls.Events.ERROR, (_ev: unknown, d: { fatal?: boolean; details?: string }) => {
+        if (!d.fatal) return;
+        const err = new Error('The video could not be converted for playing. Pick another file or another release.');
+        if (settled) { if (run === this.run) { this.status = 'failed'; this.error = err.message; } } else reject(err);
+      });
+      hls.loadSource(`${base}${voice}/index.m3u8`);
+      hls.attachMedia(video);
+    });
+  }
+
+  private destroyHls() {
+    this.hls?.destroy();
+    this.hls = null;
+  }
+
+  private mediaError(video: HTMLVideoElement, canConvert = false): string {
     // 4: the container or the codec is not one the player knows (HEVC, for one)
-    return video.error?.code === 4
-      ? 'This video\'s format can not be played in mumh5 (a codec such as HEVC is not supported). Pick another file or another release.'
-      : 'The video could not be played.';
+    if (video.error?.code !== 4) return 'The video could not be played.';
+    return canConvert
+      ? 'This video\'s format can not be played in mumh5, and converting it failed. Pick another file or another release.'
+      : 'This video\'s format can not be played in mumh5 (a codec such as HEVC or DTS is not supported), and ffmpeg was not found to convert it. Install ffmpeg (or set MUMH5_FFMPEG and MUMH5_FFPROBE), or pick another file or release.';
   }
 
   private fail(video: HTMLVideoElement) {
@@ -129,6 +199,9 @@ export class TorrentPlay {
     this.offCues = null;
     this.offAudio?.();
     this.offAudio = null;
+    this.destroyHls();
+    this.conv = null;
+    this.converting = '';
     this.embedded = [];
     this.embCues.clear();
     this.scan = { state: 'idle', progress: 0 };
@@ -280,10 +353,24 @@ export class TorrentPlay {
   }
 
   setAudio(index: number): void {
+    if (this.conv) { void this.switchVoice(index); return; }
     const list = this.video ? this.audioList(this.video) : null;
     if (!list || index < 0 || index >= list.length) return;
     for (let i = 0; i < list.length; i++) list[i].enabled = i === index;
     this.audio = this.audio.map(o => ({ ...o, on: o.index === index }));
+  }
+
+  // A converted video has one voice in it at a time: another one is made from where the person is
+  private async switchVoice(index: number): Promise<void> {
+    const video = this.video, conv = this.conv, run = this.run;
+    if (!video || !conv || index === conv.voice || !conv.info.audio.some(a => a.ord === index)) return;
+    const at = video.currentTime, paused = video.paused;
+    try {
+      await this.loadConverted(video, conv.base, conv.info, index, at, run);
+      if (run === this.run && !paused) void video.play().catch(() => {});
+    } catch (e) {
+      if (run === this.run) { this.status = 'failed'; this.error = torrentError(e); }
+    }
   }
 
   // `remember`: a choice made by hand is the language to start with next time

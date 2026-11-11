@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import { onDestroy, untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import Avatar from './Avatar.svelte';
@@ -644,17 +645,17 @@ const self = $derived(session.self);
   {@const open = inStack(id)}
   {@const n = watching(id)}
   <span class="ctl" role="group" aria-label={isWT ? 'Watch together' : kind === 'camera' ? 'Camera' : 'Screen share'}>
-    <span class="status" role="status" title="{n} watching"><Icon name={kind === 'watch' ? 'tv' : kind} size={14} />{n} watching</span>
+    <span use:tip class="status" role="status" title="{n} watching"><Icon name={kind === 'watch' ? 'tv' : kind} size={14} />{n} watching</span>
     {#if open}
-      <button class="icon-btn" title="Toggle picture-in-picture" aria-label="Toggle picture-in-picture" onclick={() => togglePip(id)}><Icon name="popout" size={16} /></button>
-      <button class="icon-btn" title="Full screen" aria-label="Full screen" onclick={() => fullscreen(id)}><Icon name="expand" size={16} /></button>
+      <button use:tip class="icon-btn" title="Toggle picture-in-picture" aria-label="Toggle picture-in-picture" onclick={() => togglePip(id)}><Icon name="popout" size={16} /></button>
+      <button use:tip class="icon-btn" title="Full screen" aria-label="Full screen" onclick={() => fullscreen(id)}><Icon name="expand" size={16} /></button>
     {/if}
     {#if isWT || !isMine || open}
-      <button class="icon-btn" title={isWT ? 'Leave watch together' : isMine ? `Close your ${kind} (it keeps being shared)` : 'Stop watching'}
+      <button use:tip class="icon-btn" title={isWT ? 'Leave watch together' : isMine ? `Close your ${kind} (it keeps being shared)` : 'Stop watching'}
         aria-label={isWT ? 'Leave watch together' : isMine ? `Close your ${kind}` : 'Stop watching'} onclick={() => leave(id)}><Icon name="door" size={16} /></button>
     {/if}
     {#if isWT ? watchTogether.isHost : isMine}
-      <button class="icon-btn" title={isWT ? 'End watch together' : `Stop sharing your ${kind}`}
+      <button use:tip class="icon-btn" title={isWT ? 'End watch together' : `Stop sharing your ${kind}`}
         aria-label={isWT ? 'End watch together' : `Stop sharing your ${kind}`} onclick={() => end(id)}><Icon name="x" size={16} /></button>
     {/if}
   </span>
@@ -762,7 +763,7 @@ const self = $derived(session.self);
 {/snippet}
 
 {#if visible && self}
-  <section class="stage" class:meeting class:collapsed class:fill aria-label="Voice channel"
+  <section class="stage" class:meeting class:collapsed class:fill class:fs={isFullscreen} aria-label="Voice channel"
     style:height={collapsed || fill || meeting ? undefined : `${tilesHeight}px`}>
     <header>
     <button class="title" onclick={toggle} aria-expanded={!collapsed}>
@@ -809,7 +810,10 @@ const self = $derived(session.self);
   .stage.fill { flex: 1; border-bottom: 0; }
   .stage { position: relative; flex: none; display: flex; flex-direction: column; min-height: 0; border-bottom: 5px solid transparent; background: transparent; --rh-shift: 2.5px; z-index: 1; }
   /* The divider under the tiles: 5px, 40% dark and 10px blur like the others; the resize handle is centered on it */
+  /* Full screen: the stage is its own stacking context, so lift the whole stage above the side panels, their resize handles and dividers (otherwise they draw over the picture), and drop the stage's own divider */
+  .stage.fs { z-index: 9999; }
   .stage:not(.fill)::after { content: ''; position: absolute; left: 0; right: 0; bottom: -5px; height: 5px; background: var(--panel-divider, rgb(0 0 0 / 0.4)); backdrop-filter: blur(var(--panel-blur, 10px)); pointer-events: none; }
+  .stage.fs::after { display: none; }
   header { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 8px 4px 4px; background-color: var(--glass-1, transparent); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
   .ctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
   .title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 6px 8px; text-align: left; }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from '../lib/tip.ts';
   import Icon from './Icon.svelte';
   import Avatar from './Avatar.svelte';
   import { session, sessions } from '../lib/session.svelte.ts';
@@ -34,13 +35,6 @@
     if (hostingWatch) watchTogether.end();
     else if (share.stream) share.stop();
     else share.start(sessions.active);
-  }
-
-  // One button for the whole tree: open everything, then close everything
-  let allOpen = $state(false);
-  function toggleAll() {
-    allOpen = !allOpen;
-    session.setAllExpanded(allOpen);
   }
 
   function openQuick(e: MouseEvent, kind: 'input' | 'output') {
@@ -81,7 +75,7 @@
       onclick={() => session.setSelfDeaf(!deafened)} oncontextmenu={e => openQuick(e, 'output')}>
       <Icon name={deafened ? 'headphones-off' : 'headphones'} size={18} />
     </button>
-    <button class="icon-btn" class:live={sharingHere} title={hostingWatch ? 'End watch together' : sharingHere ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
+    <button use:tip class="icon-btn" class:live={sharingHere} title={hostingWatch ? 'End watch together' : sharingHere ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
       aria-label={hostingWatch ? 'End watch together' : sharingHere ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'} disabled={!sharingHere && !canShare} onclick={toggleShare}>
       <Icon name={sharingHere && !hostingWatch ? share.kind : 'screen'} size={18} />
     </button>
@@ -93,11 +87,6 @@
     <button class="icon-btn" title="Configure" aria-label="Configure" onclick={() => (ui.settingsOpen = true)}>
       <Icon name="settings" size={18} />
     </button>
-    <span class="sep"></span>
-    <button class="icon-btn" title={allOpen ? 'Collapse all channels' : 'Expand all channels'} aria-label={allOpen ? 'Collapse all channels' : 'Expand all channels'}
-      disabled={session.status !== 'connected'} onclick={toggleAll}>
-      <Icon name="filter" size={18} />
-    </button>
   </div>
 </footer>
 
@@ -106,7 +95,7 @@
   .me { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 6px; background-color: var(--glass-0, transparent); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); border-top: 1px solid var(--line); }
   .tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
   .sep { width: 1px; height: 18px; background: var(--line); }
-  /* Eight buttons and three dividers fit the default width (260px) in one row */
+  /* The buttons and dividers fit the default width (260px) in one row */
   .tools .icon-btn { width: 30px; }
   .me.inline { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 6px 16px; }
   .me.inline .profile, .me.inline .offline-who { flex: 0 1 220px; }

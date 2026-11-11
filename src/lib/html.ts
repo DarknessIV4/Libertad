@@ -35,6 +35,16 @@ export function mediaKind(name: string): EmbedKind | null {
   return m ? EXT[m[1].toLowerCase()] ?? null : null;
 }
 
+// GIF links from the well-known GIF sites show as the picture itself, with no host to trust first:
+// a direct .gif link, or a giphy.com/gifs/... page (its picture lives at a fixed address)
+const GIF_HOST = /(^|\.)(tenor\.com|giphy\.com|klipy\.com)$/;
+function gifImage(u: URL): string | null {
+  if (!/^https?:$/.test(u.protocol) || !GIF_HOST.test(u.hostname.toLowerCase())) return null;
+  if (/\.gif$/i.test(u.pathname)) return u.href;
+  const id = /^\/gifs\/(?:.*-)?([A-Za-z0-9]+)\/?$/.exec(u.pathname)?.[1];
+  return id && /(^|\.)giphy\.com$/.test(u.hostname) ? `https://media.giphy.com/media/${id}/giphy.gif` : null;
+}
+
 const purifyConfig: Config & { RETURN_DOM_FRAGMENT: true } = {
   ALLOWED_TAGS: ['a', 'b', 'i', 'u', 's', 'strong', 'em', 'br', 'p', 'span', 'div', 'ul', 'ol', 'li',
     'blockquote', 'code', 'pre', 'img', 'h1', 'h2', 'h3', 'h4', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
@@ -111,6 +121,13 @@ export function renderIncoming(raw: string, trustedHosts: string[]): { html: str
     }
     let url: URL;
     try { url = new URL(a.getAttribute('href')!); } catch { continue; }
+    const gif = gifImage(url);
+    if (gif) {
+      if (!embeds.some(e => e.url === gif) && embeds.filter(e => e.kind === 'image').length < 3) embeds.push({ kind: 'image', url: gif, name: 'GIF' });
+      // A message that is only the link shows just the picture
+      if (frag.textContent?.trim() === a.textContent?.trim()) a.remove();
+      continue;
+    }
     const trusted = trustedHosts.includes(url.host.toLowerCase());
     const name = decodeURIComponent(url.pathname.split('/').pop() ?? '');
     const kind = trusted ? mediaKind(name) : null;

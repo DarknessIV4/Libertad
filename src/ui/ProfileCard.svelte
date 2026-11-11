@@ -12,11 +12,13 @@
   import { renderIncoming } from '../lib/html.ts';
   import { makeAvatar } from '../lib/images.ts';
   import { setBannerFromFile } from '../lib/banner-actions.ts';
+  import { avatarGif } from '../lib/gif-edit.ts';
   import { colorPicker } from '../lib/colorpicker.svelte.ts';
   import { stripBanner, type BannerView } from '../core/banner.ts';
   import { ownAvatar } from '../lib/avatar.svelte.ts';
   import { ownBanner } from '../lib/banner.svelte.ts';
   import { stills, bgPause } from '../lib/still.svelte.ts';
+  import { imageEditor, EDITABLE_OR_GIF } from '../lib/image-editor.svelte.ts';
 
   // A person's card, next to what was clicked (a sheet at the bottom on phones)
   const open = $derived(ui.profile);
@@ -45,6 +47,14 @@
   const banner = $derived<BannerView | null>(previewColor && isSelf ? { kind: 'color', color: previewColor } : user ? session.banner(user.session, 'banner') : null);
   const bannerStyle = $derived(banner?.kind === 'image' ? `background-image: url("${(user && bgPause.paused(user) ? stills.of(banner) : null) ?? banner.src}")`
     : `background-color: ${banner?.kind === 'color' ? banner.color : `hsl(${hue} 38% 30%)`}`);
+
+  // A card background picture that covers the card too: under the banner, or all of it (banner included)
+  const skin = $derived.by(() => {
+    const v = user ? session.banner(user.session, 'profile') : null;
+    return v?.kind === 'image' && v.scope ? v : null;
+  });
+  const skinSrc = $derived(skin ? (user && bgPause.paused(user) ? stills.of(skin) : null) ?? skin.src : null);
+  const skinCss = $derived(skinSrc ? `url("${skinSrc}")` : undefined);
 
   // Gone when the person left or the connection ended
   $effect(() => { if (open && (!user || session.status !== 'connected')) close(); });
@@ -122,7 +132,7 @@
 
   // Outside the card closes it; the click still reaches what is under the pointer
   function outside(e: MouseEvent) {
-    if ((e.target as Element).closest?.('[data-colorpicker]')) return;
+    if (imageEditor.state || (e.target as Element).closest?.('[data-colorpicker]')) return;
     if (open && el && !el.contains(e.target as Node)) close();
     else if (bannerMenu && !(e.target as Element).closest?.('.bmenu, .banner-edit')) bannerMenu = false;
   }
@@ -132,13 +142,30 @@
     const file = picker?.files?.[0];
     if (picker) picker.value = '';
     if (!file) return;
-    busy = true;
     error = '';
     try {
       const limit = session.htmlLimit > 0 ? Math.min(session.htmlLimit, 131072) : 131072;
-      const bytes = await makeAvatar(file, limit);
-      if (bytes) await sessions.setAvatar(bytes);
-      else error = 'This picture does not get small enough for the server.';
+      // A picture or GIF is cropped first, in a square frame. A GIF keeps moving: it is made small and short
+      // enough for the server, frame by frame.
+      let picked: File = file;
+      if (EDITABLE_OR_GIF.test(file.type)) {
+        const r = await imageEditor.open(file, {
+          effects: false, scopes: false, square: true, title: 'Crop picture',
+          gif: file.type === 'image/gif' ? avatarGif(limit) : undefined
+        });
+        if (!r) return;
+        picked = r.file;
+      }
+      busy = true;
+      if (picked.type === 'image/gif') {
+        const gif = new Uint8Array(await picked.arrayBuffer());
+        if (gif.length <= limit) await sessions.setAvatar(gif);
+        else error = 'This GIF does not get small enough for the server.';
+      } else {
+        const bytes = await makeAvatar(picked, limit);
+        if (bytes) await sessions.setAvatar(bytes);
+        else error = 'This picture does not get small enough for the server.';
+      }
     } catch {
       error = 'This file could not be read as a picture.';
     } finally {
@@ -181,9 +208,23 @@
     const file = bannerPicker?.files?.[0];
     if (bannerPicker) bannerPicker.value = '';
     if (!file) return;
-    bannerBusy = true;
     error = '';
     try {
+      // A picture or GIF can be cropped, turned, darkened and blurred first, and then used as the banner,
+      // the space under it or the whole card. A GIF keeps moving: every frame is edited.
+      if (EDITABLE_OR_GIF.test(file.type)) {
+        const r = await imageEditor.open(file, { effects: true, scopes: true });
+        if (!r) return;
+        bannerBusy = true;
+        const scope = r.scope ?? 'banner';
+        // A picture the person did not change keeps the usual banner cut; a cropped one keeps its shape
+        const keepShape = scope !== 'banner' || r.file !== file;
+        error = scope === 'banner'
+          ? await setBannerFromFile('banner', r.file, { keepShape })
+          : await setBannerFromFile('profile', r.file, { keepShape, scope });
+        return;
+      }
+      bannerBusy = true;
       error = await setBannerFromFile('banner', file);
     } catch {
       error = 'This file could not be read as a picture.';
@@ -213,14 +254,15 @@
   }
 </script>
 
-<svelte:window onmousedowncapture={outside} onkeydown={e => { if (open && e.key === 'Escape') { if (bannerMenu) bannerMenu = false; else close(); } }} />
+<svelte:window onmousedowncapture={outside} onkeydown={e => { if (open && !imageEditor.state && e.key === 'Escape') { if (bannerMenu) bannerMenu = false; else close(); } }} />
 
 {#if open && user}
   {#if sheet}<button class="scrim" aria-label="Close" onclick={close}></button>{/if}
-  <div class="card {side}" class:sheet role="dialog" tabindex="-1" aria-label="Profile of {name}" bind:this={el}
+  <div class="card {side}" class:sheet class:skinned={skin?.scope === 'whole'} role="dialog" tabindex="-1" aria-label="Profile of {name}" bind:this={el}
     style:left={sheet ? undefined : `${pos.x}px`} style:top={sheet ? undefined : `${pos.y}px`}
+    style:background-image={skin?.scope === 'whole' ? skinCss : undefined}
     oncontextmenu={e => menu.show(e, userMenu(user))}>
-    <div class="banner" style={bannerStyle}>
+    <div class="banner" style={skin?.scope === 'whole' ? undefined : bannerStyle}>
       {#if isSelf}
         <button class="banner-edit" title="Change your banner" aria-label="Change your banner" aria-haspopup="menu" aria-expanded={bannerMenu}
           disabled={bannerBusy} onclick={() => (bannerMenu = !bannerMenu)}>
@@ -242,6 +284,7 @@
       {/if}
       <input bind:this={bannerPicker} type="file" hidden onchange={pickBanner} />
     {/if}
+    <div class="lower" class:skinned={skin?.scope === 'under'} style:background-image={skin?.scope === 'under' ? skinCss : undefined}>
     <div class="top">
       <span class="pic"><Avatar name={user.name} size={80} speaking={talking} src={session.avatar(user.session)} /></span>
       {#if isSelf}
@@ -301,6 +344,7 @@
         {/if}
       </div>
     </div>
+    </div>
   </div>
 {/if}
 
@@ -317,6 +361,11 @@
   .card.above { --from: translateY(6px); }
   .card.sheet { left: 0; right: 0; bottom: 0; width: auto; max-height: 85vh; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); animation: up 160ms var(--ease); }
   /* The banner runs behind the whole picture: as much of it below the picture as above it */
+  /* A picture over the whole card, or only under the banner */
+  .card.skinned, .lower.skinned { background-size: cover; background-position: center; background-repeat: no-repeat; }
+  .card.skinned .banner { background: none; }
+  .card.skinned h3, .card.skinned .sub, .lower.skinned h3, .lower.skinned .sub { text-shadow: 0 1px 3px rgb(0 0 0 / 0.75); color: #fff; }
+  .card.skinned .sub, .lower.skinned .sub { color: rgb(255 255 255 / 0.8); }
   .banner { position: relative; height: 128px; background-size: cover; background-position: center; background-repeat: no-repeat; }
   .banner-edit { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
     background: rgb(0 0 0 / 0.55); color: #fff; border: 0; }

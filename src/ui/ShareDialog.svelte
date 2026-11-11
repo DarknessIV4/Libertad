@@ -125,7 +125,33 @@
   let sError = $state('');
   let sRun = 0; // an answer that arrives after a newer search was started is dropped
   const sProviders = $derived([...new Set((sFound ?? []).map(f => f.provider).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
-  const sShown = $derived((sFound ?? []).filter(f => !sProvider || f.provider === sProvider));
+  // Sorting the list: Quality, Size or Peers. A first click sorts high to low, the next on the same button flips it.
+  type SortKey = 'quality' | 'size' | 'peers';
+  let sSort = $state<SortKey | null>(null);
+  let sDesc = $state(true);
+  function toggleSort(k: SortKey) {
+    if (sSort === k) sDesc = !sDesc;
+    else { sSort = k; sDesc = true; }
+  }
+  // "2160p", "4k HDR", "1080p" -> a number to compare; nothing said sorts as 0
+  function qualityRank(q: string): number {
+    const l = q.toLowerCase();
+    let n = 0;
+    const p = /(\d{3,4})\s*p/.exec(l);
+    if (/\b8k\b/.test(l)) n = 4320;
+    else if (/\b(4k|uhd)\b/.test(l)) n = 2160;
+    else if (p) n = Number(p[1]);
+    else if (/\b(cam|ts|telesync)\b/.test(l)) n = 1;
+    if (n && /hdr|dolby|\bdv\b/.test(l)) n += 0.5;
+    return n;
+  }
+  const sortValue = (f: FoundTorrent, k: SortKey) => k === 'quality' ? qualityRank(f.quality) : k === 'size' ? f.size : f.seeders;
+  const sShown = $derived.by(() => {
+    const list = (sFound ?? []).filter(f => !sProvider || f.provider === sProvider);
+    const k = sSort;
+    if (!k) return list;
+    return [...list].sort((a, b) => (sortValue(a, k) - sortValue(b, k)) * (sDesc ? -1 : 1));
+  });
 
   async function searchTitles() {
     const api = desktop?.torrent;
@@ -719,6 +745,11 @@
                     <option value="">All providers ({sFound.length})</option>
                     {#each sProviders as p (p)}<option value={p}>{p} ({sFound.filter(f => f.provider === p).length})</option>{/each}
                   </select>
+                  {#each [['quality', 'Quality'], ['size', 'Size'], ['peers', 'Peers']] as const as [k, name] (k)}
+                    <button class="btn s-sort" class:on={sSort === k} onclick={() => toggleSort(k)}
+                      aria-label="Sort by {name}{sSort === k ? (sDesc ? ', high to low' : ', low to high') : ''}"
+                      title="Sort by {name}{sSort === k ? (sDesc ? ' (high to low)' : ' (low to high)') : ''}">{name}{#if sSort === k} {sDesc ? '\u25BC' : '\u25B2'}{/if}</button>
+                  {/each}
                 </div>
                 <ul class="s-found" aria-label="Torrents found">
                   {#each sShown as f (f.torrent.infoHash)}
@@ -968,6 +999,8 @@
   .s-num input { width: 64px; }
   .s-filter { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
   .s-filter select { flex: 1; min-width: 0; }
+  .s-sort { flex: none; white-space: nowrap; }
+  .s-sort.on { border-color: var(--accent); color: var(--accent); }
   .s-hit { flex-direction: column; align-items: stretch; gap: 2px; }
   .s-line1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .s-rel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

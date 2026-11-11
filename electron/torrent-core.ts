@@ -8,6 +8,8 @@ import {
   type TorrentInfo, type TorrentPlay, type TorrentStats
 } from '../src/core/torrent-meta.ts';
 import { HASH_CHUNK, openSubtitlesHash } from '../src/core/subtitles.ts';
+import type { Transcoder } from './transcode.ts';
+import type { MediaInfo } from '../src/core/transcode.ts';
 import { SubScanner, parseCuesAt, parseHead, parseTracksAt, textTracks, type EmbeddedCue, type EmbeddedTrack, type MkvHead } from '../src/core/mkv.ts';
 
 // The torrent engine of Torrent Together, without anything of Electron in it (so it can be tested
@@ -37,6 +39,8 @@ export interface EngineOptions {
   root: string;                                  // where downloads live; wiped when the engine starts and stops
   loadClient?: () => Promise<WtConstructor>;
   metadataTimeoutMs?: number;
+  // Converts what the page can not play; null/absent when there is no ffmpeg
+  transcoder?: Transcoder | null;
 }
 
 const PRIVATE = 'This is a private torrent. Its tracker would give your personal key to everybody in the channel, so it can not be shared here.';
@@ -92,6 +96,7 @@ export function createTorrentEngine(opts: EngineOptions) {
     for (const [k, scan] of scans) if (k.startsWith(`${entry.t.infoHash}:`)) { scan.cancel(); scans.delete(k); }
     for (const k of heads.keys()) if (k.startsWith(`${entry.t.infoHash}:`)) heads.delete(k);
     for (const [k, v] of torrents) if (v === entry) torrents.delete(k);
+    opts.transcoder?.release(`${entry.t.infoHash}:`);
     try { entry.t.destroy({ destroyStore: !keepFiles }); } catch { /* already gone */ }
   }
 
@@ -175,10 +180,17 @@ export function createTorrentEngine(opts: EngineOptions) {
     // A web page that was lured to another name for this computer (DNS rebinding) is not served
     if (req.headers.host !== `127.0.0.1:${port}`) return fail(403);
     if (req.method !== 'GET' && req.method !== 'HEAD') return fail(405, { Allow: 'GET, HEAD' });
-    const m = /^\/([0-9a-f]{36})\/([0-9a-f]{40})\/(\d{1,5})$/.exec((req.url ?? '').split('?')[0]);
+    const m = /^\/([0-9a-f]{36})\/([0-9a-f]{40})\/(\d{1,5})(?:\/hls\/(\d{1,2})\/(index\.m3u8|seg\d{1,6}\.ts))?$/.exec((req.url ?? '').split('?')[0]);
     if (!m || m[1] !== token) return fail(404);
     const file = torrents.get(m[2])?.t.files[Number(m[3])];
     if (!file) return fail(404);
+    if (m[5]) {
+      // The converted video: the transcoder reads the file from this same server, so it is fetched like any player does
+      if (!opts.transcoder || req.method !== 'GET') return fail(404);
+      const input = `http://127.0.0.1:${port}/${token}/${m[2]}/${m[3]}`;
+      void opts.transcoder.serve(res, `${m[2]}:${m[3]}`, input, Number(m[4]), m[5]).catch(() => { if (!res.headersSent) fail(500); else res.destroy(); });
+      return;
+    }
 
     const range = parseRange(req.headers.range, file.length);
     if (range === 'bad') return fail(416, { 'Content-Range': `bytes */${file.length}` });
@@ -214,6 +226,16 @@ export function createTorrentEngine(opts: EngineOptions) {
     file.select();
     const srv = await ensureServer();
     return { url: `http://127.0.0.1:${srv.port}/${srv.token}/${parsed.infoHash}/${meta.fileIdx}`, fileName: file.name, length: file.length };
+  }
+
+  // What is in the played file, and where its converted form is served from (null: nothing can convert it here)
+  async function probe(infoHash: string, fileIdx: number): Promise<{ info: MediaInfo | null; hls: string | null }> {
+    const tc = opts.transcoder;
+    if (!tc || !torrents.get(infoHash)?.t.files[fileIdx]) return { info: null, hls: null };
+    const srv = await ensureServer();
+    const base = `http://127.0.0.1:${srv.port}/${srv.token}/${infoHash}/${fileIdx}`;
+    const info = await tc.probe(`${infoHash}:${fileIdx}`, base);
+    return { info, hls: info && info.duration > 0 ? `${base}/hls/` : null };
   }
 
   function stats(infoHash: string, fileIdx: number): TorrentStats {
@@ -364,6 +386,7 @@ export function createTorrentEngine(opts: EngineOptions) {
   async function shutdown() {
     const client = clientP ? await clientP.catch(() => null) : null;
     const server = serverP ? await serverP.catch(() => null) : null;
+    await opts.transcoder?.shutdown().catch(() => {});
     server?.srv.close();
     server?.srv.closeAllConnections();
     torrents.clear();
@@ -371,7 +394,7 @@ export function createTorrentEngine(opts: EngineOptions) {
     await fs.rm(opts.root, { recursive: true, force: true });
   }
 
-  return { inspect, play, stats, fileFacts, embeddedTracks, embeddedScan, embeddedStop, stop, release, shutdown, isVideoName };
+  return { inspect, play, probe, stats, fileFacts, embeddedTracks, embeddedScan, embeddedStop, stop, release, shutdown, isVideoName };
 }
 
 export type TorrentEngine = ReturnType<typeof createTorrentEngine>;

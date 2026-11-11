@@ -4,14 +4,21 @@
   // darkness and blur chosen for it
   let { slot }: { slot: Slot } = $props();
   const e = $derived(customBg.slots[slot]);
+  // A cropped GIF or video: only the chosen part is drawn, and that part fills the box
+  const view = $derived.by(() => {
+    const c = e.crop;
+    if (!c) return undefined;
+    const pct = (v: number) => (Math.max(0, v) * 100).toFixed(3) + '%';
+    return `inset(${pct(c.y)} ${pct(1 - c.x - c.w)} ${pct(1 - c.y - c.h)} ${pct(c.x)})`;
+  });
 </script>
 
 {#if e.kind !== 'none' && e.url}
   <div class="bg" aria-hidden="true">
     {#if e.kind === 'image'}
-      <img src={e.url} alt="" draggable="false" style:filter={e.blur ? `blur(${e.blur}px)` : undefined} />
+      <img src={e.url} alt="" draggable="false" style:filter={e.blur ? `blur(${e.blur}px)` : undefined} style:object-view-box={view} />
     {:else}
-      <video src={e.url} autoplay loop muted playsinline disablepictureinpicture style:filter={e.blur ? `blur(${e.blur}px)` : undefined}></video>
+      <video src={e.url} autoplay loop muted playsinline disablepictureinpicture style:filter={e.blur ? `blur(${e.blur}px)` : undefined} style:object-view-box={view}></video>
     {/if}
     {#if e.darkness > 0}<div class="shade" style:opacity={e.darkness / 100}></div>{/if}
   </div>

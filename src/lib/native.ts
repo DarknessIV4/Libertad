@@ -1,5 +1,6 @@
 import type { Transport, ServerCertInfo, CertDetails, UdpChannel } from '../core/transport.ts';
 import { webApi, openWebTransport } from './web.svelte.ts';
+import type { MediaInfo } from '../core/transcode.ts';
 import type { TorrentInfo, TorrentPlay, TorrentStats } from '../core/torrent-meta.ts';
 import type { FoundEpisodes } from '../core/episodes.ts';
 import type { FoundTorrent, TitleResult } from '../core/search.ts';
@@ -41,8 +42,8 @@ export type FileExport = { ok: true; path: string } | { ok: false; reason: 'canc
 interface NativeApi extends PlatformApi {
   // Other people's profile backgrounds in the app's data folder (user-profiles/<name>/<file>); bytes null deletes
   profiles: {
-    read(name: string, file: 'meta.json' | 'banner' | 'card'): Promise<Uint8Array | null>;
-    write(name: string, file: 'meta.json' | 'banner' | 'card', bytes: Uint8Array | null): Promise<boolean>;
+    read(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile'): Promise<Uint8Array | null>;
+    write(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile', bytes: Uint8Array | null): Promise<boolean>;
   };
   files: {
     // Asks where to save (a Save dialog) and creates the file there; nothing is fetched before this says ok
@@ -65,6 +66,9 @@ interface NativeApi extends PlatformApi {
     openFile(): Promise<TorrentInfo | null>;
     // Starts downloading the file and returns the local address to play it from
     play(meta: { magnet: string; fileIdx: number }): Promise<TorrentPlay>;
+    // What the file holds, and where its converted form (H.264 + AAC, HLS) is served from. `info` is null when ffmpeg is
+    // missing or the file can not be read; `hls` ends with a slash: add "<voice>/index.m3u8".
+    probe(infoHash: string, fileIdx: number): Promise<{ info: MediaInfo | null; hls: string | null }>;
     stats(infoHash: string, fileIdx: number): Promise<TorrentStats>;
     // Stops downloading and forgets the files
     stop(infoHash: string): Promise<void>;
@@ -124,6 +128,8 @@ interface NativeApi extends PlatformApi {
   setPopoutFullScreen(name: string, fullscreen?: boolean): Promise<boolean>;
   isPopoutFullScreen(name: string): Promise<boolean>;
   linkPreview(url: string): Promise<LinkPreviewData | null>;
+  gifFetch(url: string): Promise<Uint8Array>;
+  gifSearch(q: string, page: number): Promise<{ gifs: { id: string; preview: string; url: string }[]; more: boolean }>;
   // Sets the quality inside the YouTube player's frame (see electron/yt-quality.ts)
   youtubeQuality(level: string): Promise<{ method: 'api' | 'menu' | 'none'; quality?: string; error?: string }>;
   // Sets the playback speed inside the YouTube player's frame

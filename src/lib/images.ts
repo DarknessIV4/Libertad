@@ -128,11 +128,28 @@ export async function makeAvatar(file: Blob, maxBytes: number): Promise<Uint8Arr
 // otherwise as a file, which other people fetch over WebRTC. A GIF is kept as it is (its animation
 // would be lost otherwise). Other pictures are cut to the 5:2 of the banner from the middle and
 // kept at good quality, so a detailed picture is simply shared as a file. Null: not a picture.
-export async function makeBanner(file: Blob, maxBytes: number): Promise<{ src: string } | { blob: Blob; mime: string } | null> {
+// keepShape: a picture the person already cropped (see ImageEditor): it keeps its shape, only scaled down
+export async function makeBanner(file: Blob, maxBytes: number, keepShape = false): Promise<{ src: string } | { blob: Blob; mime: string } | null> {
   if (file.type === 'image/gif') return file.size <= maxBytes ? { src: await readDataUrl(file) } : { blob: file, mime: 'image/gif' };
   if (!/^image\/(png|jpeg|webp|avif|bmp)$/.test(file.type)) return null;
   const bmp = await createImageBitmap(file);
   try {
+    if (keepShape) {
+      const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * k)), h = Math.max(1, Math.round(bmp.height * k));
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const cx = c.getContext('2d')!;
+      cx.imageSmoothingQuality = 'high';
+      cx.drawImage(bmp, 0, 0, w, h);
+      for (const q of [0.92, 0.8, 0.65, 0.5]) {
+        const b = await new Promise<Blob | null>(res => c.toBlob(res, 'image/jpeg', q));
+        if (b && b.size <= maxBytes) return { src: await readDataUrl(b) };
+        if (b && q === 0.5) return { blob: b, mime: 'image/jpeg' };
+      }
+      return null;
+    }
     const width = Math.min(1280, bmp.width), height = Math.round(width * 0.4);
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -150,5 +167,41 @@ export async function makeBanner(file: Blob, maxBytes: number): Promise<{ src: s
     return blob.size <= maxBytes ? { src: await readDataUrl(blob) } : { blob, mime: 'image/jpeg' };
   } finally {
     bmp.close();
+  }
+}
+
+// A picture of one frame of a video (a moment in, past a black first frame), at most 1280 px on its long side,
+// for the picture editor to crop on. Null: not a video this browser can decode.
+export async function videoFrame(file: Blob): Promise<File | null> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  const wait = (event: string) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), 8000);
+    video.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
+    video.addEventListener('error', () => { clearTimeout(timer); reject(new Error('undecodable')); }, { once: true });
+  });
+  try {
+    video.muted = true;
+    video.preload = 'auto';
+    video.src = url;
+    await wait('loadeddata');
+    const at = Number.isFinite(video.duration) ? Math.min(1, video.duration / 10) : 0;
+    if (at > 0) {
+      video.currentTime = at;
+      await wait('seeked');
+    }
+    if (!video.videoWidth || !video.videoHeight) return null;
+    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+    return blob ? new File([blob], 'frame.jpg', { type: 'image/jpeg' }) : null;
+  } catch {
+    return null;
+  } finally {
+    video.removeAttribute('src');
+    URL.revokeObjectURL(url);
   }
 }

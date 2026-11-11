@@ -10,6 +10,7 @@ import { IdentityStore } from './identity-store.ts';
 import { describeCert } from './certs.ts';
 import * as tray from './tray.ts';
 import { fetchLinkPreview } from './link-preview.ts';
+import { searchGiphy, fetchGif } from './giphy-search.ts';
 import { fetchPublicListWith, pingServer } from './publist.ts';
 import { openTls } from './tls-transport.ts';
 import { udpChannel } from './udp-voice.ts';
@@ -254,6 +255,8 @@ ipcMain.handle('yt:thumbnail', async (_e, id: string) => {
   return null;
 });
 ipcMain.handle('yt:rate', (_e, rate: number) => setYoutubeRate(Number(rate)));
+ipcMain.handle('gif:search', (e, q: string, page: number) => searchGiphy(String(q), Number(page), BrowserWindow.fromWebContents(e.sender)));
+ipcMain.handle('gif:fetch', (_e, url: string) => fetchGif(String(url).slice(0, 2048)));
 ipcMain.handle('preview:fetch', (_e, url: string) => fetchLinkPreview(String(url).slice(0, 2048)));
 
 // ─── Screen sharing ───────────────────────────────────────────────────────────

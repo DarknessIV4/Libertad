@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'el
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createTorrentEngine } from './torrent-core.ts';
+import { createTranscoder, findBinaries, type Transcoder } from './transcode.ts';
 import { fetchLimited, fetchSubtitle, findSubtitles } from './subtitles.ts';
 import { normalizeMagnet, MAX_QUEUE } from '../src/core/torrent-meta.ts';
 import { findEpisodes } from './episodes.ts';
@@ -14,7 +15,12 @@ const okHash = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{
 
 // Torrent Together: the desktop app downloads the torrent itself and plays it from a local address
 export function registerTorrent(): void {
-  const engine = createTorrentEngine({ root: path.join(app.getPath('userData'), 'torrents') });
+  // ffmpeg is looked for once, at start-up; without it only what the page plays by itself works
+  const engineOpts = { root: path.join(app.getPath('userData'), 'torrents'), transcoder: null as Transcoder | null };
+  const transcoderReady = findBinaries().then(
+    bin => { if (bin) engineOpts.transcoder = createTranscoder({ bin, root: path.join(app.getPath('userData'), 'transcode') }); },
+    () => {});
+  const engine = createTorrentEngine(engineOpts);
 
   // Everything a window asked for goes when the window does
   const watched = new WeakSet<object>();
@@ -57,6 +63,13 @@ export function registerTorrent(): void {
     const m = meta as { magnet?: unknown; fileIdx?: unknown } | null;
     if (!m || !okStr(m.magnet, 2048) || !okIdx(m.fileIdx)) throw new Error('bad request');
     return engine.play({ magnet: m.magnet, fileIdx: m.fileIdx }, owner(e));
+  });
+
+  // What the played file holds, and the address of its converted form (info is null when ffmpeg is missing or can not read it)
+  ipcMain.handle('torrent:probe', async (_e, infoHash: unknown, fileIdx: unknown) => {
+    if (!okHash(infoHash) || !okIdx(fileIdx)) throw new Error('bad request');
+    await transcoderReady;
+    return engine.probe(infoHash, fileIdx);
   });
 
   ipcMain.handle('torrent:stats', (_e, infoHash: unknown, fileIdx: unknown) => {
