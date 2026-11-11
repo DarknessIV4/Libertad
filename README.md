@@ -4,7 +4,7 @@
 
 mumh5 works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It runs on Windows and Linux, and in a browser.
 
-![mumh5: Dynamic chat box, can be on the middle or the right](docs/screenshots/main.webm)
+https://github.com/user-attachments/assets/832434a1-2b63-4d36-b25f-2f67f1e0feed
 
 ## Why mumh5
 
