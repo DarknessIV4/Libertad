@@ -1,0 +1,1462 @@
+// Drives the built Electron app against a real Mumble server, with a headless second client.
+//   npm run build && MUMBLE_TEST_HOST=localhost:64739 npm run test:e2e
+// Optional: E2E_INTERNET=1 to also test link previews (fetches github.com), SHOTS_DIR to save screenshots.
+import { _electron as electron } from 'playwright-core';
+import electronPath from 'electron';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import { createCodec } from '../../src/core/proto.ts';
+import { encodeVoice, decodeVoice, type VoicePacket } from '../../src/core/voice-packet.ts';
+import { MumbleClient } from '../../src/core/client.ts';
+import type { Transport } from '../../src/core/transport.ts';
+import { openTls } from '../../electron/tls-transport.ts';
+import { generateIdentity } from '../../electron/identity.ts';
+import { byOrder } from '../../src/core/channel-order.ts';
+import { TEXT, TEXT_DATA_ID, TEXT_MARK, TextAssembler, encodeText, parseMsg, parseHistory } from '../../src/core/text-signal.ts';
+import {
+  FILE, FILE_DATA_ID, FileAssembler, Sender, pump as pumpPieces, announce, takeFiles, encodeFileSignal, isPiece, parsePiece, decode15, encode15,
+  pieceBytes, pieceCount, pieceSize, pieceForm, pieceMessage, fromRanges, sha256, rootHash
+} from '../../src/core/file-transfer.ts';
+
+const target = process.env.MUMBLE_TEST_HOST;
+if (!target) {
+  console.log('MUMBLE_TEST_HOST not set, skipping');
+  process.exit(0);
+}
+const [host, port] = target.split(':');
+const shots = process.env.SHOTS_DIR;
+const root = path.resolve(import.meta.dirname, '../..');
+
+function headless(username: string, password = ''): Promise<MumbleClient> {
+  const codec = createCodec();
+  const id = generateIdentity(username);
+  const client = new MumbleClient(codec);
+  const t: Transport = { onData: null, onClose: null, send: b => conn.send(b), close: () => conn.close() };
+  const conn = openTls(host, Number(port), id.certPem, id.keyPem, {
+    onSecure: () => {}, onData: c => t.onData?.(c), onClose: r => t.onClose?.(r)
+  });
+  client.connect(t, { username, password, os: 'test' });
+  return new Promise((res, rej) => { client.on('synced', () => res(client)); client.on('close', rej); });
+}
+
+// Noisy PNG, no image library needed. Noise keeps the JPEG preview big enough (over the
+// server's 5000-char text limit) to exercise Murmur's XML check on image messages.
+function testPng(w = 400, h = 300): Buffer {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    raw.set([(x * 7 + Math.random() * 90) & 255, (y * 5 + Math.random() * 90) & 255, Math.random() * 255], y * (w * 3 + 1) + 1 + x * 3);
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+// Fails with a label instead of hanging when an expected event never comes
+function within<T>(p: Promise<T>, label: string, ms = 10000): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`Timed out waiting for: ${label}`)), ms))]);
+}
+
+const { ELECTRON_RUN_AS_NODE, ...env } = process.env;
+const userData = mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-'));
+const app = await electron.launch({
+  executablePath: electronPath as unknown as string,
+  // Stay on $DISPLAY (e.g. Xvfb); Electron would otherwise pick the Wayland session automatically
+  // Fake microphone (a beeping tone) and auto-granted permission for the voice tests
+  args: [root, `--user-data-dir=${userData}`, '--ozone-platform=x11', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+  env: env as Record<string, string>
+});
+const bob = await headless('bob');
+// SuperUser can create channels; needs MUMBLE_SUPERUSER_PASSWORD on the test server
+const admin = process.env.MUMBLE_SUPERUSER_PASSWORD ? await headless('SuperUser', process.env.MUMBLE_SUPERUSER_PASSWORD) : null;
+// The text channel made further down; checked again after the app reconnects
+let notesId: number | null = null;
+try {
+  const page = await app.firstWindow();
+  page.on('console', m => { if (m.type() === 'error') console.log('[renderer]', m.text()); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // First start: identity setup wizard
+  await page.getByRole('dialog', { name: 'Set up your identity' }).waitFor();
+  await page.getByRole('button', { name: /Create a new identity/ }).click();
+  await page.getByLabel('Name', { exact: true }).fill('alice');
+  assert.ok(await page.getByLabel('Use this name as my username').isChecked());
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await page.getByRole('button', { name: 'Skip for now' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('dialog', { name: 'Set up your identity' }).waitFor({ state: 'detached' });
+  console.log('ok: identity wizard creates an identity');
+
+  // Stacked is the default layout; the steps below were written for Modern
+  await page.locator('.app.stacked').waitFor();
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Appearance' }).click();
+  await page.getByRole('radio', { name: 'Modern' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.locator('.app.side').waitFor();
+  console.log('ok: stacked by default');
+
+  // Start screen: the saved servers instead of channels and chat, identities one click away
+  await page.getByRole('region', { name: 'Servers' }).getByRole('heading', { name: 'Servers' }).waitFor();
+  assert.equal(await page.locator('.chat').count(), 0, 'no chat while not connected');
+  assert.equal(await page.locator('.sidebar').count(), 0, 'no channel list while not connected');
+  await page.getByRole('button', { name: 'Manage identities' }).click();
+  await page.getByRole('tab', { name: 'Identities', selected: true }).waitFor();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log('ok: start screen, manage identities');
+
+  // Mute and deafen are there without a connection
+  const me = page.locator('.me');
+  await me.getByText('Not connected').waitFor();
+  assert.ok(await me.getByRole('button', { name: 'Server information' }).isDisabled());
+  await me.getByRole('button', { name: 'Deafen', exact: true }).click();
+  await me.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  await me.getByText('Deafened').waitFor();
+  await me.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await me.getByRole('button', { name: 'Deafen', exact: true }).waitFor();
+  await me.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  console.log('ok: mute and deafen shown while disconnected');
+  // Muted before connecting: applied when connected, without the mute sound
+  await me.getByRole('button', { name: 'Mute', exact: true }).click();
+  await me.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+
+  // Add and connect to the server
+  await page.getByTitle('Add a server').click();
+  await page.getByLabel('Address').fill(host);
+  await page.getByLabel('Port').fill(port);
+  assert.equal(await page.getByLabel('Username').inputValue(), 'alice', 'username suggested from the identity');
+  await page.getByLabel('Label').fill('Test Server');
+  await page.getByRole('button', { name: 'Save and connect' }).click();
+  await page.getByText(/Connected/).first().waitFor();
+  console.log('ok: connected');
+  await within(new Promise<void>(res => { const check = () => { const u = [...bob.users.values()].find(x => x.name === 'alice'); if (u?.selfMute) res(); else setTimeout(check, 100); }; check(); }), 'mute applied on connect');
+  await page.waitForTimeout(800);
+  const connectSounds = await page.evaluate(() => [...((window as any).__mumh5Sounds ?? [])] as string[]);
+  assert.ok(!connectSounds.some(x => ['mute', 'unmute', 'deafen', 'undeafen'].includes(x)), `no mute sounds on connect: ${connectSounds}`);
+  await page.locator('.me').getByRole('button', { name: 'Unmute', exact: true }).click();
+  await page.waitForFunction(() => ((window as any).__mumh5Sounds ?? []).includes('unmute'));
+  console.log('ok: mute chosen before connecting applies without a sound; unmuting still sounds');
+
+  // Bob is listed in the channel tree
+  await page.locator('.sidebar').getByText('bob').waitFor();
+  console.log('ok: sees bob');
+
+  // ─── Voice ───────────────────────────────────────────────────────────────
+  const aliceSession = () => [...bob.users.values()].find(u => u.name === 'alice')!.session;
+  const collect = (n: number, stopOnLast = false) => new Promise<VoicePacket[]>(res => {
+    const got: VoicePacket[] = [];
+    const off = bob.on('voice', raw => {
+      const p = decodeVoice(raw);
+      if (!p || p.session !== aliceSession()) return;
+      got.push(p);
+      if (got.length >= n || (stopOnLast && p.last)) { off(); res(got); }
+    });
+  });
+  const setMode = async (label: string) => {
+    await page.getByTitle('Settings').click();
+    await page.getByRole('radio', { name: new RegExp(label) }).click();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+  };
+
+  // Always on: a steady stream of 20 ms Opus packets
+  const stream = collect(25);
+  await setMode('Always on');
+  // Generous: on a freshly started server and fake microphone the first packets can take a while
+  const packets = await within(stream, 'voice packets from the app', 20000);
+  assert.ok(packets.every(p => p.opus.length > 0 && !p.last));
+  const steps = packets.slice(1).map((p, i) => p.frame - packets[i].frame);
+  assert.ok(steps.every(d => d === 2), `sequence advances 2 frames per 20 ms packet: ${steps.join(',')}`);
+  console.log(`ok: app sends Opus voice (${packets[0].opus.length} bytes per packet)`);
+
+  // Echo alice's own audio back as bob: the app decodes it and shows bob speaking
+  const echo = packets.map((p, i) => encodeVoice({ target: 0, frame: i * 2, opus: p.opus, last: i === packets.length - 1 }, bob.protobufVoice));
+  const bobRow = page.locator('.sidebar .user', { hasText: 'bob' });
+  const pump = setInterval(() => { const pk = echo.shift(); if (pk) bob.sendVoiceTunnel(pk); }, 20);
+  await bobRow.locator('.avatar.speaking').waitFor({ timeout: 3000 });
+  console.log('ok: incoming voice decoded, speaker highlighted');
+  await bobRow.locator('.avatar.speaking').waitFor({ state: 'detached', timeout: 3000 });
+  clearInterval(pump);
+  console.log('ok: speaking indicator clears after the terminator');
+
+  // Push to talk: silent until the key is held, terminator on release
+  const ended = collect(1000, true);
+  await setMode('Push to talk');
+  const tail = await within(ended, 'terminator after leaving always-on');
+  assert.equal(tail.at(-1)!.last, true);
+  let leaked = 0;
+  const offLeak = bob.on('voice', raw => { if (decodeVoice(raw)?.session === aliceSession()) leaked++; });
+  await page.waitForTimeout(400);
+  offLeak();
+  assert.equal(leaked, 0, 'no voice while the push-to-talk key is up');
+  await page.locator('.chat h1').click();
+  const ptt = collect(1000, true);
+  await page.keyboard.down('Backquote');
+  await page.waitForTimeout(300);
+  await page.keyboard.up('Backquote');
+  const burst = await within(ptt, 'push-to-talk burst');
+  assert.ok(burst.length >= 8 && burst.length <= 30, `about 300 ms of audio (${burst.length} packets)`);
+  assert.equal(burst.at(-1)!.last, true);
+  console.log(`ok: push to talk (${burst.length} packets, ends with terminator)`);
+
+  // Voice activity with the fake beeping microphone: transmits in bursts
+  await setMode('Voice activity');
+  const vad = await within(collect(10), 'voice activity packets', 8000);
+  assert.ok(vad.length === 10);
+  const biggest = Math.max(...vad.map(p => p.opus.length));
+  assert.ok(biggest > 40, `packets during the tone carry real audio (largest ${biggest} bytes)`);
+  console.log(`ok: voice activity detection transmits on the tone (up to ${biggest} bytes per packet)`);
+
+  // The app's own statistics confirm it decoded the echoed audio
+  await page.getByTitle('Settings').click();
+  const statsText = await page.locator('.stats').textContent();
+  const decoded = Number(/decoded (\d+)/.exec(statsText ?? '')?.[1]);
+  assert.ok(decoded >= 20, `decoded frames reported: ${statsText}`);
+  // Voice runs over encrypted UDP once the server answers UDP pings
+  await page.locator('.stats', { hasText: /Transport: UDP, \d+ ms ping/ }).waitFor({ timeout: 10000 });
+  await page.getByLabel(/Send voice over TCP only/).check();
+  await page.locator('.stats', { hasText: 'Transport: TCP tunnel' }).waitFor();
+  await page.getByLabel(/Send voice over TCP only/).uncheck();
+  await page.locator('.stats', { hasText: /Transport: UDP/ }).waitFor();
+  console.log('ok: voice transport UDP, with a TCP-only switch');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log(`ok: ${decoded} frames decoded`);
+  await setMode('Push to talk');
+  await page.waitForTimeout(300);
+
+  // Alice -> channel
+  const gotText = new Promise<string>(res => bob.on('text', m => res(m.html)));
+  await page.getByLabel('Message').fill('hello <from> alice\nsecond line https://example.com/x');
+  await page.getByLabel('Message').press('Enter');
+  const html = await within(gotText, 'channel text');
+  assert.equal(html, 'hello &lt;from&gt; alice<br/>second line <a href="https://example.com/x">https://example.com/x</a>');
+  console.log('ok: bob received channel text');
+
+  // Bob -> channel, rendered sanitized
+  bob.sendText({ channels: [0] }, 'hi alice <b>bold</b><script>window.pwned=1</script><img src="https://evil.example/t.png">');
+  await page.locator('.msg', { hasText: 'hi alice' }).waitFor();
+  assert.equal(await page.evaluate(() => (window as any).pwned), undefined);
+  assert.equal(await page.locator('.msg b', { hasText: 'bold' }).count(), 1);
+  assert.equal(await page.locator('img[src^="https://evil"]').count(), 0);
+  // The full date appears at the right edge while the pointer is on a message
+  const anyMsg = page.locator('.chat .msg').last();
+  const stamp = anyMsg.locator('.stamp');
+  assert.equal(await stamp.evaluate(el => getComputedStyle(el).visibility), 'hidden');
+  await anyMsg.hover();
+  assert.equal(await stamp.evaluate(el => getComputedStyle(el).visibility), 'visible');
+  assert.match(await stamp.innerText(), /\d{4}.*\d{1,2}:\d{2}:\d{2}/);
+  const gap = await anyMsg.evaluate(el => el.getBoundingClientRect().right - el.querySelector('.stamp')!.getBoundingClientRect().right);
+  assert.ok(gap >= 0 && gap < 20, `stamp at the right edge: ${gap}`);
+  await page.mouse.move(5, 5);
+  console.log('ok: incoming text rendered and sanitized');
+
+  // Right-click menus for text: composer editing, links, messages, authors
+  const composer = page.locator('.chat .composer [contenteditable]');
+  const composerText = async () => (await composer.innerText()).trim();
+  const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
+  await composer.fill('abc 123');
+  await composer.click({ button: 'right' });
+  await menuItem('Select all').click();
+  await composer.click({ button: 'right' });
+  await menuItem('Cut').click();
+  assert.equal(await composerText(), '');
+  await composer.click({ button: 'right' });
+  await menuItem('Paste').click();
+  assert.equal(await composerText(), 'abc 123');
+  await composer.fill('');
+  await page.locator('.msg a[href="https://example.com/x"]').click({ button: 'right' });
+  await menuItem('Copy link address').click();
+  await composer.click({ button: 'right' });
+  await menuItem('Paste').click();
+  assert.equal(await composerText(), 'https://example.com/x');
+  await composer.fill('');
+  await page.locator('.msg .html', { hasText: 'hi alice' }).click({ button: 'right' });
+  await menuItem('Copy message text').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.msg header strong', { hasText: 'bob' }).first().click({ button: 'right' });
+  await menuItem('Send message').waitFor();
+  await page.keyboard.press('Escape');
+  console.log('ok: right-click menus for text fields, links, messages and authors');
+
+  // Formatting in the message box: toolbar behind the Aa button, sent as Mumble-compatible HTML
+  await page.locator('.chat .composer').getByRole('button', { name: 'Text formatting' }).click();
+  await composer.fill('bold words https://example.com/b');
+  await composer.press('Control+a');
+  const gotBold = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('bold words')) res(m.html); }));
+  await page.locator('.chat .composer').getByRole('button', { name: 'Bold (Ctrl+B)' }).click();
+  await composer.press('Enter');
+  const bold = await within(gotBold, 'formatted message');
+  assert.match(bold, /(<b>|font-weight:bold)/, `bold arrives: ${bold}`);
+  assert.match(bold, /<a href="https:\/\/example\.com\/b">/, 'links still work in formatted messages');
+  await page.locator('.chat .composer').getByRole('button', { name: 'Text formatting' }).click();
+  console.log('ok: formatted message from the toolbar');
+
+  // YouTube links are plain links by default
+  bob.sendText({ channels: [0] }, 'watch <a href="https://youtu.be/dQw4w9WgXcQ?t=1m30s">https://youtu.be/dQw4w9WgXcQ?t=1m30s</a>');
+  const ytMsg = page.locator('.msg', { hasText: 'watch' });
+  await ytMsg.getByRole('link', { name: 'https://youtu.be/dQw4w9WgXcQ?t=1m30s' }).waitFor();
+  assert.equal(await ytMsg.locator('.yt').count(), 0, 'no YouTube card by default');
+  // Turned on, they become a click-to-play card; nothing loads from YouTube before the click
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Chat and files' }).click();
+  await page.getByLabel('YouTube links').selectOption('click');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  const card = ytMsg.locator('.yt');
+  await card.getByText('from 1:30, click to play').waitFor();
+  assert.equal(await card.locator('iframe').count(), 0);
+  assert.equal(await card.locator('.facade').evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'no thumbnail request in click mode');
+  await card.locator('.facade').click();
+  assert.equal(await card.locator('iframe').getAttribute('src'), 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0&start=90');
+  console.log('ok: YouTube link plain by default, click-to-play when turned on');
+
+  // Bob -> DM
+  const alice = [...bob.users.values()].find(u => u.name === 'alice')!;
+  bob.sendText({ users: [alice.session] }, 'psst');
+  await page.locator('.sidebar').getByText('Direct messages').waitFor();
+  await page.locator('.dm', { hasText: 'bob' }).click();
+  await page.locator('.msg', { hasText: 'psst' }).waitFor();
+  console.log('ok: direct message shown in its own view');
+  const soundLog = () => page.evaluate(() => [...((window as any).__mumh5Sounds ?? [])] as string[]);
+  const played = await soundLog();
+  for (const ev of ['connected', 'message', 'privateMessage']) assert.ok(played.includes(ev), `sound for ${ev}: ${played}`);
+  console.log('ok: sounds for connect, channel and direct messages');
+  await page.locator('.channel .name').first().dblclick();
+
+  // Mute toggles propagate
+  const muted = new Promise<boolean>(res => bob.on('user', (u, changed) => { if (u.name === 'alice' && changed.includes('selfMute')) res(u.selfMute); }));
+  await page.locator('.me').getByRole('button', { name: 'Mute', exact: true }).click();
+  assert.equal(await within(muted, 'mute state'), true);
+  await page.locator('.me').getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+
+  // Right-click on mute / deafen opens quick audio options
+  await page.locator('.me').getByRole('button', { name: 'Unmute', exact: true }).click({ button: 'right' });
+  const micPop = page.getByRole('dialog', { name: 'Microphone' });
+  await micPop.getByLabel('Microphone').waitFor();
+  await micPop.getByRole('radio', { name: 'Always on' }).waitFor();
+  await micPop.getByLabel(/Input volume/).fill('1.5');
+  await micPop.getByText('Input volume: 150%').waitFor();
+  await page.keyboard.press('Escape');
+  await micPop.waitFor({ state: 'detached' });
+  await page.locator('.me').getByRole('button', { name: 'Deafen', exact: true }).click({ button: 'right' });
+  const outPop = page.getByRole('dialog', { name: 'Output' });
+  await outPop.getByLabel('Output device').waitFor();
+  await outPop.getByRole('button', { name: 'Voice settings...' }).click();
+  await page.getByRole('tab', { name: 'Voice', selected: true }).waitFor();
+  await page.getByText('Microphone volume: 150%').waitFor();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log('ok: quick audio options on right-click');
+
+  // STUN server for screen sharing: none by default, presets, or a typed address
+  await page.getByTitle('Settings').click();
+  const stun = page.getByLabel('STUN server', { exact: true });
+  assert.equal(await stun.inputValue(), '');
+  await stun.selectOption({ label: 'Cloudflare (stun.cloudflare.com:3478)' });
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.settings')!).stunServer), 'stun.cloudflare.com:3478');
+  await stun.selectOption('custom');
+  await page.getByLabel('STUN server address').fill('stun.example.org:3478');
+  await page.getByLabel('STUN server address').blur();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.settings')!).stunServer), 'stun.example.org:3478');
+  await stun.selectOption('');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.settings')!).stunServer), '');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log('ok: STUN server choices');
+
+  // Color schemes apply right away and are remembered
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Appearance' }).click();
+  await page.getByRole('radio', { name: 'Windows 95' }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'win95');
+  assert.equal(await page.locator('.rail').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(0, 128, 128)');
+  for (const [name, id, bg] of [['Forest', 'forest', 'rgb(22, 35, 28)'], ['Ember', 'ember', 'rgb(33, 25, 20)'], ['Ocean', 'ocean', 'rgb(15, 30, 44)'],
+    ['Plum', 'plum', 'rgb(32, 22, 40)'], ['Paper', 'paper', 'rgb(248, 243, 231)'], ['High contrast', 'contrast', 'rgb(0, 0, 0)']]) {
+    await page.getByRole('radio', { name }).click();
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), id);
+    assert.equal(await page.locator('.chat').evaluate(el => getComputedStyle(el).backgroundColor), bg, `${name} colors the chat`);
+    if (shots) await page.screenshot({ path: path.join(shots, `theme-pick-${id}.png`) });
+  }
+  // Generated schemes, and narrowing the list
+  assert.equal(await page.getByRole('radiogroup', { name: 'Color scheme' }).getByRole('radio').count(), 100);
+  await page.getByRole('button', { name: 'Light', exact: true }).click();
+  assert.equal(await page.getByRole('radiogroup', { name: 'Color scheme' }).getByRole('radio').count(), 28);
+  await page.getByRole('radio', { name: 'Lavender' }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'lavender');
+  if (shots) await page.screenshot({ path: path.join(shots, 'theme-pick-lavender.png') });
+  await page.getByRole('button', { name: 'All 100' }).click();
+  await page.getByLabel('Find a color scheme').fill('synth');
+  assert.equal(await page.getByRole('radiogroup', { name: 'Color scheme' }).getByRole('radio').count(), 1);
+  await page.getByRole('radio', { name: 'Synthwave' }).click();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('color-scheme').trim()), 'dark');
+  if (shots) { await page.getByRole('button', { name: 'Done', exact: true }).click(); await page.screenshot({ path: path.join(shots, 'theme-synthwave.png') }); await page.getByTitle('Settings').click(); await page.getByRole('tab', { name: 'Appearance' }).click(); }
+  await page.getByLabel('Find a color scheme').fill('');
+  await page.getByRole('radio', { name: 'Dark', exact: true }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), undefined);
+  // Hints are off by default: the title under the pointer is set aside while hovered, and back afterwards
+  const hintTarget = page.locator('.rail').getByRole('button', { name: 'Add a server' });
+  const titleOf = () => page.locator('.rail .tile.add').first().getAttribute('title');
+  await page.getByRole('tab', { name: 'Accessibility' }).click();
+  assert.equal(await page.getByLabel('Show hints when the pointer rests').isChecked(), false);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await hintTarget.hover();
+  assert.equal(await titleOf(), null, 'no tooltip while hints are off');
+  await page.mouse.move(700, 400);
+  assert.equal(await titleOf(), 'Add a server');
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Accessibility' }).click();
+  await page.getByLabel('Show hints when the pointer rests').check();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await hintTarget.hover();
+  assert.equal(await titleOf(), 'Add a server', 'tooltip kept while hints are on');
+  await page.mouse.move(700, 400);
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Accessibility' }).click();
+  await page.getByLabel('Show hints when the pointer rests').uncheck();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log('ok: color schemes, hints off by default and can be turned on');
+
+  // Layouts like the desktop client: classic (channels right of chat), stacked (channels above)
+  const box = (sel: string) => page.locator(sel).first().boundingBox().then(b => b!);
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Appearance' }).click();
+  await page.getByRole('radio', { name: 'Classic' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.locator('.app.classic').waitFor();
+  assert.ok((await box('.sidebar')).x > (await box('.chat')).x, 'classic: channel list right of chat');
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Appearance' }).click();
+  await page.getByRole('radio', { name: 'Stacked' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.locator('.app.stacked').waitFor();
+  const chatBox = await box('.chat'), treeBox = await box('.sidebar');
+  assert.ok(chatBox.y >= treeBox.y + treeBox.height - 1, 'stacked: chat below channel list');
+  // The split between chat and channel list drags
+  const handle = page.getByRole('separator', { name: 'Resize channel list' });
+  const hb = (await handle.boundingBox())!;
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + 60, { steps: 4 });
+  await page.mouse.up();
+  assert.ok((await box('.sidebar')).height > treeBox.height + 40, 'stacked: split resizes');
+  // Dragged past the bottom, the split stops where the message box still fits
+  const hb2 = (await handle.boundingBox())!;
+  await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb2.x + hb2.width / 2, page.viewportSize()!.height + 300, { steps: 6 });
+  await page.mouse.up();
+  const composerBottom = (await box('.chat .composer')).y + (await box('.chat .composer')).height;
+  assert.ok(composerBottom <= page.viewportSize()!.height + 1, `stacked: message box stays visible (${composerBottom})`);
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Appearance' }).click();
+  await page.getByRole('radio', { name: 'Modern' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.locator('.app.side').waitFor();
+  console.log('ok: classic and stacked layouts');
+
+  // Public server list, from a local list in the official XML format
+  const http = await import('node:http');
+  const listServer = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/xml' });
+    res.end(`<?xml version="1.0"?><servers><server name="E2E Murmur" ip="${host}" port="${port}" country="Testland" country_code="TL" continent_code="EU" url="https://example.org" ca="0"/><server name="Offline one" ip="127.0.0.1" port="9" country="Nowhere" continent_code="NA"/></servers>`);
+  }).listen(0);
+  const listPort = (listServer.address() as { port: number }).port;
+  await page.getByTitle('Browse public servers').click();
+  const pub = page.getByRole('dialog', { name: 'Public servers' });
+  await pub.locator('.link', { hasText: 'List source' }).click();
+  await page.getByLabel('URL').fill(`http://127.0.0.1:${listPort}/v1/list`);
+  await page.getByRole('button', { name: 'Use this list' }).click();
+  const row = pub.locator('tr', { hasText: 'E2E Murmur' });
+  await row.getByText(/^\d+ \/ \d+$/).waitFor({ timeout: 8000 });
+  await row.getByText(/ms$/).waitFor();
+  await row.getByRole('button', { name: 'Connect' }).waitFor();
+  // Column headers sort; a second click reverses
+  const firstRow = pub.locator('tbody tr').first();
+  await pub.getByRole('button', { name: 'Server', exact: true }).click();
+  await firstRow.getByText('E2E Murmur').waitFor();
+  await pub.getByRole('button', { name: 'Server', exact: true }).click();
+  await firstRow.getByText('Offline one').waitFor();
+  await pub.getByRole('button', { name: 'People', exact: true }).click();
+  await firstRow.getByText('E2E Murmur').waitFor();
+  await row.getByRole('button', { name: 'Add' }).click();
+  assert.equal(await page.getByLabel('Address').inputValue(), host);
+  assert.equal(await page.getByLabel('Port').inputValue(), port);
+  assert.equal(await page.getByLabel('Label').inputValue(), 'E2E Murmur');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  listServer.close();
+  console.log('ok: public server list with live ping and prefilled add');
+
+  // Server menus are titled with the server's name
+  await page.locator('.rail .tile').first().click({ button: 'right' });
+  await page.locator('.menu .head', { hasText: 'Test Server' }).waitFor();
+  await page.keyboard.press('Escape');
+
+  // Tray icon mirrors the voice state; its menu acts on it
+  const trayState = () => app.evaluate(() => (globalThis as any).__mumh5Tray && {
+    tooltip: (globalThis as any).__mumh5Tray.tooltip, items: (globalThis as any).__mumh5Tray.items, icon: (globalThis as any).__mumh5Tray.state.icon
+  });
+  const trayUntil = async (label: string, pred: (t: any) => boolean) => {
+    for (let i = 0; i < 50; i++) { const t = await trayState(); if (t && pred(t)) return t; await page.waitForTimeout(100); }
+    throw new Error(`Tray never reached: ${label} (${JSON.stringify(await trayState())})`);
+  };
+  const tMuted = await trayUntil('muted', t => /muted on Test Server/.test(t.tooltip));
+  assert.equal(tMuted.icon, 'data:image/png;base64,');
+  assert.equal(tMuted.items.find((i: any) => i.label === 'Mute').checked, true);
+  await app.evaluate(() => (globalThis as any).__mumh5Tray.click('Mute'));
+  await within(new Promise<void>(res => bob.on('user', (u, ch) => { if (u.name === 'alice' && ch.includes('selfMute') && !u.selfMute) res(); })), 'unmuted from the tray');
+  await trayUntil('connected', t => /connected on Test Server/.test(t.tooltip) && !t.items.find((i: any) => i.label === 'Mute').checked);
+  await app.evaluate(() => (globalThis as any).__mumh5Tray.click('Mute'));
+  await trayUntil('muted again', t => /muted/.test(t.tooltip));
+  console.log('ok: tray icon follows voice state and its menu mutes');
+  await page.locator('.channel + .users, .users').getByTitle('Muted', { exact: true }).first().waitFor();
+  console.log('ok: self mute propagated and shown');
+  assert.ok((await soundLog()).includes('mute'), 'mute sound');
+
+  // Sound pack in TeamSpeak 3 format: settings.ini maps events to files exactly
+  await page.getByTitle('Settings').click();
+  await page.getByRole('tab', { name: 'Sounds' }).click();
+  // Real 16-bit PCM WAVs (a short tone), like the files in a TeamSpeak pack
+  const wav = (name: string) => {
+    const rate = 22050, n = rate / 10, b = Buffer.alloc(44 + n * 2);
+    b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+    b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+    for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin(i / 8) * 8000), 44 + i * 2);
+    return { name, mimeType: 'audio/wav', buffer: b };
+  };
+  const ini = { name: 'settings.ini', mimeType: 'text/plain', buffer: Buffer.from([
+    '[soundfiles]',
+    'SOUND_CAPTURE_MUTED    = play("mic_muted.wav")',
+    'CHAT_RECEIVED_MESSAGE_CHANNEL = play("chat_message_inbound.wav")',
+    'CHAT_RECEIVED_MESSAGE_CLIENT  = play("chat_message_inbound.wav")',
+    'CLIENT_SWITCHED_TO_CURRENT_CHANNEL_APPEARS = play("${clientType}_switched_tocurrentchannel.wav")',
+    'CHANNEL_CREATED_BY_OTHER = '
+  ].join('\n')) };
+  const packChooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Load sound pack...' }).click();
+  await (await packChooser).setFiles([ini, wav('mic_muted.wav'), wav('chat_message_inbound.wav'),
+    wav('blue_switched_tocurrentchannel.wav'), wav('neutral_switched_tocurrentchannel.wav'), wav('extra.wav')]);
+  const rep = page.locator('.report');
+  for (const line of ['mic_muted.wav: You muted', 'chat_message_inbound.wav: Channel message', 'chat_message_inbound.wav: Direct message',
+    'neutral_switched_tocurrentchannel.wav: Someone joined your channel']) await rep.getByText(line).waitFor();
+  await rep.getByText(/Not matched.*extra\.wav/).waitFor();
+  assert.ok(!(await rep.textContent())!.includes('blue_switched_tocurrentchannel.wav: '), 'neutral variant preferred');
+  // A custom sound really plays (blob URL, allowed by the security policy) and survives a reload
+  const before = (await soundLog()).filter(x => x === 'mute').length;
+  await page.locator('.events li', { hasText: 'You muted' }).getByRole('button', { name: /^Play/ }).click();
+  await page.waitForFunction(n => ((window as any).__mumh5Sounds ?? []).filter((x: string) => x === 'mute').length > n, before);
+  assert.equal(await page.getByText(/^Could not play/).count(), 0, 'no playback errors');
+  await page.getByRole('button', { name: 'Reset all to built-in' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log('ok: TeamSpeak sound pack mapped from settings.ini');
+
+  // ─── Files through the Mumble server ─────────────────────────────────────
+  {
+    const alice = aliceSession();
+    const fileAsm = new FileAssembler();
+    const signals: { from: number; type: number; body: any }[] = [];
+    let onSignal: (() => void) | null = null;
+    const bobSignal = async (to: number[], type: (typeof FILE)[keyof typeof FILE], body: unknown) => {
+      for (const packet of await encodeFileSignal(type, body)) bob.sendPluginData(to, FILE_DATA_ID, packet);
+    };
+    const signalFrom = (type: number) => new Promise<{ from: number; body: any }>(res => {
+      const look = () => { const i = signals.findIndex(x => x.type === type); if (i >= 0) { onSignal = null; res(signals.splice(i, 1)[0]); } };
+      onSignal = look;
+      look();
+    });
+    // Bob serves his own files the way the app does
+    const sender = new Sender();
+    const served = new Map<string, { meta: { s: number; c: number }; data: Buffer }>();
+    let pumping = false;
+    bob.on('pluginData', async (from, id, packet) => {
+      if (id !== FILE_DATA_ID) return;
+      const sig = await fileAsm.push(from, packet);
+      if (!sig) return;
+      const body = JSON.parse(sig.text!);
+      const mine = served.get(body.i);
+      if (sig.type === FILE.who && mine) return bobSignal([from], FILE.have, { i: body.i });
+      if (sig.type === FILE.want && mine) {
+        sender.want(body.i, from, fromRanges(body.r, pieceCount(mine.meta))!);
+        if (!pumping) {
+          pumping = true;
+          pumpPieces({
+            client: bob, sender, alive: () => true,
+            read: async (f, k) => { const x = served.get(f)!; return pieceMessage(pieceForm(bob.config), f, k, encode15(x.data.subarray(k * x.meta.c, k * x.meta.c + pieceSize(x.meta, k)))); },
+            done: (r, f) => bobSignal([r], FILE.done, { i: f }), gone: () => {}
+          }).finally(() => { pumping = false; });
+        }
+        return;
+      }
+      signals.push({ from, type: sig.type, body });
+      onSignal?.();
+    });
+
+    // The app sends a file: announced in the chat, then sent in pieces to whoever asks
+    const data = Buffer.alloc(600_000);
+    for (let i = 0; i < data.length; i += 65536) crypto.getRandomValues(data.subarray(i, i + 65536));
+    const bin = path.join(userData, 'clip.bin');
+    writeFileSync(bin, data);
+    const announced = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('<!--mumh5:file:')) res(m.html); }));
+    await page.locator('.chat .composer input[type=file]').first().setInputFiles(bin);
+    const html = await within(announced, 'file announcement', 15000);
+    assert.match(html, /<b>clip\.bin<\/b> \(585\.9 KB, file shared with mumh5\)/);
+    const [f] = takeFiles(html).files;
+    assert.equal(f.meta.n, 'clip.bin');
+    assert.equal(f.meta.s, data.length);
+    const count = pieceCount(f.meta);
+    const parts: Buffer[] = [];
+    const gotAll = new Promise<void>(res => bob.on('text', m => {
+      if (!isPiece(m.html) || m.actor !== alice) return;
+      const p = parsePiece(m.html)!;
+      parts[p.index] = Buffer.from(decode15(p.payload, pieceSize(f.meta, p.index))!);
+      if (parts.filter(Boolean).length === count) res();
+    }));
+    const done = signalFrom(FILE.done);
+    await bobSignal([alice], FILE.want, { i: f.meta.i, r: [[0, count]] });
+    await within(gotAll, 'file pieces', 20000);
+    assert.ok(Buffer.concat(parts).equals(data), 'the file arrives as it was');
+    assert.equal(await rootHash(await Promise.all(parts.map(p => sha256(p)))), f.meta.h);
+    assert.equal((await within(done, 'done signal')).body.i, f.meta.i);
+    await page.locator('.chat .msg .file', { hasText: 'clip.bin' }).locator('a[download="clip.bin"]').waitFor();
+    // Asked who has it, the app says it does
+    const have = signalFrom(FILE.have);
+    await bobSignal([alice], FILE.who, { i: f.meta.i });
+    assert.equal((await within(have, 'have signal')).body.i, f.meta.i);
+    console.log(`ok: a file goes from the app to another client through the server (${count} pieces)`);
+
+    // Someone else sends a picture: the app fetches it by itself and shows it
+    const png = testPng(700, 500);
+    const c = pieceBytes(bob.config);
+    const pm = { s: png.length, c };
+    const digests: Uint8Array[] = [];
+    for (let k = 0; k < pieceCount(pm); k++) digests.push(await sha256(png.subarray(k * c, k * c + pieceSize(pm, k))));
+    const meta = { i: 'e2enoise' + Date.now().toString(36), n: 'noise.png', s: png.length, m: 'image/png', c, h: await rootHash(digests) };
+    served.set(meta.i, { meta, data: png });
+    bob.sendText({ channels: [0] }, announce(meta, `<b>noise.png</b> (${png.length} B, file shared with mumh5)<br/><img src="data:image/png;base64,${testPng(40, 30).toString('base64')}"/>`));
+    const shown = page.locator('.chat .msg .file img[alt="noise.png"]');
+    await shown.waitFor({ timeout: 30000 });
+    await page.waitForFunction(() => (document.querySelector('.chat .msg .file img[alt="noise.png"]') as HTMLImageElement)?.naturalWidth === 700);
+    assert.equal(await page.locator('.chat .msg', { hasText: 'file shared with mumh5' }).count(), 0, 'the text for other clients is not shown');
+    console.log(`ok: the app fetches a file by itself and shows it (${pieceCount(pm)} pieces)`);
+
+    // Posted by someone who left right after: the app finds another client that has the file
+    const relay = Buffer.alloc(300_000);
+    crypto.getRandomValues(relay.subarray(0, 65536));
+    relay.copyWithin(65536, 0, 300_000 - 65536);
+    const rm = { s: relay.length, c };
+    const rd: Uint8Array[] = [];
+    for (let k = 0; k < pieceCount(rm); k++) rd.push(await sha256(relay.subarray(k * c, k * c + pieceSize(rm, k))));
+    const relayMeta = { i: 'e2erelay' + Date.now().toString(36), n: 'relay.bin', s: relay.length, m: '', c, h: await rootHash(rd) };
+    served.set(relayMeta.i, { meta: relayMeta, data: relay });
+    const carol = await headless('carol');
+    carol.sendText({ channels: [0] }, announce(relayMeta, '<b>relay.bin</b> (293 KB, file shared with mumh5)'));
+    await new Promise(r => setTimeout(r, 200));
+    carol.disconnect();
+    await page.locator('.chat .msg .file', { hasText: 'relay.bin' }).locator('a[download="relay.bin"]').waitFor({ timeout: 30000 });
+    console.log('ok: a file whose sender left comes from someone else who has it');
+  }
+
+  if (process.env.E2E_INTERNET) {
+    // Link previews, fetched by this computer
+    await page.getByTitle('Settings').click();
+    await page.getByRole('tab', { name: 'Chat and files' }).click();
+    await page.getByLabel('Link previews').selectOption('direct');
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    bob.sendText({ channels: [0] }, '<a href="https://github.com/mumble-voip/mumble">https://github.com/mumble-voip/mumble</a>');
+    const gh = page.locator('.msg', { hasText: 'github.com/mumble-voip' }).locator('.card');
+    await gh.locator('.title', { hasText: /mumble/i }).waitFor({ timeout: 15000 });
+    await page.getByTitle('Settings').click();
+    await page.getByRole('tab', { name: 'Chat and files' }).click();
+    await page.getByLabel('Link previews').selectOption('off');
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    console.log('ok: link preview fetched directly');
+  }
+
+  // Server certificate viewer from the header (the Docker server is self-signed, so no green header)
+  assert.equal(await page.locator('.sidebar header.trusted').count(), 0);
+  await page.locator('.sidebar header .title').click();
+  await page.getByRole('dialog', { name: /Certificate of/ }).getByText('self-signed').waitFor();
+  await page.getByRole('button', { name: 'Close', exact: true }).last().click();
+  console.log('ok: server certificate viewer');
+
+  // Own description: rich text with a picture, as Mumble-compatible XHTML
+  await page.locator('.me .profile').click();
+  await page.getByRole('button', { name: 'Edit description' }).click();
+  const area = page.locator('.rich .area');
+  await area.click();
+  await page.keyboard.type('I test things ');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('bold');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('second line');
+  const pic = path.join(userData, 'avatar.png');
+  writeFileSync(pic, testPng(300, 200));
+  await page.locator('.rich input[type=file]').setInputFiles(pic);
+  await area.locator('img').waitFor();
+  const aliceId = [...bob.users.values()].find(u => u.name === 'alice')!.session;
+  const commented = new Promise<string>(res => bob.on('user', (u, changed) => {
+    if (u.session !== aliceId) return;
+    if (changed.includes('comment') && u.comment) res(u.comment);
+    // Long comments are announced by hash only; fetch the text
+    else if (changed.includes('commentHash')) bob.requestBlob({ comments: [aliceId] });
+  }));
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const comment = await within(commented, 'comment update');
+  assert.match(comment, /^<p>I test things <span style="font-weight:bold">bold<\/span><\/p><p>second line<img src="data:image\/jpeg;base64,[^"]+"\/><\/p>$/);
+  assert.ok(comment.length > 5000, 'long enough that the server ran its XML check and accepted it');
+  await page.locator('.panel .html img').waitFor();
+  console.log('ok: own description edited');
+
+  // Other user's profile and context menu
+  await page.locator('.sidebar .user', { hasText: 'bob' }).click({ button: 'right' });
+  for (const item of ['View profile', 'Send message', 'Server mute', 'Kick...', 'Ban...']) {
+    await page.getByRole('menuitem', { name: item }).waitFor();
+  }
+  // Per-person volume lives in the menu
+  await page.getByRole('slider', { name: 'Volume' }).fill('1.5');
+  await page.locator('.menu .slider-label', { hasText: '150%' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.sidebar .user', { hasText: 'bob' }).click({ button: 'right' });
+  assert.equal(await page.getByRole('slider', { name: 'Volume' }).inputValue(), '1.5', 'volume remembered');
+  await page.getByRole('menuitem', { name: 'View profile' }).click();
+  await page.getByRole('dialog', { name: 'Profile of bob' }).locator('h3', { hasText: 'bob' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog', { name: 'Profile of bob' }).waitFor({ state: 'detached' });
+  console.log('ok: user context menu and profile');
+
+  // Profile cards open beside what was clicked; pictures go both ways as Mumble textures
+  const bobInTree = page.locator('.sidebar .user', { hasText: 'bob' });
+  bob.setTexture(testPng(64, 64));
+  await bobInTree.locator('.avatar img').waitFor();
+  await bobInTree.click();
+  const bobCard = page.getByRole('dialog', { name: 'Profile of bob' });
+  await bobCard.locator('.avatar img').waitFor();
+  assert.ok((await bobCard.boundingBox())!.x >= (await bobInTree.boundingBox())!.x + (await bobInTree.boundingBox())!.width, 'card beside the row');
+  assert.equal(await page.locator('aside.panel h3', { hasText: 'bob' }).count(), 0, 'no side panel for a profile');
+  await bobCard.getByRole('button', { name: 'Send message' }).waitFor();
+  await page.keyboard.press('Escape');
+  await bobCard.waitFor({ state: 'detached' });
+  const pictureSet = new Promise<void>(res => bob.on('user', (u, changed) => { if (u.session === aliceId && changed.includes('textureHash')) res(); }));
+  await page.locator('.me .profile').click();
+  const ownCard = page.getByRole('dialog', { name: /^Profile of / });
+  await ownCard.locator('input[type=file]').setInputFiles(pic);
+  await within(pictureSet, 'own picture announced');
+  const pictureBytes = new Promise<Uint8Array>(res => bob.on('user', (u, changed) => { if (u.session === aliceId && changed.includes('texture') && u.texture?.length) res(u.texture); }));
+  bob.requestBlob({ textures: [aliceId] });
+  const sentPicture = await within(pictureBytes, 'own picture fetched');
+  assert.ok((sentPicture[0] === 0x89 && sentPicture[1] === 0x50) || (sentPicture[0] === 0xff && sentPicture[1] === 0xd8), 'PNG or JPEG');
+  assert.ok(sentPicture.length <= 131072, 'within the image limit');
+  await page.locator('.me .profile .avatar img').waitFor();
+  const pictureGone = new Promise<number>(res => bob.on('user', (u, changed) => { if (u.session === aliceId && changed.includes('texture')) res(u.texture!.length); }));
+  await ownCard.getByRole('button', { name: 'Remove picture' }).click();
+  assert.equal(await within(pictureGone, 'picture removed'), 0);
+  await page.locator('.me .profile .avatar img').waitFor({ state: 'detached' });
+  await page.keyboard.press('Escape');
+  bob.setTexture(new Uint8Array(0));
+  await bobInTree.locator('.avatar img').waitFor({ state: 'detached' });
+  console.log('ok: profile cards, pictures sent, shown and removed');
+
+
+  // Server information from the button next to mute
+  await page.locator('.me').getByRole('button', { name: 'Server information' }).click();
+  const srvInfo = page.getByRole('dialog', { name: 'Server information' });
+  await srvInfo.getByText(`${host}:${port}`).waitFor();
+  await srvInfo.getByText(/^\d+ of \d+$/).waitFor();
+  await srvInfo.getByText(/^\d+ characters$/).first().waitFor();
+  await srvInfo.getByRole('button', { name: 'Close', exact: true }).last().click();
+  await srvInfo.waitFor({ state: 'detached' });
+  console.log('ok: server information dialog');
+
+  // Toolbar: description editor and settings
+  await page.locator('.me').getByRole('button', { name: 'Change your description' }).click();
+  await page.locator('.panel .rich').waitFor();
+  await page.locator('.panel').getByRole('button', { name: 'Cancel' }).click();
+  await page.locator('.me').getByRole('button', { name: 'Configure' }).click();
+  await page.getByRole('dialog', { name: 'Settings' }).waitFor();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  console.log('ok: toolbar opens the description editor and settings');
+
+  // Information: own connection shows client details and the full certificate
+  await page.locator('.sidebar .user.self').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Information' }).click();
+  const info = page.getByRole('dialog', { name: /^Information: alice/ });
+  await info.getByText('mumh5 0.2.0').waitFor();
+  await info.getByText('linux', { exact: false }).first().waitFor();
+  await info.getByText('Online for').waitFor();
+  // Live: the online time advances while the dialog is open
+  const onlineText = () => info.locator('dt', { hasText: 'Online for' }).locator('xpath=following-sibling::dd[1]').textContent();
+  const t1 = await onlineText();
+  await page.waitForTimeout(2200);
+  assert.notEqual(await onlineText(), t1, 'online time ticks live');
+  await info.getByRole('button', { name: 'View certificate' }).click();
+  await page.getByRole('dialog', { name: /^Certificate of alice/ }).getByText('alice', { exact: true }).first().waitFor();
+  await page.getByRole('dialog', { name: /^Certificate of alice/ }).getByRole('button', { name: 'Close', exact: true }).last().click();
+  await info.getByRole('button', { name: 'Close', exact: true }).last().click();
+  console.log('ok: own connection information with certificate chain');
+
+  // Someone else as a normal user: times and pings, details withheld by the server
+  await page.locator('.sidebar .user', { hasText: 'bob' }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Information' }).click();
+  const bobInfo = page.getByRole('dialog', { name: 'Information: bob' });
+  await bobInfo.getByText('Ping (TCP)').waitFor();
+  await bobInfo.getByText('only shown to admins', { exact: false }).first().waitFor();
+  assert.equal(await bobInfo.getByText('mumh5 0.2.0').count(), 0);
+  await bobInfo.getByRole('button', { name: 'Close', exact: true }).last().click();
+  console.log('ok: other user information respects server permissions');
+
+  if (admin) {
+    // Remove channels left over from an earlier run (the server refuses duplicate names)
+    for (const c of [...admin.channels.values()]) {
+      if (c.id !== 0 && c.parent === 0) admin.send('ChannelRemove', { channel_id: c.id });
+    }
+    await new Promise(r => setTimeout(r, 300));
+
+    // Channels: a long description (only sent as a hash), and a nested pair
+    const longDesc = 'Welcome to the lobby. ' + 'This description is long enough that the server only announces its hash. '.repeat(3);
+    const created = new Promise<void>(res => {
+      let n = 0;
+      admin.on('channel', c => { if (['Lobby', 'Games', 'Minecraft'].includes(c.name) && ++n === 3) res(); });
+    });
+    admin.send('ChannelState', { parent: 0, name: 'Lobby', description: longDesc });
+    admin.send('ChannelState', { parent: 0, name: 'Games' });
+    await new Promise(r => setTimeout(r, 300));
+    const games = [...admin.channels.values()].find(c => c.name === 'Games')!;
+    admin.send('ChannelState', { parent: games.id, name: 'Minecraft' });
+    await within(created, 'channels created');
+
+    await page.locator('.channel', { hasText: 'Games' }).waitFor();
+    assert.equal(await page.locator('.channel', { hasText: 'Minecraft' }).count(), 0, 'empty subchannels start collapsed');
+    console.log('ok: channels collapsed by default');
+
+    // Single click only selects the channel: no panel, no joining
+    await page.locator('.channel .name', { hasText: 'Lobby' }).click();
+    await page.locator('.channel.selected', { hasText: 'Lobby' }).waitFor();
+    assert.equal(await page.locator('aside.panel h2', { hasText: 'Lobby' }).count(), 0, 'no channel panel on a single click');
+    assert.equal(await page.locator('.me .who span').textContent(), 'Root');
+    console.log('ok: single click selects without opening a panel or joining');
+
+    // Description marker: only on channels that have one. Resting on the row previews, clicking the marker pins the preview
+    const marker = page.locator('.channel', { hasText: 'Lobby' }).getByRole('button', { name: 'Show description of Lobby' });
+    assert.equal(await page.locator('.channel', { hasText: 'Games' }).locator('.desc').count(), 0);
+    await page.locator('.channel .name', { hasText: 'Games' }).hover();
+    await page.waitForTimeout(2000);
+    assert.equal(await page.locator('.desc-pop').count(), 0, 'no preview for a channel without description');
+    for (const spot of [page.locator('.channel .name', { hasText: 'Lobby' }), marker]) {
+      await spot.hover();
+      await page.waitForTimeout(500);
+      assert.equal(await page.locator('.desc-pop').count(), 0, 'no preview before 1 second');
+      await page.locator('.desc-pop .html', { hasText: 'Welcome to the lobby' }).waitFor({ timeout: 3000 });
+      // Opens at the pointer
+      const at = (await spot.boundingBox())!;
+      const pop = (await page.locator('.desc-pop').boundingBox())!;
+      assert.ok(Math.abs(pop.x - (at.x + at.width / 2 + 12)) < 3 && Math.abs(pop.y - (at.y + at.height / 2 + 12)) < 3, 'preview at the pointer');
+      await page.mouse.move(700, 400);
+      await page.locator('.desc-pop').waitFor({ state: 'detached' });
+    }
+    await marker.click();
+    await page.locator('.desc-pop .html', { hasText: 'Welcome to the lobby' }).waitFor();
+    // Opened on purpose, it stays when the pointer moves away; Escape closes it
+    await page.mouse.move(700, 400);
+    await page.waitForTimeout(800);
+    assert.equal(await page.locator('.desc-pop').count(), 1, 'pinned preview stays');
+    await page.keyboard.press('Escape');
+    await page.locator('.desc-pop').waitFor({ state: 'detached' });
+    // The same from the menu
+    await page.locator('.channel .name', { hasText: 'Lobby' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Show description' }).click();
+    await page.locator('.desc-pop .html', { hasText: 'Welcome to the lobby' }).waitFor();
+    await page.keyboard.press('Escape');
+    await page.locator('.desc-pop').waitFor({ state: 'detached' });
+    console.log('ok: description previews on hover, marker and menu pin it');
+
+    // Side chat sends to that channel while staying in Root
+    const lobby = [...bob.channels.values()].find(c => c.name === 'Lobby')!;
+    await page.locator('.channel .name', { hasText: 'Lobby' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Send message to channel' }).click();
+    await page.locator('.panel [role=tab][aria-selected=true]', { hasText: 'Chat' }).waitFor();
+    // Channel messages only reach people in that channel, so listen from inside Lobby
+    admin.joinChannel(lobby.id);
+    await new Promise(r => setTimeout(r, 300));
+    const sideMsg = new Promise<number[]>(res => admin.on('text', m => { if (m.html === 'side hello') res(m.channels); }));
+    await page.locator('.panel .composer [contenteditable]').fill('side hello');
+    await page.locator('.panel .composer [contenteditable]').press('Enter');
+    assert.deepEqual(await within(sideMsg, 'side chat message'), [lobby.id]);
+    await page.locator('.panel .msg', { hasText: 'side hello' }).waitFor();
+    assert.equal(await page.locator('.chat .msg', { hasText: 'side hello' }).count(), 0);
+    console.log('ok: side chat sends to the previewed channel');
+
+    // Double click joins; the joined channel opens up
+    await page.locator('.channel .name', { hasText: 'Games' }).dblclick();
+    await page.locator('.me .who span', { hasText: 'Games' }).waitFor();
+    await page.locator('.channel', { hasText: 'Minecraft' }).waitFor();
+    console.log('ok: double click joins and expands');
+
+    // Channel context menu
+    await page.locator('.channel .name', { hasText: 'Lobby' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Join channel' }).click();
+    await page.locator('.me .who span', { hasText: 'Lobby' }).waitFor();
+    // Messaging a channel from its menu opens the side chat, ready to type, without joining
+    await page.locator('.channel .name', { hasText: 'Games' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Send message to channel' }).click();
+    const sideInput = page.locator('.panel .composer [contenteditable]');
+    await sideInput.waitFor();
+    assert.equal(await sideInput.getAttribute('data-placeholder'), 'Message #Games');
+    await page.waitForFunction(() => document.activeElement === document.querySelector('.panel .composer [contenteditable]'), null, { timeout: 3000 });
+    await page.locator('.me .who span', { hasText: 'Lobby' }).waitFor();
+    console.log('ok: channel context menu joins, and messages a channel from the side chat');
+
+    // Side panel can be resized by dragging its left edge
+    const panelBox = (await page.locator('aside.panel').boundingBox())!;
+    const handle = (await page.locator('aside.panel .resize').boundingBox())!;
+    await page.mouse.move(handle.x + 4, handle.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(handle.x - 150, handle.y + 200, { steps: 5 });
+    await page.mouse.up();
+    const grown = (await page.locator('aside.panel').boundingBox())!;
+    assert.ok(Math.abs(grown.width - (panelBox.width + 154)) < 6, `panel resized ${panelBox.width} -> ${grown.width}`);
+    console.log('ok: side panel resizable');
+
+    // The channel list is resizable too (from its right edge)
+    const sideBox = (await page.locator('aside.sidebar').boundingBox())!;
+    const sideHandle = (await page.locator('aside.sidebar .resize').boundingBox())!;
+    await page.mouse.move(sideHandle.x + 4, sideHandle.y + 300);
+    await page.mouse.down();
+    await page.mouse.move(sideHandle.x + 104, sideHandle.y + 300, { steps: 5 });
+    await page.mouse.up();
+    const sideAfter = (await page.locator('aside.sidebar').boundingBox())!;
+    assert.ok(Math.abs(sideAfter.width - (sideBox.width + 100)) < 6, `sidebar resized ${sideBox.width} -> ${sideAfter.width}`);
+    await page.locator('aside.sidebar .resize').dblclick();
+    console.log('ok: channel list resizable');
+
+    // ─── Channel management and permissions, done by alice through the UI ───
+    // Give alice (by certificate hash) full rights first, as SuperUser. Not @all: Write
+    // overrides denies, and bob must stay an ordinary user for the permission checks.
+    const aliceHash = [...admin.users.values()].find(u => u.name === 'alice')!.hash;
+    const rootAcl = new Promise<any>(res => admin.on('acl', a => { if (a.channelId === 0) res(a); }));
+    admin.queryAcl(0);
+    const ra = await within(rootAcl, 'root ACL');
+    ra.acls.push({ applyHere: true, applySubs: true, inherited: false, userId: null, group: `$${aliceHash}`, grant: 0x1f0fff, deny: 0 });
+    admin.saveAcl(ra);
+    await page.waitForTimeout(1500);
+    const chByName = (n: string) => [...bob.channels.values()].find(c => c.name === n);
+    const bobSees = (label: string, cond: () => boolean) => within(new Promise<void>(res => {
+      if (cond()) return res();
+      const off = bob.on('channel', () => { if (cond()) { off(); res(); } });
+      const off2 = bob.on('channelRemove', () => { if (cond()) { off2(); res(); } });
+    }), label);
+
+    // Create from the context menu on free space in the channel list
+    const listBox = (await page.locator('.sidebar .scroll').boundingBox())!;
+    await page.mouse.click(listBox.x + listBox.width / 2, listBox.y + listBox.height - 20, { button: 'right' });
+    await page.getByRole('menuitem', { name: 'Create channel...' }).click();
+    await page.getByLabel('Name').fill('Team');
+    await page.getByRole('button', { name: 'Create channel' }).click();
+    await page.locator('.channel .name', { hasText: 'Team' }).waitFor();
+    console.log('ok: channel created');
+
+    // Edit name and position
+    await page.locator('.channel .name', { hasText: 'Team' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Edit channel...' }).click();
+    await page.getByLabel('Name').fill('Team Room');
+    await page.getByLabel('Position').fill('7');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await bobSees('rename', () => chByName('Team Room')?.position === 7);
+    const teamId = chByName('Team Room')!.id;
+    console.log('ok: channel edited');
+
+    // Permissions: deny Enter for everyone
+    await page.locator('.channel .name', { hasText: 'Team Room' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Permissions...' }).click();
+    const dlg = page.getByRole('dialog', { name: 'Channel: Team Room' });
+    await dlg.getByRole('listbox', { name: 'Rules' }).waitFor();
+    await dlg.getByRole('button', { name: 'Add', exact: true }).click();
+    await dlg.getByLabel('Deny Enter').check();
+    if (shots) await page.screenshot({ path: path.join(shots, 'acl.png') });
+    // Group with a registered member
+    await dlg.getByRole('tab', { name: 'Groups' }).click();
+    await dlg.getByLabel('New group name').fill('mods');
+    await dlg.getByRole('button', { name: 'Add', exact: true }).click();
+    await dlg.getByLabel('Member name').fill('SuperUser');
+    await dlg.getByRole('button', { name: 'Add member' }).click();
+    await dlg.locator('.members', { hasText: 'SuperUser' }).waitFor();
+    if (shots) await page.screenshot({ path: path.join(shots, 'groups.png') });
+    await dlg.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.waitForTimeout(1500);
+    const deniedEnter = new Promise<number>(res => bob.on('permissionDenied', d => res(d.permission)));
+    bob.joinChannel(teamId);
+    assert.equal(await within(deniedEnter, 'enter denied'), 0x4);
+    const teamAcl = new Promise<any>(res => admin.on('acl', a => { if (a.channelId === teamId) res(a); }));
+    admin.queryAcl(teamId);
+    const ta = await within(teamAcl, 'team ACL');
+    assert.deepEqual(ta.groups.find((g: any) => g.name === 'mods')?.add, [0]);
+    console.log('ok: permissions and groups saved and enforced');
+
+    // Drag the channel into Games, and bob into Lobby
+    await page.locator('.channel .name', { hasText: 'Team Room' }).dragTo(page.locator('.channel .name', { hasText: 'Games' }));
+    const gamesId = chByName('Games')!.id;
+    await bobSees('channel moved', () => chByName('Team Room')?.parent === gamesId);
+    await page.locator('.sidebar .user', { hasText: 'bob' }).dragTo(page.locator('.channel', { hasText: 'Lobby' }).first());
+    await within(new Promise<void>(res => {
+      if (bob.self?.channelId === lobby.id) return res();
+      bob.on('user', u => { if (u.session === bob.session && u.channelId === lobby.id) res(); });
+    }), 'bob moved');
+    bob.joinChannel(0);
+    console.log('ok: drag and drop moves channels and people');
+
+    // Dropped on the lower or upper third of a row, a channel goes behind or in front of it.
+    // A line shows where it will land.
+    const topOrder = () => [...bob.channels.values()].filter(c => c.parent === 0).sort(byOrder).map(c => c.name);
+    assert.deepEqual(topOrder(), ['Games', 'Lobby']);
+    await page.locator('.channel .name', { hasText: 'Games' }).hover();
+    await page.mouse.down();
+    const lobbyBox = (await page.locator('.channel', { hasText: 'Lobby' }).first().boundingBox())!;
+    await page.mouse.move(lobbyBox.x + 60, lobbyBox.y + lobbyBox.height - 4, { steps: 8 });
+    // Lobby is open (people inside), so the line sits below them
+    await page.locator('li.after-end', { hasText: 'Lobby' }).waitFor();
+    if (shots) await page.screenshot({ path: path.join(shots, 'drag-line.png') });
+    assert.equal(await page.locator('.channel.dragging', { hasText: 'Games' }).count(), 1, 'the dragged channel is dimmed');
+    await page.mouse.up();
+    await bobSees('Games behind Lobby', () => topOrder().join() === 'Lobby,Games');
+    assert.equal(await page.locator('li.after-end, .channel.after, .channel.before, .channel.into').count(), 0);
+    await page.locator('.channel .name', { hasText: 'Games' }).dragTo(page.locator('.channel', { hasText: 'Lobby' }).first(), { targetPosition: { x: 60, y: 3 } });
+    await bobSees('Games in front of Lobby again', () => topOrder().join() === 'Games,Lobby');
+    // The pointer rests on a row with a description; move away so no preview covers the list
+    await page.mouse.move(700, 400);
+    await page.locator('.desc-pop').waitFor({ state: 'detached' });
+    console.log('ok: drag and drop puts a channel in front of or behind another, with a line where it lands');
+
+    // Delete (Team Room is now inside Games, which stays collapsed while empty)
+    await page.locator('.channel', { hasText: 'Games' }).first().getByRole('button', { name: 'Expand' }).click();
+    await page.locator('.channel .name', { hasText: 'Team Room' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete channel...' }).click();
+    await page.getByRole('button', { name: 'Delete channel' }).click();
+    await bobSees('deleted', () => !chByName('Team Room'));
+    console.log('ok: channel deleted');
+
+    // Toolbar: expand and collapse the whole tree
+    await page.locator('.me').getByRole('button', { name: 'Expand all channels' }).click();
+    await page.locator('.channel', { hasText: 'Minecraft' }).waitFor();
+    await page.locator('.me').getByRole('button', { name: 'Collapse all channels' }).click();
+    await page.locator('.channel', { hasText: 'Minecraft' }).waitFor({ state: 'detached' });
+    // Channels with people in them stay open
+    assert.notEqual(await page.locator('.me .who span').textContent(), 'Root');
+    await page.locator('.sidebar .row.user.self').waitFor();
+    console.log('ok: toolbar expands and collapses all channels, occupied ones stay open');
+
+    // ─── Text channels: read and written without joining, between mumh5 clients ───
+    // Bob plays a second mumh5 client by speaking the plugin data protocol
+    const assembler = new TextAssembler();
+    const signals: { type: number; text?: string }[] = [];
+    const waiting: { want: (s: { type: number; text?: string }) => boolean; res: (s: { type: number; text?: string }) => void }[] = [];
+    const bobSend = async (to: number[], type: Parameters<typeof encodeText>[0], body?: unknown) => {
+      for (const p of await encodeText(type, body)) { bob.sendPluginData(to, TEXT_DATA_ID, p); await new Promise(r => setTimeout(r, 120)); }
+    };
+    bob.on('pluginData', async (sender, dataId, data) => {
+      if (dataId !== TEXT_DATA_ID) return;
+      const signal = await assembler.push(sender, data);
+      if (!signal) return;
+      // Like a mumh5 client that was here before: answers a newcomer and hands over an old message
+      if (signal.type === TEXT.hello) bobSend([sender], TEXT.here);
+      if (signal.type === TEXT.want && notesId != null) {
+        bobSend([sender], TEXT.history, { c: notesId, m: [{ i: 'from-before', t: Date.now() - 3600_000, n: 'dave', k: '', h: 'said while you were away' }] });
+      }
+      signals.push(signal);
+      const at = waiting.findIndex(w => w.want(signal));
+      if (at >= 0) waiting.splice(at, 1)[0].res(signal);
+    });
+    const bobGets = (label: string, want: (s: { type: number; text?: string }) => boolean) =>
+      within(new Promise<{ type: number; text?: string }>(res => waiting.push({ want, res })), label);
+
+    await page.mouse.click(listBox.x + listBox.width / 2, listBox.y + listBox.height - 20, { button: 'right' });
+    await page.getByRole('menuitem', { name: 'Create channel...' }).click();
+    await page.getByLabel('Name').fill('notes');
+    await page.getByLabel('Text channel (mumh5 only)').check();
+    await page.getByRole('button', { name: 'Create channel' }).click();
+    await bobSees('text channel', () => !!chByName('notes')?.description.startsWith(TEXT_MARK));
+    notesId = chByName('notes')!.id;
+    const notesRow = page.locator('.channel', { hasText: 'notes' });
+    // No description marker for a channel whose description is only the text channel mark
+    assert.equal(await notesRow.locator('.desc').count(), 0);
+    const voiceChannel = await page.locator('.me .who span').textContent();
+    await notesRow.locator('.name').click();
+    await page.locator('.chat h1', { hasText: 'notes' }).waitFor();
+    assert.equal(await page.locator('.me .who span').textContent(), voiceChannel, 'opening a text channel does not join it');
+    const sent = bobGets('text channel message', m => m.type === TEXT.msg);
+    await page.locator('.chat .composer [contenteditable]').fill('text hello');
+    await page.locator('.chat .composer [contenteditable]').press('Enter');
+    const got = parseMsg((await sent).text);
+    assert.equal(got?.c, notesId);
+    assert.equal(got?.h, 'text hello');
+    await page.locator('.chat .msg', { hasText: 'text hello' }).waitFor();
+    console.log('ok: text channel created, opened without joining, message reaches others');
+
+    // Files go into text channels too, announced with a preview that fits a text channel message
+    const notePng = path.join(userData, 'note.png');
+    writeFileSync(notePng, testPng(800, 600));
+    const sentFile = bobGets('file in a text channel', m => m.type === TEXT.msg && !!parseMsg(m.text)?.h.includes('note.png'));
+    await page.locator('.chat .composer input[type=file]').first().setInputFiles(notePng);
+    const fileMsg = parseMsg((await sentFile).text)!;
+    assert.equal(fileMsg.c, notesId);
+    const [noteFile] = takeFiles(fileMsg.h).files;
+    assert.equal(noteFile.meta.n, 'note.png');
+    assert.ok(noteFile.poster.startsWith('data:image/jpeg;base64,'), 'with a preview picture');
+    await page.locator('.chat .msg .file img[alt="note.png"]').waitFor();
+    console.log(`ok: file sent into a text channel (${fileMsg.h.length} chars)`);
+
+    // A message from someone in another channel arrives; unread while another chat is open
+    await bobSend([aliceSession()], TEXT.msg, { i: 'bob-1', c: notesId, h: 'hello from <b>bob</b>' });
+    await page.locator('.chat .msg', { hasText: 'hello from bob' }).locator('strong', { hasText: 'bob' }).first().waitFor();
+    await page.locator('.channel .name', { hasText: voiceChannel! }).first().dblclick();
+    await page.locator('.chat h1', { hasText: voiceChannel! }).waitFor();
+    await bobSend([aliceSession()], TEXT.msg, { i: 'bob-2', c: notesId, h: 'second from bob' });
+    await notesRow.locator('.badge', { hasText: '1' }).waitFor();
+    // The same message again is not shown twice
+    await bobSend([aliceSession()], TEXT.msg, { i: 'bob-2', c: notesId, h: 'second from bob' });
+    await page.waitForTimeout(500);
+    await notesRow.locator('.name').click();
+    await page.locator('.chat .msg', { hasText: 'second from bob' }).waitFor();
+    assert.equal(await page.locator('.chat .html', { hasText: 'second from bob' }).count(), 1);
+    assert.equal(await notesRow.locator('.badge').count(), 0);
+    // Not into ordinary channels
+    await bobSend([aliceSession()], TEXT.msg, { i: 'bob-3', c: gamesId, h: 'sneaked in' });
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator('.channel', { hasText: 'Games' }).first().locator('.badge').count(), 0);
+    console.log('ok: text channel messages arrive, count as unread, no duplicates, only in text channels');
+
+    // The app hands its messages to a client that asks
+    const handed = bobGets('history', m => m.type === TEXT.history && parseHistory(m.text).length > 0);
+    await bobSend([aliceSession()], TEXT.want);
+    const history = parseHistory((await handed).text);
+    assert.deepEqual(history.map(m => m.h), ['text hello', fileMsg.h, 'hello from <b>bob</b>', 'second from bob']);
+    assert.deepEqual(history.map(m => m.n), ['alice', 'alice', 'bob', 'bob']);
+    assert.equal(history[0].c, notesId);
+    await page.locator('.channel .name', { hasText: voiceChannel! }).first().dblclick();
+    await page.locator('.chat h1', { hasText: voiceChannel! }).waitFor();
+    console.log('ok: text channel messages handed to a client that asks');
+  }
+
+  // A picture too large for a message goes as a file, with a scaled preview for other clients
+  await page.locator('.channel .name', { hasText: 'Root' }).dblclick();
+  await page.locator('.me .who span', { hasText: 'Root' }).waitFor();
+  const big = path.join(userData, 'big.png');
+  writeFileSync(big, testPng(1600, 1200));
+  const gotBig = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('big.png')) res(m.html); }));
+  await page.locator('.chat .composer input[type=file]').first().setInputFiles(big);
+  const announcedBig = await within(gotBig, 'large picture', 15000);
+  assert.match(announcedBig, /<b>big\.png<\/b> \([\d.]+ MB, file shared with mumh5\)<br\/><img src="data:image\/jpeg;base64,[^"]+"\/><!--\/mumh5:file-->$/);
+  assert.ok(announcedBig.length <= 131072, `within the server limit (${announcedBig.length})`);
+  // A small one goes inline as it is, for everyone
+  const small = path.join(userData, 'small.png');
+  writeFileSync(small, testPng(60, 40));
+  const gotSmall = new Promise<string>(res => bob.on('text', m => { if (m.html.startsWith('<img')) res(m.html); }));
+  await page.locator('.chat .composer input[type=file]').first().setInputFiles(small);
+  assert.match(await within(gotSmall, 'small picture'), /^<img src="data:image\/png;base64,[^"]+"\/>$/);
+  console.log(`ok: large picture sent as a file with a preview (${announcedBig.length} chars), small one inline`);
+
+  // A click on an image in the chat shows it large; Escape or a click closes it
+  await page.locator('.chat .msg .file img[alt="big.png"]').click();
+  const viewer = page.getByRole('dialog', { name: 'Image' });
+  await viewer.waitFor();
+  const shown = await viewer.locator('img').evaluate((i: HTMLImageElement) => [i.naturalWidth > 0, i.getBoundingClientRect().width]);
+  assert.ok(shown[0] && (shown[1] as number) > 300, `image shown large: ${shown}`);
+  await page.keyboard.press('Escape');
+  await viewer.waitFor({ state: 'detached' });
+  await page.locator('.chat .msg .html img').last().click();
+  await viewer.waitFor();
+  await viewer.getByRole('button', { name: 'Close image' }).click({ position: { x: 5, y: 5 } });
+  await viewer.waitFor({ state: 'detached' });
+  console.log('ok: images open large on click');
+
+  // ─── Several servers at once ─────────────────────────────────────────────
+  const userState = (name: string) => [...bob.users.values()].find(u => u.name === name);
+  const until2 = (label: string, cond: () => boolean) => within(new Promise<void>(res => {
+    if (cond()) return res();
+    const off = bob.on('user', () => { if (cond()) { off(); res(); } });
+  }), label);
+
+  await page.getByTitle('Add a server').click();
+  await page.getByLabel('Address').fill(host);
+  await page.getByLabel('Port').fill(port);
+  await page.getByLabel('Username').fill('alice-b');
+  await page.getByLabel('Label').fill('Second');
+  await page.getByRole('button', { name: 'Save and connect' }).click();
+  await page.locator('.rail .tile.live').nth(1).waitFor();
+  assert.equal(await page.locator('.rail .tile.live').count(), 2, 'both servers connected');
+  await until2('background server shows deafened', () => !!userState('alice-b')?.selfDeaf);
+  assert.equal(await page.locator('.rail .tile.voice').getAttribute('title').then(t => t?.startsWith('Test Server')), true);
+  await page.getByText('Voice is on Test Server').waitFor();
+  console.log('ok: second server connected, deafened in the background');
+  assert.ok((await soundLog()).includes('userConnected'), 'sound when someone connects into your channel');
+
+  // Joining a channel on the second server moves voice there
+  await page.locator('.channel .name', { hasText: 'Root' }).dblclick();
+  await until2('voice moved to the second server', () => !userState('alice-b')?.selfDeaf && !!userState('alice')?.selfDeaf);
+  assert.equal(await page.locator('.rail .tile.voice').getAttribute('title').then(t => t?.startsWith('Second')), true);
+  // The server with voice leads the rail, although it was added last
+  const railTop = (title: string) => page.locator(`.rail .tile[title^="${title}"]`).boundingBox().then(b => b!.y);
+  assert.ok(await railTop('Second') < await railTop('Test Server'), 'voice server on top');
+  assert.match(await page.locator('.rail .tile').first().getAttribute('title') ?? '', /^Test Server/, 'the saved order is untouched');
+  console.log('ok: voice follows the channel you join');
+
+  // Messages on the server not on screen show as unread on its tile
+  bob.sendText({ channels: [0] }, 'ping both');
+  await page.locator('.rail .tile[title^="Test Server"] .unread').waitFor();
+  console.log('ok: unread badge on the background server');
+
+  // Reorder by dragging Second above Test Server
+  await page.locator('.rail .tile[title^="Second"]').dragTo(page.locator('.rail .tile[title^="Test Server"]'), { targetPosition: { x: 22, y: 4 } });
+  assert.match(await page.locator('.rail .tile').first().getAttribute('title') ?? '', /^Second/);
+  console.log('ok: servers reordered by drag and drop');
+
+  // Custom icon from the tile's context menu: square-cropped and shown instead of initials
+  const iconFile = path.join(userData, 'icon.png');
+  writeFileSync(iconFile, testPng(300, 200));
+  // With hints off, the title of whatever the pointer rests on is set aside; move off the tile first
+  await page.mouse.move(700, 400);
+  await page.locator('.rail .tile[title^="Second"]').click({ button: 'right' });
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('menuitem', { name: 'Change icon...' }).click();
+  await (await chooser).setFiles(iconFile);
+  const icon = page.locator('.rail .tile[title^="Second"] img.icon');
+  await icon.waitFor();
+  assert.deepEqual(await icon.evaluate((i: HTMLImageElement) => [i.naturalWidth, i.naturalHeight, i.src.slice(0, 15)]), [128, 128, 'data:image/webp']);
+  console.log('ok: custom server icon');
+
+  // Disconnecting the voice server hands voice back and restores the earlier state
+  await page.locator('.rail .tile[title^="Second"]').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Disconnect' }).click();
+  await until2('voice back on the first server', () => !userState('alice-b') && !userState('alice')?.selfDeaf);
+  assert.equal(userState('alice')?.selfMute, true, 'earlier self-mute kept');
+  await page.locator('.rail .tile[title^="Test Server"]').click();
+  await page.locator('.rail .tile[title^="Test Server"] .unread').waitFor({ state: 'detached' });
+  console.log('ok: voice returns when the other server disconnects');
+
+  // Narrow window: voice channel as tiles, speaking lights up the tile
+  await page.setViewportSize({ width: 420, height: 800 });
+  const stage = page.getByRole('region', { name: 'Voice channel' });
+  const bobTile = stage.locator('.tile', { hasText: 'bob' });
+  await bobTile.waitFor();
+  const echo2 = packets.map((p, i) => encodeVoice({ target: 0, frame: 5000 + i * 2, opus: p.opus, last: i === packets.length - 1 }, bob.protobufVoice));
+  const pump2 = setInterval(() => { const pk = echo2.shift(); if (pk) bob.sendVoiceTunnel(pk); }, 20);
+  await page.locator('.stage .tile.talking', { hasText: 'bob' }).waitFor({ timeout: 3000 });
+  clearInterval(pump2);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await stage.waitFor({ state: 'detached' }); // wide layouts use the member list instead
+  console.log('ok: voice tiles on small windows show who is talking');
+
+  // Change name: Mumble needs a reconnect, the app does it and remembers the name.
+  // Unique per run: a reused test server may still have an earlier run's name registered.
+  const newName = `alice${Date.now() % 100000}`;
+  await page.locator('.me .profile').click();
+  await page.getByRole('button', { name: 'Change name' }).click();
+  await page.getByLabel('New name').fill(newName);
+  await page.getByRole('button', { name: 'Reconnect with this name' }).click();
+  await page.locator('.me .who strong', { hasText: newName }).waitFor();
+  await within(new Promise<void>(res => {
+    if ([...bob.users.values()].some(u => u.name === newName)) return res();
+    bob.on('user', u => { if (u.name === newName) res(); });
+  }), 'bob sees the new name');
+  console.log('ok: name changed by reconnecting');
+
+  // Text channel after reconnecting: what this computer kept, plus what another client hands over
+  if (notesId != null) {
+    await page.locator('.channel .name', { hasText: 'notes' }).click();
+    await page.locator('.chat .msg', { hasText: 'said while you were away' }).locator('strong', { hasText: 'dave' }).waitFor();
+    const texts = await page.locator('.chat .msg .html').allTextContents();
+    assert.deepEqual(texts.map(t => t.trim()).filter(t => !t.startsWith('You joined')), ['said while you were away', 'text hello', 'hello from bob', 'second from bob']);
+    assert.equal(await page.locator('.channel', { hasText: 'notes' }).locator('.badge').count(), 0, 'old messages are not unread');
+    // The file sent there was kept on this computer
+    await page.locator('.chat .msg .file img[alt="note.png"]').waitFor();
+    await page.locator('.channel .name', { hasText: 'Root' }).dblclick();
+    await page.locator('.chat h1', { hasText: 'Root' }).waitFor();
+    console.log('ok: text channel keeps its messages and catches up from another client');
+  }
+
+  // Self-registration from the right-click menu on yourself; the profile shows no badge either way
+  const meRow = page.locator('.sidebar .user.self');
+  await meRow.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Register on this server' }).click();
+  await meRow.locator('.reg').waitFor();
+  await meRow.click({ button: 'right' });
+  assert.equal(await page.getByRole('menuitem', { name: 'Register on this server' }).count(), 0, 'no register item once registered');
+  await page.keyboard.press('Escape');
+  console.log('ok: registered on the server');
+
+  // Giving the microphone back while muted (for Bluetooth headsets), and taking it again
+  {
+    const muteBtn = (name: 'Mute' | 'Unmute') => page.locator('.me').getByRole('button', { name, exact: true });
+    if (!userState(newName)!.selfMute) {
+      await muteBtn('Mute').click();
+      await until2('muted', () => !!userState(newName)!.selfMute);
+    }
+    await page.getByTitle('Settings').click();
+    assert.equal(await page.getByLabel('Give the microphone back while muted').isChecked(), false, 'off by default on a desktop');
+    await page.getByLabel('Give the microphone back while muted').check();
+    await page.getByText('The microphone is given back now.').waitFor();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    // Unmuting takes it again
+    const heard = new Promise<void>(res => { const off = bob.on('voice', raw => { if (decodeVoice(raw)?.session === userState(newName)!.session) { off(); res(); } }); });
+    await muteBtn('Unmute').click();
+    await until2('unmuted', () => !userState(newName)!.selfMute);
+    await page.getByTitle('Settings').click();
+    await page.getByText('The microphone is open now.').waitFor();
+    await page.getByLabel('Give the microphone back while muted').uncheck();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    // Push to talk is the mode at this point: hold the key until bob hears the fake microphone
+    await page.locator('.chat header h1').click();
+    await page.keyboard.down('Backquote');
+    await within(heard, 'voice after taking the microphone again', 15000);
+    await page.keyboard.up('Backquote');
+    await muteBtn('Mute').click();
+    await until2('muted again', () => !!userState(newName)!.selfMute);
+    console.log('ok: microphone given back while muted and taken again on unmute');
+  }
+
+  // ─── The Rooms interface: the same app arranged for phones ─────────────────
+  {
+    const before = page.viewportSize()!;
+    await page.getByTitle('Settings').click();
+    await page.getByRole('tab', { name: 'Appearance' }).click();
+    await page.getByRole('radio', { name: 'Rooms' }).click();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 800 });
+    const nav = page.getByRole('navigation', { name: 'Screens' });
+    const rooms = page.getByRole('region', { name: 'Rooms' });
+    await rooms.getByRole('heading', { name: 'Test Server' }).waitFor();
+    assert.equal(await page.locator('.sidebar').count(), 0, 'the standard interface is gone');
+    // People show in their room without opening it; the dock names the room you are in
+    await rooms.locator('.room.here .person', { hasText: 'bob' }).waitFor();
+    await page.locator('.dock', { hasText: 'Root' }).waitFor();
+    if (admin) {
+      await rooms.getByRole('button', { name: 'Join Games' }).click();
+      await until2('alice in Games', () => bob.channels.get(userState(newName)!.channelId)?.name === 'Games');
+      await page.locator('.dock', { hasText: 'Games' }).waitFor();
+      await rooms.getByRole('button', { name: 'Join Root' }).click();
+      await until2('alice back in Root', () => userState(newName)!.channelId === 0);
+      await page.locator('.dock', { hasText: 'Root' }).waitFor();
+    }
+    console.log('ok: rooms interface lists rooms with their people and joins from the list');
+
+    // Mute from the dock
+    const wasMuted = !!userState(newName)!.selfMute;
+    await page.locator('.dock').getByRole('button', { name: wasMuted ? 'Unmute' : 'Mute', exact: true }).click();
+    await until2('mute toggled from the dock', () => !!userState(newName)!.selfMute === !wasMuted);
+    await page.locator('.dock').getByRole('button', { name: wasMuted ? 'Mute' : 'Unmute', exact: true }).click();
+    await until2('mute restored', () => !!userState(newName)!.selfMute === wasMuted);
+
+    // Chat is a screen of its own
+    await nav.getByRole('button', { name: 'Chat' }).click();
+    const roomsMsg = new Promise<void>(res => bob.on('text', m => { if (m.html === 'hello from rooms') res(); }));
+    await page.locator('.chat2 .composer [contenteditable]').fill('hello from rooms');
+    await page.locator('.chat2 .composer [contenteditable]').press('Enter');
+    await within(roomsMsg, 'message from the rooms interface');
+    await page.locator('.chat2 .msg', { hasText: 'hello from rooms' }).waitFor();
+    await page.getByRole('button', { name: 'Back to rooms' }).click();
+    await rooms.waitFor();
+
+    // The voice screen shows the room as tiles with the large controls
+    await nav.getByRole('button', { name: 'Voice' }).click();
+    const voiceScreen = page.getByRole('region', { name: 'Voice', exact: true });
+    await voiceScreen.locator('.tile', { hasText: 'bob' }).waitFor();
+    await voiceScreen.getByRole('button', { name: /^Share your screen or camera$/ }).waitFor();
+    assert.equal(await page.locator('.dock').count(), 0, 'no dock on the voice screen');
+
+    // People: a profile opens over the screen, a message opens the chat
+    await nav.getByRole('button', { name: 'People' }).click();
+    const people = page.getByRole('region', { name: 'People' });
+    await people.locator('.entry', { hasText: 'bob' }).locator('.main').click();
+    await page.getByRole('dialog', { name: 'Profile of bob' }).locator('h3', { hasText: 'bob' }).waitFor();
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog', { name: 'Profile of bob' }).waitFor({ state: 'detached' });
+    await people.getByRole('button', { name: 'Message bob' }).click();
+    await page.locator('.chat2 h1', { hasText: 'bob' }).waitFor();
+    if (shots) await page.screenshot({ path: path.join(shots, 'rooms-phone.png') });
+
+    // Wide windows keep the rooms next to the screen
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await rooms.waitFor();
+    await page.locator('.chat2').waitFor();
+    assert.equal(await nav.getByRole('button', { name: 'Rooms' }).count(), 0);
+    if (notesId != null) {
+      await rooms.locator('.entry', { hasText: 'notes' }).locator('.main').click();
+      await page.locator('.chat2 .msg', { hasText: 'text hello' }).waitFor();
+    }
+    if (shots) await page.screenshot({ path: path.join(shots, 'rooms-wide.png') });
+    console.log('ok: rooms interface: dock, chat, voice screen, people, profile sheet, wide layout');
+
+    // Back to the standard interface from the You screen
+    await nav.getByRole('button', { name: 'You' }).click();
+    await page.getByRole('region', { name: 'You' }).getByRole('button', { name: /^Appearance/ }).click();
+    await page.getByRole('radio', { name: 'Standard' }).click();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.locator('.sidebar').waitFor();
+    await page.setViewportSize(before);
+    await page.locator('.channel .name', { hasText: 'Root' }).dblclick();
+    await page.locator('.chat h1', { hasText: 'Root' }).waitFor();
+    console.log('ok: back to the standard interface from the You screen');
+  }
+
+  // Kicked: the reason is shown with a Reconnect button
+  if (admin) {
+    const me = [...admin.users.values()].find(u => u.name === newName)!;
+    admin.kick(me.session, 'testing kicks');
+    const card = page.locator('.ended');
+    await card.getByText('You were kicked by SuperUser').waitFor();
+    await card.getByText('testing kicks').waitFor();
+    // Back on the start screen, which shows who is on the saved servers
+    await page.locator('.home .server', { hasText: 'Test Server' }).getByText(/\d+( of \d+)? online/).waitFor({ timeout: 70000 });
+    if (shots) await page.screenshot({ path: path.join(shots, 'kicked.png') });
+    await card.getByRole('button', { name: 'Reconnect' }).click();
+    await page.locator('.sidebar .status', { hasText: 'Connected' }).waitFor();
+    assert.equal(await card.count(), 0);
+    console.log('ok: kick shows the reason and reconnects');
+  }
+
+  if (shots) {
+    await page.waitForTimeout(300);
+    for (const [name, w, h] of [['wide', 1280, 800], ['medium', 900, 700], ['narrow', 400, 780]] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(200);
+      await page.screenshot({ path: path.join(shots, `${name}.png`) });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator('.me').getByRole('button', { name: /^(Mute|Unmute)$/ }).click({ button: 'right' });
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(shots, 'quick-audio.png') });
+    await page.keyboard.press('Escape');
+    await page.locator('.me .profile').click();
+    await page.getByRole('button', { name: 'Edit description' }).click();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(shots, 'editor.png') });
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByTitle('Settings').click();
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(shots, 'settings-voice.png') });
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.locator('.sidebar .user', { hasText: 'bob' }).click();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: path.join(shots, 'profile.png') });
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 400, height: 780 });
+    await page.waitForTimeout(200);
+    // Small windows show the voice channel as tiles above the chat
+    const stage = page.getByRole('region', { name: 'Voice channel' });
+    await stage.locator('.tile', { hasText: 'bob' }).waitFor();
+    await stage.getByRole('button', { name: /^(Mute|Unmute)$/ }).waitFor();
+    await page.screenshot({ path: path.join(shots, 'narrow-stage.png') });
+    await page.getByLabel('Open channels').click();
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(shots, 'narrow-drawer.png') });
+  }
+  console.log('E2E PASSED');
+} catch (e) {
+  if (shots) await (await app.firstWindow()).screenshot({ path: path.join(shots, 'failure.png') });
+  throw e;
+} finally {
+  bob.disconnect();
+  admin?.disconnect();
+  await app.close();
+}

@@ -1,0 +1,331 @@
+/* Color schemes: Dark (the default in app.css), Light, Midnight, High contrast, Abyss, Windows 95 Light
+   and Windows 95 Dark. Each overrides the same variables; "custom" is set from Settings (see lib/theme.ts).
+   [data-theme-preview] applies a theme to a single element (the pickers in Settings). */
+
+:root:not([data-theme]), [data-theme-preview="dark"] {
+  --bg-0: #0e0f11;
+  --bg-1: #141518;
+  --bg-2: #1a1b1f;
+  --bg-3: #222429;
+  --bg-hover: #27292e;
+  --bg-active: #2f3238;
+  --line: #2a2c32;
+  --text: #e6e7ea;
+  --text-dim: #a0a3ab;
+  --text-faint: #6c6f78;
+  --accent: #7c6cff;
+  --accent-hover: #8f81ff;
+  --accent-text: #ffffff;
+  --speaking: #3bd16f;
+  --danger: #f0504a;
+  --warn: #e8b23c;
+  --link: #6fb3ff;
+  --rail: var(--bg-0);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"], [data-theme-preview="light"] {
+  --rail: var(--bg-0);
+  --bg-0: #e3e5e8;
+  --bg-1: #f2f3f5;
+  --bg-2: #ffffff;
+  --bg-3: #e8e9ec;
+  --bg-hover: #e1e3e7;
+  --bg-active: #d4d7dc;
+  --line: #d4d6db;
+  --text: #1d1f23;
+  --text-dim: #555a64;
+  --text-faint: #858a94;
+  --accent: #5b4bdb;
+  --accent-hover: #4a3bc4;
+  --accent-text: #ffffff;
+  --speaking: #1f9d4c;
+  --danger: #d33a34;
+  --warn: #b7791f;
+  --link: #1f64c9;
+  color-scheme: light;
+}
+
+:root[data-theme="midnight"], [data-theme-preview="midnight"] {
+  --rail: var(--bg-0);
+  --bg-0: #000000;
+  --bg-1: #050505;
+  --bg-2: #0a0a0a;
+  --bg-3: #151515;
+  --bg-hover: #1a1a1a;
+  --bg-active: #222222;
+  --line: #1c1c1c;
+  --text: #d8d8d8;
+  --text-dim: #8a8a8a;
+  --text-faint: #5a5a5a;
+  --accent: #e0443e;
+  --accent-hover: #f05a54;
+  --accent-text: #ffffff;
+  --speaking: #3bd16f;
+  --danger: #ff5a52;
+  --warn: #e8b23c;
+  --link: #ff8a80;
+  color-scheme: dark;
+}
+
+:root[data-theme="contrast"], [data-theme-preview="contrast"] {
+  --rail: var(--bg-0);
+  --bg-0: #000000;
+  --bg-1: #000000;
+  --bg-2: #000000;
+  --bg-3: #1a1a1a;
+  --bg-hover: #262626;
+  --bg-active: #3a3a3a;
+  --line: #8c8c8c;
+  --text: #ffffff;
+  --text-dim: #e0e0e0;
+  --text-faint: #b0b0b0;
+  --accent: #ffd400;
+  --accent-hover: #ffe14d;
+  --accent-text: #000000;
+  --speaking: #00ff7f;
+  --danger: #ff6b6b;
+  --warn: #ffd400;
+  --link: #7fd4ff;
+  color-scheme: dark;
+}
+
+:root[data-theme="abyss"], [data-theme-preview="abyss"] {
+  --rail: var(--bg-0);
+  --bg-0: #04050b;
+  --bg-1: #080a17;
+  --bg-2: #0b0e21;
+  --bg-3: #111632;
+  --bg-hover: #141b3d;
+  --bg-active: #1b2450;
+  --line: #121836;
+  --text: #e3e5ed;
+  --text-dim: #9ba0b5;
+  --text-faint: #656a81;
+  --accent: #47caf5;
+  --accent-hover: #69d4f7;
+  --accent-text: #0b0b0b;
+  --speaking: #3bd16f;
+  --danger: #f0574c;
+  --warn: #e8b23c;
+  --link: #71e9f4;
+  color-scheme: dark;
+}
+
+/* ─── Windows 95 ─────────────────────────────────────────────────────────────
+   Both variants share every rule below through [data-theme^="win95"]; they differ only in the
+   --w-* palette: face, highlight, light, shadow and dark edge of the 3D borders, field color,
+   title bar and selection. */
+
+:root[data-theme="win95-light"], [data-theme-preview="win95-light"] {
+  --w-face: #c0c0c0;
+  --w-hi: #ffffff;
+  --w-light: #dfdfdf;
+  --w-shadow: #808080;
+  --w-dark: #000000;
+  --w-field: #ffffff;
+  --w-title: linear-gradient(90deg, #000080, #1084d0);
+  --w-sel: #000080;
+  --bg-0: #c0c0c0;
+  --bg-1: #c0c0c0;
+  --bg-2: #ffffff;
+  --bg-3: #c0c0c0;
+  --bg-hover: #dfdfdf;
+  --bg-active: #000080;
+  --line: #808080;
+  --text: #000000;
+  --text-dim: #202020;
+  --text-faint: #606060;
+  --accent: #000080;
+  --accent-hover: #1084d0;
+  --accent-text: #ffffff;
+  --speaking: #008000;
+  --danger: #c00000;
+  --warn: #808000;
+  --link: #0000ee;
+  --rail: #008080;
+  color-scheme: light;
+}
+
+:root[data-theme="win95-dark"], [data-theme-preview="win95-dark"] {
+  --w-face: #2d2d2d;
+  --w-hi: #6a6a6a;
+  --w-light: #4a4a4a;
+  --w-shadow: #1a1a1a;
+  --w-dark: #000000;
+  --w-field: #141414;
+  --w-title: linear-gradient(90deg, #000080, #1084d0);
+  --w-sel: #000080;
+  --bg-0: #2d2d2d;
+  --bg-1: #2d2d2d;
+  --bg-2: #141414;
+  --bg-3: #2d2d2d;
+  --bg-hover: #3b3b3b;
+  --bg-active: #000080;
+  --line: #0d0d0d;
+  --text: #e6e6e6;
+  --text-dim: #c0c0c0;
+  --text-faint: #8a8a8a;
+  --accent: #1470c8;
+  --accent-hover: #3a8fe0;
+  --accent-text: #ffffff;
+  --speaking: #2ecc40;
+  --danger: #ff5a52;
+  --warn: #d0c040;
+  --link: #6ab0ff;
+  --rail: #004d4d;
+  color-scheme: dark;
+}
+
+:root[data-theme^="win95"], [data-theme-preview^="win95"] {
+  --font: Tahoma, "MS Sans Serif", "Microsoft Sans Serif", Geneva, Verdana, sans-serif;
+  --fs: 13px;
+  --raised: inset -1px -1px var(--w-dark), inset 1px 1px var(--w-hi), inset -2px -2px var(--w-shadow), inset 2px 2px var(--w-light);
+  --sunken: inset -1px -1px var(--w-hi), inset 1px 1px var(--w-shadow), inset -2px -2px var(--w-light), inset 2px 2px var(--w-dark);
+}
+
+:root[data-theme^="win95"] body { -webkit-font-smoothing: none; }
+:root[data-theme^="win95"] ::selection { background: var(--w-sel); color: #fff; }
+
+/* Buttons: raised, pressed in when active */
+:root[data-theme^="win95"] .btn,
+:root[data-theme^="win95"] .icon-btn,
+:root[data-theme^="win95"] .rail .tile,
+:root[data-theme^="win95"] .modes button,
+:root[data-theme^="win95"] .tabs button,
+:root[data-theme^="win95"] .tool,
+:root[data-theme^="win95"] .facade .play {
+  background: var(--w-face);
+  color: var(--text);
+  border: 0;
+  box-shadow: var(--raised);
+}
+:root[data-theme^="win95"] .btn:active:not(:disabled),
+:root[data-theme^="win95"] .icon-btn:active,
+:root[data-theme^="win95"] .rail .tile:active,
+:root[data-theme^="win95"] .modes button.active,
+:root[data-theme^="win95"] .tabs button.active,
+:root[data-theme^="win95"] .tool.on {
+  box-shadow: var(--sunken);
+  background: var(--w-face);
+  color: var(--text);
+}
+:root[data-theme^="win95"] .btn.primary { background: var(--w-face); color: var(--text); outline: 1px solid var(--w-dark); outline-offset: -1px; }
+:root[data-theme^="win95"] .btn.danger { color: var(--danger); }
+:root[data-theme^="win95"] .icon-btn { color: var(--text); }
+:root[data-theme^="win95"] .icon-btn.on { color: var(--danger); }
+:root[data-theme^="win95"] .btn:hover:not(:disabled),
+:root[data-theme^="win95"] .icon-btn:hover,
+:root[data-theme^="win95"] .tool:hover:not(:disabled) { background: var(--w-face); color: var(--text); }
+
+/* Text fields: sunken */
+:root[data-theme^="win95"] input:not([type=range]):not([type=checkbox]):not([type=color]),
+:root[data-theme^="win95"] textarea,
+:root[data-theme^="win95"] select,
+:root[data-theme^="win95"] .rich,
+:root[data-theme^="win95"] .composer .box,
+:root[data-theme^="win95"] .meter {
+  background: var(--w-field);
+  color: var(--text);
+  border: 0;
+  box-shadow: var(--sunken);
+}
+:root[data-theme^="win95"] .composer .box textarea { box-shadow: none; }
+/* Raised frame in the window face color around the sunken input */
+:root[data-theme^="win95"] .composer .frame { border: 2px outset var(--w-face); background: var(--w-face); }
+:root[data-theme^="win95"] .rich .area, :root[data-theme^="win95"] .rich textarea { box-shadow: none; }
+:root[data-theme^="win95"] input[type=range] { accent-color: var(--accent); }
+
+/* Title bars */
+:root[data-theme^="win95"] .modal header,
+:root[data-theme^="win95"] .sidebar header,
+:root[data-theme^="win95"] .chat > header,
+:root[data-theme^="win95"] .panel > header {
+  background: var(--w-title);
+  color: #fff;
+  border: 0;
+}
+:root[data-theme^="win95"] .modal header { margin: 3px 3px 0; padding: 4px 4px 4px 8px; }
+:root[data-theme^="win95"] .modal header h2 { font-size: 13px; font-weight: 700; color: #fff; }
+:root[data-theme^="win95"] .modal header .icon-btn { width: 18px; height: 16px; }
+:root[data-theme^="win95"] .chat > header h1,
+:root[data-theme^="win95"] .panel > header h2,
+:root[data-theme^="win95"] .sidebar header strong,
+:root[data-theme^="win95"] .sidebar header .status,
+:root[data-theme^="win95"] .chat > header .topic { color: #fff; }
+:root[data-theme^="win95"] .chat > header .icon-btn,
+:root[data-theme^="win95"] .panel > header .icon-btn,
+:root[data-theme^="win95"] .sidebar header .icon-btn { width: 22px; height: 20px; }
+
+/* Windows and panels */
+:root[data-theme^="win95"] .modal,
+:root[data-theme^="win95"] .menu,
+:root[data-theme^="win95"] .pop {
+  background: var(--w-face);
+  border: 0;
+  box-shadow: var(--raised), 2px 2px 0 rgb(0 0 0 / 0.35);
+}
+:root[data-theme^="win95"] .modal footer { background: var(--w-face); border-top: 0; }
+:root[data-theme^="win95"] .menu button:hover:not(:disabled),
+:root[data-theme^="win95"] .menu button:focus-visible { background: var(--w-sel); color: #fff; }
+:root[data-theme^="win95"] .rail { background: var(--rail); }
+:root[data-theme^="win95"] .rail .tile.active::before { background: #fff; }
+:root[data-theme^="win95"] .rail .add,
+:root[data-theme^="win95"] .rail .ghost { color: #000; }
+:root[data-theme^="win95"] .sidebar,
+:root[data-theme^="win95"] .panel { border-left: 0; box-shadow: inset 1px 0 var(--w-hi); }
+:root[data-theme^="win95"] .sidebar .scroll,
+:root[data-theme^="win95"] .chat .list,
+:root[data-theme^="win95"] .members,
+:root[data-theme^="win95"] .panel .body {
+  background: var(--w-field);
+  box-shadow: var(--sunken);
+  margin: 2px;
+}
+:root[data-theme^="win95"] .me,
+:root[data-theme^="win95"] .elsewhere { background: var(--w-face); box-shadow: var(--raised); }
+:root[data-theme^="win95"] .chat { background: var(--w-face); }
+:root[data-theme^="win95"] .row.channel.selected,
+:root[data-theme^="win95"] .dm.viewing { background: var(--w-sel); color: #fff; }
+:root[data-theme^="win95"] .row.channel.selected .label { color: #fff; }
+:root[data-theme^="win95"] .badge,
+:root[data-theme^="win95"] .unread { background: var(--danger); }
+:root[data-theme^="win95"] .card { background: var(--w-field); box-shadow: var(--sunken); border-top: 0; border-right: 0; border-bottom: 0; }
+:root[data-theme^="win95"] .stage { background: var(--w-face); }
+:root[data-theme^="win95"] .stage .tile { background: var(--w-face); border: 0; box-shadow: var(--raised); }
+:root[data-theme^="win95"] .stage .tile.talking { box-shadow: var(--raised), inset 0 0 0 3px var(--speaking); }
+
+/* Classic scroll bars */
+:root[data-theme^="win95"] ::-webkit-scrollbar { width: 16px; height: 16px; }
+:root[data-theme^="win95"] ::-webkit-scrollbar-track {
+  background-color: var(--w-light);
+  background-image: repeating-conic-gradient(var(--w-face) 0% 25%, var(--w-hi) 0% 50%);
+  background-size: 2px 2px;
+}
+:root[data-theme^="win95"] ::-webkit-scrollbar-thumb {
+  background: var(--w-face);
+  border: 0;
+  box-shadow: var(--raised);
+}
+:root[data-theme^="win95"] ::-webkit-scrollbar-button:single-button {
+  display: block;
+  height: 16px;
+  width: 16px;
+  background: var(--w-face) no-repeat center / 8px 8px;
+  box-shadow: var(--raised);
+}
+:root[data-theme^="win95"] ::-webkit-scrollbar-button:single-button:vertical:decrement {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M4 2L7 6H1z'/%3E%3C/svg%3E");
+}
+:root[data-theme^="win95"] ::-webkit-scrollbar-button:single-button:vertical:increment {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1 2h6L4 6z'/%3E%3C/svg%3E");
+}
+/* Dark variant: light arrows */
+:root[data-theme="win95-dark"] ::-webkit-scrollbar-button:single-button:vertical:decrement {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath fill='%23e6e6e6' d='M4 2L7 6H1z'/%3E%3C/svg%3E");
+}
+:root[data-theme="win95-dark"] ::-webkit-scrollbar-button:single-button:vertical:increment {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath fill='%23e6e6e6' d='M1 2h6L4 6z'/%3E%3C/svg%3E");
+}
+:root[data-theme="win95-dark"] .rail .add,
+:root[data-theme="win95-dark"] .rail .ghost { color: #e6e6e6; }
