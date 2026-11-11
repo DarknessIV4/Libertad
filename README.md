@@ -49,14 +49,12 @@ There is no macOS build yet; it can be built on a Mac from the source (see [For 
 
 ## A look around
 
-| Profile cards |
-|---|---|
 | ![Profile card with a picture and a formatted description](docs/screenshots/profile.png) |
 
 Pick a color scheme, or Customize it yourself:
 
-| Windows 95 | Light | Midnight | Custom |
-|---|---|---|---|
+| Custom Colors | Custom Settings |
+|---|---|
 | ![Appearance cards](docs/screenshots/settings-appearance.png) | ![Appearance settings](docs/screenshots/settings-appearance-2.png) |
 
 ## Good to know
