@@ -79,27 +79,27 @@ export function configFromEnv(source: NodeJS.ProcessEnv): ProxyConfig {
   const on = (v?: string) => v === '1' || v === 'true';
   return {
     ...defaults,
-    port: Number(env.MUMH5_PORT ?? defaults.port),
-    bind: env.MUMH5_BIND ?? defaults.bind,
-    servers: parseServers(env.MUMH5_SERVERS ?? ''),
-    allowAny: on(env.MUMH5_ALLOW_ANY),
-    allowPrivate: on(env.MUMH5_ALLOW_PRIVATE),
-    origins: (env.MUMH5_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
-    trustProxy: on(env.MUMH5_TRUST_PROXY),
-    sendProxy: on(env.MUMH5_SEND_PROXY),
-    staticDir: env.MUMH5_STATIC ?? null,
-    stunPort: Number(env.MUMH5_STUN_PORT ?? 3478) || null,
-    stunBind: env.MUMH5_STUN_BIND ?? defaults.stunBind,
-    turn: env.MUMH5_TURN !== '0' && env.MUMH5_TURN !== 'false',
-    turnIp: env.MUMH5_TURN_IP ?? null,
-    turnMinPort: Number((env.MUMH5_TURN_PORTS ?? '').split('-')[0]) || defaults.turnMinPort,
-    turnMaxPort: Number((env.MUMH5_TURN_PORTS ?? '').split('-')[1]) || defaults.turnMaxPort,
-    turnMax: Number(env.MUMH5_TURN_MAX ?? defaults.turnMax),
-    turnPerAddress: Number(env.MUMH5_TURN_PER_ADDRESS ?? defaults.turnPerAddress),
-    turnUrls: (env.MUMH5_TURN_URLS ?? '').split(',').map(s => s.trim()).filter(Boolean),
-    debug: on(env.MUMH5_DEBUG),
-    maxConnections: Number(env.MUMH5_MAX_CONNECTIONS ?? defaults.maxConnections),
-    maxPerAddress: Number(env.MUMH5_MAX_PER_ADDRESS ?? defaults.maxPerAddress)
+    port: Number(env.LIBERTAD_PORT ?? defaults.port),
+    bind: env.LIBERTAD_BIND ?? defaults.bind,
+    servers: parseServers(env.LIBERTAD_SERVERS ?? ''),
+    allowAny: on(env.LIBERTAD_ALLOW_ANY),
+    allowPrivate: on(env.LIBERTAD_ALLOW_PRIVATE),
+    origins: (env.LIBERTAD_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    trustProxy: on(env.LIBERTAD_TRUST_PROXY),
+    sendProxy: on(env.LIBERTAD_SEND_PROXY),
+    staticDir: env.LIBERTAD_STATIC ?? null,
+    stunPort: Number(env.LIBERTAD_STUN_PORT ?? 3478) || null,
+    stunBind: env.LIBERTAD_STUN_BIND ?? defaults.stunBind,
+    turn: env.LIBERTAD_TURN !== '0' && env.LIBERTAD_TURN !== 'false',
+    turnIp: env.LIBERTAD_TURN_IP ?? null,
+    turnMinPort: Number((env.LIBERTAD_TURN_PORTS ?? '').split('-')[0]) || defaults.turnMinPort,
+    turnMaxPort: Number((env.LIBERTAD_TURN_PORTS ?? '').split('-')[1]) || defaults.turnMaxPort,
+    turnMax: Number(env.LIBERTAD_TURN_MAX ?? defaults.turnMax),
+    turnPerAddress: Number(env.LIBERTAD_TURN_PER_ADDRESS ?? defaults.turnPerAddress),
+    turnUrls: (env.LIBERTAD_TURN_URLS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    debug: on(env.LIBERTAD_DEBUG),
+    maxConnections: Number(env.LIBERTAD_MAX_CONNECTIONS ?? defaults.maxConnections),
+    maxPerAddress: Number(env.LIBERTAD_MAX_PER_ADDRESS ?? defaults.maxPerAddress)
   };
 }
 
@@ -133,7 +133,7 @@ class HttpError extends Error {
 
 export async function startProxy(config: ProxyConfig): Promise<{ port: number; stunPort: number | null; close(): Promise<void> }> {
   if (!config.allowAny && !config.servers.length) {
-    throw new Error('No servers allowed. Set MUMH5_SERVERS=host[:port][=Label],... or MUMH5_ALLOW_ANY=1.');
+    throw new Error('No servers allowed. Set LIBERTAD_SERVERS=host[:port][=Label],... or LIBERTAD_ALLOW_ANY=1.');
   }
   const staticDir = config.staticDir ? path.resolve(config.staticDir) : null;
   const perAddress = new Map<string, number>();

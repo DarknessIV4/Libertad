@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import { colorPicker } from '../lib/colorpicker.svelte.ts';
 
   // Formatting controls shared by the description editor and the message input.
   // Buttons keep the text selection (mousedown is suppressed) and act through the callbacks.
@@ -8,6 +9,17 @@
 
   let color = $state('#e8b23c');
   const keep = (e: MouseEvent) => e.preventDefault();
+
+  // The picker takes the focus, so the selection is put back before the color is applied to it
+  async function chooseColor() {
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    const c = await colorPicker.open(color);
+    if (!c) return;
+    color = c;
+    if (range) { const now = window.getSelection(); now?.removeAllRanges(); now?.addRange(range); }
+    exec('foreColor', c);
+  }
 
   const tools = [
     { cmd: 'bold', label: 'Bold (Ctrl+B)', text: 'B', cls: 'b' },
@@ -22,10 +34,9 @@
     <button class="tool {t.cls}" title={t.label} aria-label={t.label} disabled={source} onmousedown={keep} onclick={() => exec(t.cmd)}>{t.text}</button>
   {/each}
   <span class="sep"></span>
-  <label class="tool color" title="Text color">
+  <button class="tool color" title="Text color" aria-label="Text color" disabled={source} onmousedown={keep} onclick={chooseColor}>
     <span class="swatch" style:background={color}></span>
-    <input type="color" bind:value={color} disabled={source} onchange={() => exec('foreColor', color)} aria-label="Text color" />
-  </label>
+  </button>
   <span class="sep"></span>
   <button class="tool" title="Bulleted list" aria-label="Bulleted list" disabled={source} onmousedown={keep} onclick={() => exec('insertUnorderedList')}><Icon name="list" size={16} /></button>
   <button class="tool" title="Numbered list" aria-label="Numbered list" disabled={source} onmousedown={keep} onclick={() => exec('insertOrderedList')}><Icon name="list-ordered" size={16} /></button>
@@ -48,7 +59,6 @@
   .s { text-decoration: line-through; }
   .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
   .grow { flex: 1; }
-  .color { position: relative; margin: 0; }
+  .color { margin: 0; }
   .swatch { width: 14px; height: 14px; border: 1px solid var(--text-faint); }
-  .color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; padding: 0; }
 </style>

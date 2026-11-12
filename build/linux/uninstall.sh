@@ -1,5 +1,5 @@
 #!/bin/sh
-# Removes mumh5 installed by install.sh: the app, the "mumh5" command and the menu entry.
+# Removes Libertad installed by install.sh: the app, the "Libertad" command and the menu entry.
 # Settings and identities stay unless --purge is given.
 set -eu
 
@@ -31,19 +31,19 @@ if [ "$mode" = system ]; then
     echo "Removing the copy for everyone needs root: sudo $0 --system" >&2
     exit 1
   fi
-  app=/opt/mumh5
+  app=/opt/Libertad
   bin=/usr/local/bin
   menu=/usr/share/applications
 else
   data=${XDG_DATA_HOME:-$HOME/.local/share}
-  app=$data/mumh5
+  app=$data/Libertad
   bin=$HOME/.local/bin
   menu=$data/applications
 fi
 
 found=no
 # Only a folder made by install.sh is deleted
-if [ -f "$app/.mumh5-install" ]; then
+if [ -f "$app/.Libertad-install" ]; then
   rm -rf "$app"
   echo "Removed $app"
   found=yes
@@ -51,23 +51,23 @@ elif [ -e "$app" ]; then
   echo "$app was not made by install.sh; leaving it alone." >&2
 fi
 # The command and the menu entry, if they start the removed copy
-if [ -f "$bin/mumh5" ] && grep -qF "exec \"$app/mumh5\"" "$bin/mumh5"; then
-  rm -f "$bin/mumh5"
+if [ -f "$bin/Libertad" ] && grep -qF "exec \"$app/Libertad\"" "$bin/Libertad"; then
+  rm -f "$bin/Libertad"
   found=yes
 fi
-if [ -f "$menu/mumh5.desktop" ] && grep -qF "Icon=$app/mumh5.png" "$menu/mumh5.desktop"; then
-  rm -f "$menu/mumh5.desktop"
+if [ -f "$menu/Libertad.desktop" ] && grep -qF "Icon=$app/Libertad.png" "$menu/Libertad.desktop"; then
+  rm -f "$menu/Libertad.desktop"
   command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$menu" 2>/dev/null || true
   found=yes
 fi
-[ "$found" = no ] && echo "No $mode installation of mumh5 found."
+[ "$found" = no ] && echo "No $mode installation of Libertad found."
 
 if [ "$purge" = yes ]; then
   if [ "$(id -u)" -eq 0 ]; then
     echo "Settings belong to each user: run uninstall.sh --purge as yourself, without sudo." >&2
     exit 1
   fi
-  config=${XDG_CONFIG_HOME:-$HOME/.config}/mumh5
+  config=${XDG_CONFIG_HOME:-$HOME/.config}/Libertad
   if [ ! -d "$config" ]; then
     echo "No settings found in $config"
     exit 0
@@ -85,5 +85,5 @@ if [ "$purge" = yes ]; then
   rm -rf "$config"
   echo "Removed $config"
 else
-  echo "Your settings and identities are still in ${XDG_CONFIG_HOME:-$HOME/.config}/mumh5 (remove them with --purge)."
+  echo "Your settings and identities are still in ${XDG_CONFIG_HOME:-$HOME/.config}/Libertad (remove them with --purge)."
 fi

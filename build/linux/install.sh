@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs mumh5: the app, a "mumh5" command and a menu entry. Works from the unpacked .tar.gz,
+# Installs Libertad: the app, a "Libertad" command and a menu entry. Works from the unpacked .tar.gz,
 # and from a source checkout (build/linux/install.sh), where it builds the app first.
 # For you only by default; run with sudo (or --system) for everyone on this computer.
 # Running it again over an installed version updates it. Your settings and identities stay.
@@ -29,15 +29,15 @@ fi
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-if [ -x "$here/mumh5" ] && [ -d "$here/resources" ]; then
+if [ -x "$here/Libertad" ] && [ -d "$here/resources" ]; then
   # The unpacked .tar.gz
   src=$here
-elif [ -f "$repo/package.json" ] && grep -q '"name": "mumh5"' "$repo/package.json"; then
+elif [ -f "$repo/package.json" ] && grep -q '"name": "Libertad"' "$repo/package.json"; then
   # A source checkout: build the app for this computer
   src=$repo/release/linux-unpacked
   if [ "$(id -u)" -eq 0 ]; then
     # Building as root would leave root-owned files in the checkout
-    if [ ! -x "$src/mumh5" ]; then
+    if [ ! -x "$src/Libertad" ]; then
       echo "Build it as yourself first (npm run dist:linux), then run: sudo $0 --system" >&2
       exit 1
     fi
@@ -47,7 +47,7 @@ elif [ -f "$repo/package.json" ] && grep -q '"name": "mumh5"' "$repo/package.jso
       echo "Building from source needs Node.js and npm (https://nodejs.org/)." >&2
       exit 1
     fi
-    echo "Building mumh5 from $repo"
+    echo "Building Libertad from $repo"
     (
       cd "$repo"
       [ -d node_modules ] || npm install
@@ -56,18 +56,18 @@ elif [ -f "$repo/package.json" ] && grep -q '"name": "mumh5"' "$repo/package.jso
     )
   fi
 else
-  echo "Could not find mumh5 next to this script, nor a source checkout around it." >&2
+  echo "Could not find Libertad next to this script, nor a source checkout around it." >&2
   echo "Run it from the unpacked .tar.gz folder, or as build/linux/install.sh in the repository." >&2
   exit 1
 fi
 
 if [ "$mode" = system ]; then
-  app=/opt/mumh5
+  app=/opt/Libertad
   bin=/usr/local/bin
   menu=/usr/share/applications
 else
   data=${XDG_DATA_HOME:-$HOME/.local/share}
-  app=$data/mumh5
+  app=$data/Libertad
   bin=$HOME/.local/bin
   menu=$data/applications
 fi
@@ -78,20 +78,20 @@ if [ "$src" = "$app" ]; then
 fi
 
 # Only replace a folder this script made before
-if [ -e "$app" ] && [ ! -f "$app/.mumh5-install" ]; then
+if [ -e "$app" ] && [ ! -f "$app/.Libertad-install" ]; then
   echo "$app exists and was not made by this installer; not touching it." >&2
   exit 1
 fi
 
-echo "Installing mumh5 to $app"
+echo "Installing Libertad to $app"
 tmp="$app.new.$$"
 rm -rf "$tmp"
 mkdir -p "$(dirname "$app")"
 cp -a "$src" "$tmp"
 rm -f "$tmp/install.sh"
 cp "$here/uninstall.sh" "$tmp/uninstall.sh"
-[ -f "$tmp/mumh5.png" ] || cp "$repo/build/icon.png" "$tmp/mumh5.png" 2>/dev/null || true
-echo "$mode" > "$tmp/.mumh5-install"
+[ -f "$tmp/Libertad.png" ] || cp "$repo/build/icon.png" "$tmp/Libertad.png" 2>/dev/null || true
+echo "$mode" > "$tmp/.Libertad-install"
 rm -rf "$app"
 mv "$tmp" "$app"
 
@@ -105,33 +105,33 @@ fi
 mkdir -p "$bin" "$menu"
 
 # A launcher rather than a link: in a shell with ELECTRON_RUN_AS_NODE set, the app would start as Node
-rm -f "$bin/mumh5"
+rm -f "$bin/Libertad"
 {
   echo '#!/bin/sh'
-  echo '# mumh5 launcher, made by install.sh'
+  echo '# Libertad launcher, made by install.sh'
   echo 'unset ELECTRON_RUN_AS_NODE'
-  echo "exec \"$app/mumh5\" \"\$@\""
-} > "$bin/mumh5"
-chmod 755 "$bin/mumh5"
+  echo "exec \"$app/Libertad\" \"\$@\""
+} > "$bin/Libertad"
+chmod 755 "$bin/Libertad"
 
 {
   echo '[Desktop Entry]'
   echo 'Type=Application'
-  echo 'Name=mumh5'
+  echo 'Name=Libertad'
   echo 'Comment=Modern Mumble client'
-  echo "Exec=\"$bin/mumh5\" %U"
-  echo "Icon=$app/mumh5.png"
+  echo "Exec=\"$bin/Libertad\" %U"
+  echo "Icon=$app/Libertad.png"
   echo 'Terminal=false'
   echo 'Categories=Network;Chat;'
   echo 'Keywords=mumble;voice;chat;voip;'
-  echo 'StartupWMClass=mumh5'
-} > "$menu/mumh5.desktop"
+  echo 'StartupWMClass=Libertad'
+} > "$menu/Libertad.desktop"
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$menu" 2>/dev/null || true
 
-echo "Done. Start it from your app menu or with: mumh5"
+echo "Done. Start it from your app menu or with: Libertad"
 case ":$PATH:" in
   *":$bin:"*) ;;
-  *) echo "Note: $bin is not on your PATH, so the command needs its full path: $bin/mumh5" ;;
+  *) echo "Note: $bin is not on your PATH, so the command needs its full path: $bin/Libertad" ;;
 esac
 echo "To remove it: $app/uninstall.sh"

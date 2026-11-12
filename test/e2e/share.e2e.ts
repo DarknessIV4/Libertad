@@ -21,7 +21,7 @@ const tag = Date.now() % 100000;
 async function launch() {
   const app = await electron.launch({
     executablePath: electronPath as unknown as string,
-    args: [root, `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-'))}`, '--ozone-platform=x11',
+    args: [root, `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'libertad-e2e-'))}`, '--ozone-platform=x11',
       '--use-fake-device-for-media-stream=device-count=2', '--use-fake-ui-for-media-stream'],
     env: env as Record<string, string>
   });
@@ -254,11 +254,11 @@ try {
   console.log('ok: stopping ends the stream for viewers');
 
   // Camera instead of the screen, and a relay for networks without direct connections: both
-  // instances point at a mumh5 proxy, and the viewer is limited to the relay over TCP
+  // instances point at a Libertad proxy, and the viewer is limited to the relay over TCP
   const relayPort = 19000 + Math.floor(Math.random() * 500);
   const relay = spawn(process.execPath, ['server/main.ts'], {
     cwd: root, stdio: ['ignore', 'pipe', 'inherit'],
-    env: { ...env, MUMH5_PORT: String(relayPort), MUMH5_ALLOW_ANY: '1', MUMH5_ALLOW_PRIVATE: '1', MUMH5_STUN_PORT: String(relayPort + 500), MUMH5_STUN_BIND: '127.0.0.1', MUMH5_TURN_IP: '127.0.0.1' }
+    env: { ...env, LIBERTAD_PORT: String(relayPort), LIBERTAD_ALLOW_ANY: '1', LIBERTAD_ALLOW_PRIVATE: '1', LIBERTAD_STUN_PORT: String(relayPort + 500), LIBERTAD_STUN_BIND: '127.0.0.1', LIBERTAD_TURN_IP: '127.0.0.1' }
   });
   cleanup.push(() => relay.kill());
   await new Promise<void>((res, rej) => { relay.stdout.on('data', d => { if (String(d).includes('listening')) res(); }); relay.on('exit', c => rej(new Error(`proxy exited with ${c}`))); });
@@ -268,7 +268,7 @@ try {
     await p.getByLabel('Relay').blur();
     await p.getByRole('button', { name: 'Done', exact: true }).click();
   }
-  await bob.page.evaluate(() => localStorage.setItem('mumh5.iceDebug', 'relay-tcp'));
+  await bob.page.evaluate(() => localStorage.setItem('libertad.iceDebug', 'relay-tcp'));
 
   await shareBtn.click();
   await picker.getByRole('tab', { name: 'Camera' }).click();
@@ -366,7 +366,7 @@ try {
   await camsShown(alice.page, 1);
   await alice.page.locator('.me').getByRole('button', { name: 'Stop sharing your camera' }).click();
   await cam.waitFor({ state: 'detached' });
-  await bob.page.evaluate(() => localStorage.removeItem('mumh5.iceDebug'));
+  await bob.page.evaluate(() => localStorage.removeItem('libertad.iceDebug'));
   console.log(`ok: cameras of several people at once, in the tiles, through the relay (${camStats.match(/Picture \| [^|]+/)?.[0]})`);
   void liveCams;
 
@@ -379,7 +379,7 @@ try {
   console.log('ok: disconnecting ends the stream');
 
   // Sounds: the sharer hears the stream start and stop and viewers come and go; the channel hears streams start and stop
-  const sounds = (p: Page) => p.evaluate(() => [...((window as any).__mumh5Sounds ?? [])] as string[]);
+  const sounds = (p: Page) => p.evaluate(() => [...((window as any).__libertadSounds ?? [])] as string[]);
   const heardA = await sounds(alice.page), heardB = await sounds(bob.page);
   for (const ev of ['shareStarted', 'viewerJoined', 'viewerLeft', 'shareStopped']) assert.ok(heardA.includes(ev), `sharer hears ${ev}: ${heardA}`);
   for (const ev of ['shareStarted', 'shareStopped']) assert.ok(heardB.includes(ev), `viewer hears ${ev}: ${heardB}`);

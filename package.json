@@ -1,8 +1,8 @@
 {
-  "name": "mumh5",
-  "productName": "mumh5",
-  "version": "0.2.0",
-  "description": "A modern Mumble client: Discord-like interface, file sharing, voice and more, for any Mumble server",
+  "name": "Libertad",
+  "productName": "Libertad",
+  "version": "0.4.0",
+  "description": "A modern Mumble client: Supports screen sharing, watch together, and more.",
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -21,13 +21,15 @@
     "test:e2e": "node test/e2e/app.e2e.ts",
     "test:e2e:web": "node test/e2e/web.e2e.ts",
     "test:e2e:share": "node test/e2e/share.e2e.ts",
-    "themes": "node scripts/gen-themes.mjs",
+    "test:e2e:files": "node test/e2e/files-disk.e2e.ts",
+    "test:e2e:files:web": "node test/e2e/files-disk-web.e2e.ts",
     "proto": "pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-comments --force-number proto/Mumble.proto -o src/core/mumble-pb.js && pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-comments --force-number proto/MumbleUDP.proto -o src/core/mumble-udp-pb.js",
     "screenshots": "node test/e2e/screenshots.ts"
   },
   "build": {
-    "appId": "dev.f0ck.mumh5",
-    "productName": "mumh5",
+    "appId": "dev.f0ck.Libertad",
+    "productName": "Libertad",
+    "npmRebuild": false,
     "files": [
       "dist/**",
       "dist-electron/**",
@@ -47,11 +49,11 @@
         "tar.gz"
       ],
       "category": "Network",
-      "executableName": "mumh5",
+      "executableName": "Libertad",
       "synopsis": "Modern Mumble client",
       "desktop": {
         "entry": {
-          "StartupWMClass": "mumh5",
+          "StartupWMClass": "Libertad",
           "Keywords": "mumble;voice;chat;voip;"
         }
       },
@@ -66,7 +68,7 @@
         },
         {
           "from": "build/icon.png",
-          "to": "mumh5.png"
+          "to": "Libertad.png"
         }
       ]
     },
@@ -82,8 +84,8 @@
       ],
       "category": "public.app-category.social-networking",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "mumh5 uses the microphone for voice chat.",
-        "NSCameraUsageDescription": "mumh5 uses the camera for video chat."
+        "NSMicrophoneUsageDescription": "Libertad uses the microphone for voice chat.",
+        "NSCameraUsageDescription": "Libertad uses the camera for video chat."
       }
     },
     "icon": "build/icon.png",
@@ -100,8 +102,12 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "mumh5"
-    }
+      "shortcutName": "Libertad"
+    },
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/ffprobe-static/**"
+    ]
   },
   "devDependencies": {
     "@evan/opus": "^1.0.3",
@@ -124,13 +130,20 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
     "dompurify": "^3.4.17",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "gifenc": "^1.0.3",
+    "hls.js": "^1.6.0",
     "node-forge": "^1.4.0",
-    "protobufjs": "^8.8.0"
+    "protobufjs": "^8.8.0",
+    "webtorrent": "^3.0.21"
   },
   "allowScripts": {
     "electron@44.5.1": true,
     "esbuild@0.28.2": true,
-    "electron-winstaller": false
+    "node-datachannel@0.32.3": true,
+    "electron-winstaller": false,
+    "ffmpeg-static@5.2.0": true
   },
   "author": {
     "name": "Kibi Kelburton",
@@ -138,8 +151,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "gitea@git.lat:kibi/mumh5.git"
+    "url": "gitea@git.lat:kibi/Libertad.git"
   },
-  "homepage": "https://git.lat/kibi/mumh5",
-  "desktopName": "mumh5.desktop"
+  "homepage": "https://git.lat/kibi/Libertad",
+  "desktopName": "Libertad.desktop"
 }

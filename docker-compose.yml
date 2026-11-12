@@ -1,8 +1,8 @@
-# The mumh5 web proxy. Settings come from a .env file next to this one, for example:
-#   MUMH5_SERVERS=mumble.example.com=My server
-#   MUMH5_TRUST_PROXY=1
+# The Libertad web proxy. Settings come from a .env file next to this one, for example:
+#   LIBERTAD_SERVERS=mumble.example.com=My server
+#   LIBERTAD_TRUST_PROXY=1
 services:
-  mumh5:
+  libertad:
     build: .
     restart: unless-stopped
     # Host networking, so STUN sees each visitor's real address (through Docker's port
@@ -13,22 +13,22 @@ services:
     # Passed on from .env (or the shell); empty means the proxy's default. Written out one by
     # one because older docker-compose versions cannot mark an env_file as optional.
     environment:
-      MUMH5_SERVERS: ${MUMH5_SERVERS:-}
-      MUMH5_ALLOW_ANY: ${MUMH5_ALLOW_ANY:-}
-      MUMH5_ALLOW_PRIVATE: ${MUMH5_ALLOW_PRIVATE:-}
-      MUMH5_PORT: ${MUMH5_PORT:-8080}
-      MUMH5_BIND: ${MUMH5_BIND:-127.0.0.1}
-      MUMH5_ORIGINS: ${MUMH5_ORIGINS:-}
-      MUMH5_TRUST_PROXY: ${MUMH5_TRUST_PROXY:-}
-      MUMH5_SEND_PROXY: ${MUMH5_SEND_PROXY:-}
-      MUMH5_STUN_PORT: ${MUMH5_STUN_PORT:-3478}
-      MUMH5_STUN_BIND: ${MUMH5_STUN_BIND:-}
-      MUMH5_TURN: ${MUMH5_TURN:-}
-      MUMH5_TURN_IP: ${MUMH5_TURN_IP:-}
-      MUMH5_TURN_PORTS: ${MUMH5_TURN_PORTS:-}
-      MUMH5_TURN_URLS: ${MUMH5_TURN_URLS:-}
-      MUMH5_DEBUG: ${MUMH5_DEBUG:-}
-      MUMH5_TURN_MAX: ${MUMH5_TURN_MAX:-}
-      MUMH5_TURN_PER_ADDRESS: ${MUMH5_TURN_PER_ADDRESS:-}
-      MUMH5_MAX_CONNECTIONS: ${MUMH5_MAX_CONNECTIONS:-}
-      MUMH5_MAX_PER_ADDRESS: ${MUMH5_MAX_PER_ADDRESS:-}
+      LIBERTAD_SERVERS: ${LIBERTAD_SERVERS:-}
+      LIBERTAD_ALLOW_ANY: ${LIBERTAD_ALLOW_ANY:-}
+      LIBERTAD_ALLOW_PRIVATE: ${LIBERTAD_ALLOW_PRIVATE:-}
+      LIBERTAD_PORT: ${LIBERTAD_PORT:-8080}
+      LIBERTAD_BIND: ${LIBERTAD_BIND:-127.0.0.1}
+      LIBERTAD_ORIGINS: ${LIBERTAD_ORIGINS:-}
+      LIBERTAD_TRUST_PROXY: ${LIBERTAD_TRUST_PROXY:-}
+      LIBERTAD_SEND_PROXY: ${LIBERTAD_SEND_PROXY:-}
+      LIBERTAD_STUN_PORT: ${LIBERTAD_STUN_PORT:-3478}
+      LIBERTAD_STUN_BIND: ${LIBERTAD_STUN_BIND:-}
+      LIBERTAD_TURN: ${LIBERTAD_TURN:-}
+      LIBERTAD_TURN_IP: ${LIBERTAD_TURN_IP:-}
+      LIBERTAD_TURN_PORTS: ${LIBERTAD_TURN_PORTS:-}
+      LIBERTAD_TURN_URLS: ${LIBERTAD_TURN_URLS:-}
+      LIBERTAD_DEBUG: ${LIBERTAD_DEBUG:-}
+      LIBERTAD_TURN_MAX: ${LIBERTAD_TURN_MAX:-}
+      LIBERTAD_TURN_PER_ADDRESS: ${LIBERTAD_TURN_PER_ADDRESS:-}
+      LIBERTAD_MAX_CONNECTIONS: ${LIBERTAD_MAX_CONNECTIONS:-}
+      LIBERTAD_MAX_PER_ADDRESS: ${LIBERTAD_MAX_PER_ADDRESS:-}

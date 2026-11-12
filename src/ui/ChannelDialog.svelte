@@ -278,8 +278,8 @@
       {/if}
     </div>
     {#if !isRoot}
-      <label class="check top" title="Read and written without joining, from any channel. Only mumh5 shows it this way; in other Mumble clients it is an ordinary channel and its messages are not visible there. The server keeps no messages: mumh5 clients keep them and pass the recent ones on to people who connect later. Everyone on the server who uses mumh5 can read it.">
-        <input type="checkbox" bind:checked={textChannel} disabled={!textPossible} /> Text channel (mumh5 only)
+      <label class="check top" title="Read and written without joining, from any channel. Only Libertad shows it this way; in other Mumble clients it is an ordinary channel and its messages are not visible there. The server keeps no messages: Libertad clients keep them and pass the recent ones on to people who connect later. Everyone on the server who uses Libertad can read it.">
+        <input type="checkbox" bind:checked={textChannel} disabled={!textPossible} /> Text channel (Libertad only)
       </label>
       {#if !textPossible}<p class="dim small">Text channels need a server from version 1.4 that allows HTML.</p>{/if}
     {/if}

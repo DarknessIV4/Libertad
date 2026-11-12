@@ -8,10 +8,12 @@
   import { channelMenu, userMenu, openProfile } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { store } from '../lib/settings.svelte.ts';
+  import { stripBanner } from '../core/banner.ts';
   import { drag } from '../lib/drag.svelte.ts';
   import { sounds } from '../lib/audio/sounds.svelte.ts';
   import { renderIncoming } from '../lib/html.ts';
   import { share } from '../lib/share.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { sessions } from '../lib/session.svelte.ts';
   import type { Channel } from '../core/client.ts';
   import { stripMark } from '../core/text-signal.ts';
@@ -114,9 +116,9 @@
   // Single click previews, double click acts. The single action waits briefly so a
   // double click does not also flash the preview.
   let timer: ReturnType<typeof setTimeout> | undefined;
-  function clickOrDouble(single: (el: HTMLElement) => void, double: () => void) {
+  function clickOrDouble(single: (el: HTMLElement) => void, double: () => void, wait = 220) {
     return {
-      onclick: (e: MouseEvent) => { const el = e.currentTarget as HTMLElement; clearTimeout(timer); timer = setTimeout(() => single(el), 220); },
+      onclick: (e: MouseEvent) => { const el = e.currentTarget as HTMLElement; clearTimeout(timer); timer = setTimeout(() => single(el), wait); },
       ondblclick: () => { clearTimeout(timer); double(); }
     };
   }
@@ -254,7 +256,8 @@
         {@const isSelf = u.session === session.self?.session}
         {@const clicks = clickOrDouble(
           el => openProfile(u.session, el),
-          () => { if (!isSelf) { session.selectView(`dm:${u.session}`); onnavigate(); } }
+          () => { if (!isSelf) { session.selectView(`dm:${u.session}`); onnavigate(); } },
+          50
         )}
         <li>
           <button class="row user" class:self={isSelf} style:padding-left="{30 + depth * 14}px"
@@ -278,7 +281,21 @@
                   onkeydown={e => { if (e.key === 'Enter') { e.stopPropagation(); share.watch(sessions.active, u.session); } }}><Icon name={kind} size={14} /></span>
               {/if}
             {/if}
-            {#if u.comment || u.commentHash}<span class="state" title="Has a description"><Icon name="message" size={12} /></span>{/if}
+            {#if session.watchTogether[u.session]}
+              {@const wt = session.watchTogether[u.session]}
+              {#if isSelf}
+                <span class="state watch-together host" role="button" tabindex="0" title="Hosting watch together: {wt.title}. Click to open controls, double-click to rejoin" aria-label="Hosting watch together: {wt.title}"
+                  onclick={e => { e.stopPropagation(); watchTogether.focus(); }}
+                  ondblclick={e => { e.stopPropagation(); if (watchTogether.isHostWithParty) watchTogether.join(u.session); }}
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="screen" size={14} /></span>
+              {:else}
+                <span class="state watch-together" role="button" tabindex="0" title="Watching together: {wt.title}. Click to join, double-click to open" aria-label="Join watch together: {wt.title}"
+                  onclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                  ondblclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="screen" size={14} /></span>
+              {/if}
+            {/if}
+            {#if u.comment ? stripBanner(u.comment).trim() : u.commentHash}<span class="state" title="Has a description"><Icon name="message" size={12} /></span>{/if}
             {#if u.prioritySpeaker}<span class="state" title="Priority speaker"><Icon name="channel" size={14} /></span>{/if}
             {#if u.recording}<span class="rec" title="Recording">REC</span>{/if}
             {#if u.deaf || u.selfDeaf}
@@ -346,4 +363,8 @@
   .state.sharing { color: var(--speaking); padding: 3px; }
   .state.sharing[role=button]:hover { background: var(--bg-active); }
   .rec { font-size: 10px; font-weight: 700; color: var(--danger); border: 1px solid var(--danger); padding: 0 3px; }
+  .state.watch-together { color: var(--speaking); }
+  .state.watch-together.host { color: var(--success); }
+  .state.watch-together[role=button]:hover { background: var(--bg-active); }
+  .state.watch-together[role=button]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>

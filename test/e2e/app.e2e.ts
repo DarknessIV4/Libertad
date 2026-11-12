@@ -65,7 +65,7 @@ function within<T>(p: Promise<T>, label: string, ms = 10000): Promise<T> {
 }
 
 const { ELECTRON_RUN_AS_NODE, ...env } = process.env;
-const userData = mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-'));
+const userData = mkdtempSync(path.join(tmpdir(), 'libertad-e2e-'));
 const app = await electron.launch({
   executablePath: electronPath as unknown as string,
   // Stay on $DISPLAY (e.g. Xvfb); Electron would otherwise pick the Wayland session automatically
@@ -138,10 +138,10 @@ try {
   console.log('ok: connected');
   await within(new Promise<void>(res => { const check = () => { const u = [...bob.users.values()].find(x => x.name === 'alice'); if (u?.selfMute) res(); else setTimeout(check, 100); }; check(); }), 'mute applied on connect');
   await page.waitForTimeout(800);
-  const connectSounds = await page.evaluate(() => [...((window as any).__mumh5Sounds ?? [])] as string[]);
+  const connectSounds = await page.evaluate(() => [...((window as any).__libertadSounds ?? [])] as string[]);
   assert.ok(!connectSounds.some(x => ['mute', 'unmute', 'deafen', 'undeafen'].includes(x)), `no mute sounds on connect: ${connectSounds}`);
   await page.locator('.me').getByRole('button', { name: 'Unmute', exact: true }).click();
-  await page.waitForFunction(() => ((window as any).__mumh5Sounds ?? []).includes('unmute'));
+  await page.waitForFunction(() => ((window as any).__libertadSounds ?? []).includes('unmute'));
   console.log('ok: mute chosen before connecting applies without a sound; unmuting still sounds');
 
   // Bob is listed in the channel tree
@@ -322,7 +322,7 @@ try {
   await page.locator('.dm', { hasText: 'bob' }).click();
   await page.locator('.msg', { hasText: 'psst' }).waitFor();
   console.log('ok: direct message shown in its own view');
-  const soundLog = () => page.evaluate(() => [...((window as any).__mumh5Sounds ?? [])] as string[]);
+  const soundLog = () => page.evaluate(() => [...((window as any).__libertadSounds ?? [])] as string[]);
   const played = await soundLog();
   for (const ev of ['connected', 'message', 'privateMessage']) assert.ok(played.includes(ev), `sound for ${ev}: ${played}`);
   console.log('ok: sounds for connect, channel and direct messages');
@@ -357,13 +357,13 @@ try {
   const stun = page.getByLabel('STUN server', { exact: true });
   assert.equal(await stun.inputValue(), '');
   await stun.selectOption({ label: 'Cloudflare (stun.cloudflare.com:3478)' });
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.settings')!).stunServer), 'stun.cloudflare.com:3478');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('libertad.settings')!).stunServer), 'stun.cloudflare.com:3478');
   await stun.selectOption('custom');
   await page.getByLabel('STUN server address').fill('stun.example.org:3478');
   await page.getByLabel('STUN server address').blur();
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.settings')!).stunServer), 'stun.example.org:3478');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('libertad.settings')!).stunServer), 'stun.example.org:3478');
   await stun.selectOption('');
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.settings')!).stunServer), '');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('libertad.settings')!).stunServer), '');
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   console.log('ok: STUN server choices');
 
@@ -495,8 +495,8 @@ try {
   await page.keyboard.press('Escape');
 
   // Tray icon mirrors the voice state; its menu acts on it
-  const trayState = () => app.evaluate(() => (globalThis as any).__mumh5Tray && {
-    tooltip: (globalThis as any).__mumh5Tray.tooltip, items: (globalThis as any).__mumh5Tray.items, icon: (globalThis as any).__mumh5Tray.state.icon
+  const trayState = () => app.evaluate(() => (globalThis as any).__libertadTray && {
+    tooltip: (globalThis as any).__libertadTray.tooltip, items: (globalThis as any).__libertadTray.items, icon: (globalThis as any).__libertadTray.state.icon
   });
   const trayUntil = async (label: string, pred: (t: any) => boolean) => {
     for (let i = 0; i < 50; i++) { const t = await trayState(); if (t && pred(t)) return t; await page.waitForTimeout(100); }
@@ -505,10 +505,10 @@ try {
   const tMuted = await trayUntil('muted', t => /muted on Test Server/.test(t.tooltip));
   assert.equal(tMuted.icon, 'data:image/png;base64,');
   assert.equal(tMuted.items.find((i: any) => i.label === 'Mute').checked, true);
-  await app.evaluate(() => (globalThis as any).__mumh5Tray.click('Mute'));
+  await app.evaluate(() => (globalThis as any).__libertadTray.click('Mute'));
   await within(new Promise<void>(res => bob.on('user', (u, ch) => { if (u.name === 'alice' && ch.includes('selfMute') && !u.selfMute) res(); })), 'unmuted from the tray');
   await trayUntil('connected', t => /connected on Test Server/.test(t.tooltip) && !t.items.find((i: any) => i.label === 'Mute').checked);
-  await app.evaluate(() => (globalThis as any).__mumh5Tray.click('Mute'));
+  await app.evaluate(() => (globalThis as any).__libertadTray.click('Mute'));
   await trayUntil('muted again', t => /muted/.test(t.tooltip));
   console.log('ok: tray icon follows voice state and its menu mutes');
   await page.locator('.channel + .users, .users').getByTitle('Muted', { exact: true }).first().waitFor();
@@ -546,7 +546,7 @@ try {
   // A custom sound really plays (blob URL, allowed by the security policy) and survives a reload
   const before = (await soundLog()).filter(x => x === 'mute').length;
   await page.locator('.events li', { hasText: 'You muted' }).getByRole('button', { name: /^Play/ }).click();
-  await page.waitForFunction(n => ((window as any).__mumh5Sounds ?? []).filter((x: string) => x === 'mute').length > n, before);
+  await page.waitForFunction(n => ((window as any).__libertadSounds ?? []).filter((x: string) => x === 'mute').length > n, before);
   assert.equal(await page.getByText(/^Could not play/).count(), 0, 'no playback errors');
   await page.getByRole('button', { name: 'Reset all to built-in' }).click();
   await page.getByRole('button', { name: 'Done', exact: true }).click();
@@ -598,10 +598,10 @@ try {
     for (let i = 0; i < data.length; i += 65536) crypto.getRandomValues(data.subarray(i, i + 65536));
     const bin = path.join(userData, 'clip.bin');
     writeFileSync(bin, data);
-    const announced = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('<!--mumh5:file:')) res(m.html); }));
+    const announced = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('<!--libertad:file:')) res(m.html); }));
     await page.locator('.chat .composer input[type=file]').first().setInputFiles(bin);
     const html = await within(announced, 'file announcement', 15000);
-    assert.match(html, /<b>clip\.bin<\/b> \(585\.9 KB, file shared with mumh5\)/);
+    assert.match(html, /<b>clip\.bin<\/b> \(585\.9 KB, file shared with Libertad\)/);
     const [f] = takeFiles(html).files;
     assert.equal(f.meta.n, 'clip.bin');
     assert.equal(f.meta.s, data.length);
@@ -634,11 +634,11 @@ try {
     for (let k = 0; k < pieceCount(pm); k++) digests.push(await sha256(png.subarray(k * c, k * c + pieceSize(pm, k))));
     const meta = { i: 'e2enoise' + Date.now().toString(36), n: 'noise.png', s: png.length, m: 'image/png', c, h: await rootHash(digests) };
     served.set(meta.i, { meta, data: png });
-    bob.sendText({ channels: [0] }, announce(meta, `<b>noise.png</b> (${png.length} B, file shared with mumh5)<br/><img src="data:image/png;base64,${testPng(40, 30).toString('base64')}"/>`));
+    bob.sendText({ channels: [0] }, announce(meta, `<b>noise.png</b> (${png.length} B, file shared with Libertad)<br/><img src="data:image/png;base64,${testPng(40, 30).toString('base64')}"/>`));
     const shown = page.locator('.chat .msg .file img[alt="noise.png"]');
     await shown.waitFor({ timeout: 30000 });
     await page.waitForFunction(() => (document.querySelector('.chat .msg .file img[alt="noise.png"]') as HTMLImageElement)?.naturalWidth === 700);
-    assert.equal(await page.locator('.chat .msg', { hasText: 'file shared with mumh5' }).count(), 0, 'the text for other clients is not shown');
+    assert.equal(await page.locator('.chat .msg', { hasText: 'file shared with Libertad' }).count(), 0, 'the text for other clients is not shown');
     console.log(`ok: the app fetches a file by itself and shows it (${pieceCount(pm)} pieces)`);
 
     // Posted by someone who left right after: the app finds another client that has the file
@@ -651,7 +651,7 @@ try {
     const relayMeta = { i: 'e2erelay' + Date.now().toString(36), n: 'relay.bin', s: relay.length, m: '', c, h: await rootHash(rd) };
     served.set(relayMeta.i, { meta: relayMeta, data: relay });
     const carol = await headless('carol');
-    carol.sendText({ channels: [0] }, announce(relayMeta, '<b>relay.bin</b> (293 KB, file shared with mumh5)'));
+    carol.sendText({ channels: [0] }, announce(relayMeta, '<b>relay.bin</b> (293 KB, file shared with Libertad)'));
     await new Promise(r => setTimeout(r, 200));
     carol.disconnect();
     await page.locator('.chat .msg .file', { hasText: 'relay.bin' }).locator('a[download="relay.bin"]').waitFor({ timeout: 30000 });
@@ -783,7 +783,7 @@ try {
   await page.locator('.sidebar .user.self').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Information' }).click();
   const info = page.getByRole('dialog', { name: /^Information: alice/ });
-  await info.getByText('mumh5 0.2.0').waitFor();
+  await info.getByText('Libertad 0.2.0').waitFor();
   await info.getByText('linux', { exact: false }).first().waitFor();
   await info.getByText('Online for').waitFor();
   // Live: the online time advances while the dialog is open
@@ -803,7 +803,7 @@ try {
   const bobInfo = page.getByRole('dialog', { name: 'Information: bob' });
   await bobInfo.getByText('Ping (TCP)').waitFor();
   await bobInfo.getByText('only shown to admins', { exact: false }).first().waitFor();
-  assert.equal(await bobInfo.getByText('mumh5 0.2.0').count(), 0);
+  assert.equal(await bobInfo.getByText('Libertad 0.2.0').count(), 0);
   await bobInfo.getByRole('button', { name: 'Close', exact: true }).last().click();
   console.log('ok: other user information respects server permissions');
 
@@ -1046,8 +1046,8 @@ try {
     await page.locator('.sidebar .row.user.self').waitFor();
     console.log('ok: toolbar expands and collapses all channels, occupied ones stay open');
 
-    // ─── Text channels: read and written without joining, between mumh5 clients ───
-    // Bob plays a second mumh5 client by speaking the plugin data protocol
+    // ─── Text channels: read and written without joining, between Libertad clients ───
+    // Bob plays a second Libertad client by speaking the plugin data protocol
     const assembler = new TextAssembler();
     const signals: { type: number; text?: string }[] = [];
     const waiting: { want: (s: { type: number; text?: string }) => boolean; res: (s: { type: number; text?: string }) => void }[] = [];
@@ -1058,7 +1058,7 @@ try {
       if (dataId !== TEXT_DATA_ID) return;
       const signal = await assembler.push(sender, data);
       if (!signal) return;
-      // Like a mumh5 client that was here before: answers a newcomer and hands over an old message
+      // Like a Libertad client that was here before: answers a newcomer and hands over an old message
       if (signal.type === TEXT.hello) bobSend([sender], TEXT.here);
       if (signal.type === TEXT.want && notesId != null) {
         bobSend([sender], TEXT.history, { c: notesId, m: [{ i: 'from-before', t: Date.now() - 3600_000, n: 'dave', k: '', h: 'said while you were away' }] });
@@ -1073,7 +1073,7 @@ try {
     await page.mouse.click(listBox.x + listBox.width / 2, listBox.y + listBox.height - 20, { button: 'right' });
     await page.getByRole('menuitem', { name: 'Create channel...' }).click();
     await page.getByLabel('Name').fill('notes');
-    await page.getByLabel('Text channel (mumh5 only)').check();
+    await page.getByLabel('Text channel (Libertad only)').check();
     await page.getByRole('button', { name: 'Create channel' }).click();
     await bobSees('text channel', () => !!chByName('notes')?.description.startsWith(TEXT_MARK));
     notesId = chByName('notes')!.id;
@@ -1146,7 +1146,7 @@ try {
   const gotBig = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('big.png')) res(m.html); }));
   await page.locator('.chat .composer input[type=file]').first().setInputFiles(big);
   const announcedBig = await within(gotBig, 'large picture', 15000);
-  assert.match(announcedBig, /<b>big\.png<\/b> \([\d.]+ MB, file shared with mumh5\)<br\/><img src="data:image\/jpeg;base64,[^"]+"\/><!--\/mumh5:file-->$/);
+  assert.match(announcedBig, /<b>big\.png<\/b> \([\d.]+ MB, file shared with Libertad\)<br\/><img src="data:image\/jpeg;base64,[^"]+"\/><!--\/libertad:file-->$/);
   assert.ok(announcedBig.length <= 131072, `within the server limit (${announcedBig.length})`);
   // A small one goes inline as it is, for everyone
   const small = path.join(userData, 'small.png');

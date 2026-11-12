@@ -1,7 +1,7 @@
 // Generates the README screenshots in docs/screenshots from a scripted scene. The screen sharing
 // picture needs three more copies of the app (the streamer and two viewers), so up to four windows
 // open; on Linux they can go to a virtual display (Xvfb) like the end-to-end tests.
-//   docker run -d --name mumh5-shots -p 64740:64738 -e MUMBLE_SUPERUSER_PASSWORD=shots \
+//   docker run -d --name libertad-shots -p 64740:64738 -e MUMBLE_SUPERUSER_PASSWORD=shots \
 //     -e MUMBLE_CONFIG_AUTOBANATTEMPTS=0 -e "MUMBLE_CONFIG_WELCOMETEXT=Welcome to the community voice server." \
 //     mumblevoip/mumble-server
 //   npm run build && MUMBLE_TEST_HOST=localhost:64740 MUMBLE_SUPERUSER_PASSWORD=shots npm run screenshots
@@ -136,7 +136,7 @@ nullbyte.setTexture(neon(128, [57, 255, 120], [10, 90, 70]));
 const { ELECTRON_RUN_AS_NODE, ...env } = process.env;
 const app = await electron.launch({
   executablePath: electronPath as unknown as string,
-  args: [root, `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-'))}`, '--ozone-platform=x11',
+  args: [root, `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'libertad-e2e-'))}`, '--ozone-platform=x11',
     '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   env: env as Record<string, string>
 });
@@ -229,7 +229,7 @@ await page.screenshot({ path: path.join(out, 'mobile.png') });
 
 // ─── Screen sharing: v0id streams a game from a window of their own, three people watch ──
 await page.setViewportSize({ width: 1440, height: 900 });
-const work = mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-shots-'));
+const work = mkdtempSync(path.join(tmpdir(), 'libertad-e2e-shots-'));
 // The bots step aside so windows can use their names
 for (const c of [v0id, cipher, gl1tch]) c.disconnect();
 await wait(800);
@@ -242,7 +242,7 @@ const answer = (p: typeof page, name: string, ms = 3000) =>
 async function client(name: string, colors?: [number[], number[]], stageHeight?: number) {
   const instance = await electron.launch({
     executablePath: electronPath as unknown as string,
-    args: [root, `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-'))}`, '--ozone-platform=x11',
+    args: [root, `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'libertad-e2e-'))}`, '--ozone-platform=x11',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
     env: env as Record<string, string>
   });
@@ -254,7 +254,7 @@ async function client(name: string, colors?: [number[], number[]], stageHeight?:
   await p.getByRole('button', { name: 'Skip for now' }).click();
   await p.getByRole('button', { name: 'Done' }).click();
   // A taller meeting view than the default, so the stream fills the picture
-  if (stageHeight) await p.evaluate(h => localStorage.setItem('mumh5.stageHeightMeeting', String(h)), stageHeight);
+  if (stageHeight) await p.evaluate(h => localStorage.setItem('libertad.stageHeightMeeting', String(h)), stageHeight);
   await p.getByTitle('Settings').click();
   { const b = (await p.getByRole('tab', { name: 'Appearance' }).boundingBox())!; await p.mouse.click(b.x + b.width / 2, b.y + b.height / 2); }
   await p.getByRole('radio', { name: 'Modern', exact: true }).click();

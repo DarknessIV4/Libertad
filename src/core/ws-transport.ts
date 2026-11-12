@@ -1,6 +1,6 @@
 import type { Transport, ServerCertInfo } from './transport.ts';
 
-// Transport through the mumh5 web proxy: one WebSocket per Mumble connection. The proxy opens
+// Transport through the Libertad web proxy: one WebSocket per Mumble connection. The proxy opens
 // the TLS socket and presents the client certificate, since a browser can do neither.
 // `secure` resolves once the proxy has finished the TLS handshake, before any Mumble data is
 // sent, so the caller can check the server certificate before sending a password.

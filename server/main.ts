@@ -9,7 +9,7 @@ config.staticDir ??= [path.resolve(import.meta.dirname, '../dist-web')].find(d =
 
 try {
   const { port, stunPort } = await startProxy(config);
-  console.log(`mumh5 proxy listening on http://${config.bind}:${port}`);
+  console.log(`Libertad proxy listening on http://${config.bind}:${port}`);
   console.log(config.allowAny ? `Allowed servers: any${config.allowPrivate ? ', private addresses included' : ' public address'}` : `Allowed servers: ${config.servers.map(s => `${s.host}:${s.port}`).join(', ')}`);
   if (config.sendProxy) console.log('Announcing client addresses with the PROXY protocol; the allowed servers must expect it');
   console.log(!stunPort ? 'STUN is off; screen sharing between browser users will only work on the same network'

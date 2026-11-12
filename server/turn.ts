@@ -10,7 +10,7 @@ import os from 'node:os';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const COOKIE = 0x2112a442;
-const REALM = 'mumh5';
+const REALM = 'libertad';
 
 // Message types: request, with success (| 0x100) and error (| 0x110) answers
 const BINDING = 0x0001, ALLOCATE = 0x0003, REFRESH = 0x0004, SEND = 0x0016, DATA = 0x0017, CREATE_PERMISSION = 0x0008, CHANNEL_BIND = 0x0009;

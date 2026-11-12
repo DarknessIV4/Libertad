@@ -58,8 +58,20 @@ export function parsePublicList(xml: string): PublicServer[] {
 export async function fetchPublicListWith(fetcher: (url: string) => Promise<Response>, url: string): Promise<PublicServer[]> {
   let res: Response;
   try { res = await fetcher(url); } catch (e) { throw new Error(`Could not reach the list server (${(e as Error).message})`); }
-  if (!res.ok) throw new Error(`The list server answered with HTTP ${res.status}`);
-  return parsePublicList(await res.text());
+  if (!res.ok) {
+    console.error(`[publist] ${url} answered HTTP ${res.status}`);
+    throw new Error(`The list server answered with HTTP ${res.status}`);
+  }
+  const body = await res.text();
+  const list = parsePublicList(body);
+  // Printed in the terminal that runs the app (npm run dev)
+  console.log(`[publist] ${url} -> HTTP ${res.status}, ${res.headers.get('content-type') ?? 'no content-type'}, ${body.length} bytes, ${list.length} servers`);
+  if (!list.length) {
+    const start = body.slice(0, 500).replace(/\s+/g, ' ');
+    console.error(`[publist] no servers in the answer. It starts with: ${start}`);
+    throw new Error(`The list server answered, but no servers were found in it (${body.length} bytes: ${start.slice(0, 120)})`);
+  }
+  return list;
 }
 
 // Legacy extended ping: 4 zero bytes + 8-byte cookie; answer is 24 bytes:

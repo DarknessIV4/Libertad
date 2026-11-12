@@ -1,7 +1,7 @@
-// Screen-share signalling between mumh5 clients, carried as Mumble plugin data so it works on
+// Screen-share signalling between Libertad clients, carried as Mumble plugin data so it works on
 // any server and other clients ignore it. Murmur drops plugin data over 1000 bytes, so session
 // descriptions are compressed and split into chunks.
-export const SHARE_DATA_ID = 'mumh5.share';
+export const SHARE_DATA_ID = 'libertad.share';
 
 export const SHARE = {
   on: 1,      // I am sharing my screen
@@ -10,7 +10,8 @@ export const SHARE = {
   watch: 4,   // let me watch
   leave: 5,   // I stopped watching
   offer: 6,   // session description from the sharer
-  answer: 7   // session description from the viewer
+  answer: 7,  // session description from the viewer
+  quality: 8  // viewer to sharer: the most I want to receive, { fps, height } (0 = no cap)
 } as const;
 export type ShareType = typeof SHARE[keyof typeof SHARE];
 

@@ -1,0 +1,111 @@
+import { putBlob, getBlob, deleteBlob } from './blobstore.ts';
+import { load, save } from './storage.ts';
+import type { Crop } from './image-edit.ts';
+
+// Pictures, GIFs and videos used as the app's background, kept on this computer only (nothing is sent to
+// anyone). 'whole' is one background spread over the left panel, the middle and the right panel, cut
+// between them; the others are one panel on its own, which then covers the whole background there.
+// A color is not kept here: it is a color of the custom color scheme (see custom-bg-actions.ts).
+export const PANELS = ['left', 'middle', 'right'] as const;
+export type Panel = typeof PANELS[number];
+// 'home' is the start screen (the server list, before entering a server): its own picture or color, apart from the panels
+export type Slot = 'whole' | Panel | 'home';
+export const SLOTS: Slot[] = ['whole', ...PANELS];
+const KEPT: Slot[] = [...SLOTS, 'home'];
+export type MediaKind = 'none' | 'image' | 'video';
+
+const MAX_BYTES = 300 * 1024 * 1024;
+const key = (slot: Slot) => `custom-bg-${slot}`;
+
+// crop: the part of a GIF or video that shows (0 to 1 of the picture), cut when it is drawn; null shows all of it
+interface Entry { kind: MediaKind; darkness: number; blur: number; crop: Crop | null; url: string | null }
+type Saved = Record<Slot, { kind: MediaKind; darkness: number; blur: number; crop?: Crop | null }>;
+
+const clamp = (v: unknown, max: number) => Math.min(max, Math.max(0, Math.round(Number(v)) || 0));
+
+// A crop that is a real part of the picture, else null (all of it)
+function validCrop(c: unknown): Crop | null {
+  const o = c as Partial<Crop> | null | undefined;
+  if (!o || ![o.x, o.y, o.w, o.h].every(n => typeof n === 'number' && Number.isFinite(n))) return null;
+  const { x, y, w, h } = o as Crop;
+  if (x < 0 || y < 0 || w < 0.01 || h < 0.01 || x + w > 1.0001 || y + h > 1.0001) return null;
+  return x < 0.002 && y < 0.002 && w > 0.996 && h > 0.996 ? null : { x, y, w, h };
+}
+
+class CustomBackground {
+  slots = $state<Record<Slot, Entry>>(this.initial());
+  readonly loaded: Promise<void>;
+
+  constructor() {
+    this.loaded = this.restore().catch(() => {});
+  }
+
+  private initial(): Record<Slot, Entry> {
+    const empty = { kind: 'none', darkness: 0, blur: 0, crop: null } as const;
+    const saved = load<Partial<Saved>>('libertad.customBgs', {});
+    const out = {} as Record<Slot, Entry>;
+    for (const s of KEPT) {
+      const e = saved[s] ?? empty;
+      out[s] = { kind: e.kind === 'image' || e.kind === 'video' ? e.kind : 'none', darkness: clamp(e.darkness, 95), blur: clamp(e.blur, 40), crop: validCrop(e.crop), url: null };
+    }
+    return out;
+  }
+
+  private async restore(): Promise<void> {
+    for (const s of KEPT) {
+      if (this.slots[s].kind === 'none') continue;
+      const blob = await getBlob(key(s));
+      if (blob && !this.slots[s].url) this.slots[s].url = URL.createObjectURL(blob);
+      else if (!blob) this.slots[s].kind = 'none';
+    }
+  }
+
+  private persist(): void {
+    const out = {} as Saved;
+    for (const s of KEPT) out[s] = { kind: this.slots[s].kind, darkness: this.slots[s].darkness, blur: this.slots[s].blur, crop: this.slots[s].crop };
+    save('libertad.customBgs', out);
+  }
+
+  // The start screen's color (a picture, GIF or video is the 'home' slot above)
+  homeColor = $state<string | null>((() => { const c = load<{ c: string | null }>('libertad.homeColor', { c: null }).c; return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null; })());
+  setHomeColor(c: string | null): void { this.homeColor = c; save('libertad.homeColor', { c }); }
+
+  has(slot: Slot): boolean { return this.slots[slot].kind !== 'none'; }
+  get any(): boolean { return SLOTS.some(s => this.has(s)); }
+
+  // What a panel shows from here: its own picture, else the whole background's, else nothing
+  effective(panel: Panel): Slot | null {
+    return this.has(panel) ? panel : this.has('whole') ? 'whole' : null;
+  }
+
+  // A picture, GIF or video from a file. Returns what went wrong, or ''.
+  // crop: the part of a GIF or video to show (see Entry)
+  async setFile(slot: Slot, file: File, crop?: Crop | null): Promise<string> {
+    const kind: MediaKind | null = file.type.startsWith('video/') ? 'video' : /^image\/(gif|png|jpeg|webp)$/.test(file.type) ? 'image' : null;
+    if (!kind) return 'This file is not a picture, GIF or video that can be used.';
+    if (file.size > MAX_BYTES) return 'This file is too large (the limit is 300 MB).';
+    try { await putBlob(key(slot), file); } catch { return 'This computer could not keep the file.'; }
+    const e = this.slots[slot];
+    if (e.url) URL.revokeObjectURL(e.url);
+    e.url = URL.createObjectURL(file);
+    e.kind = kind;
+    e.crop = validCrop(crop);
+    this.persist();
+    return '';
+  }
+
+  async clear(slot: Slot): Promise<void> {
+    const e = this.slots[slot];
+    if (e.url) URL.revokeObjectURL(e.url);
+    e.url = null;
+    e.kind = 'none';
+    e.crop = null;
+    await deleteBlob(key(slot)).catch(() => {});
+    this.persist();
+  }
+
+  setDarkness(slot: Slot, v: number): void { this.slots[slot].darkness = clamp(v, 95); this.persist(); }
+  setBlur(slot: Slot, v: number): void { this.slots[slot].blur = clamp(v, 40); this.persist(); }
+}
+
+export const customBg = new CustomBackground();

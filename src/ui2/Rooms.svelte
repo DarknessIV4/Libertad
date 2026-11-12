@@ -79,7 +79,7 @@
       title: `Certificate of ${session.server?.host}`, chain: cert.chain,
       status: cert.authorized
         ? { ok: true, text: 'Valid certificate, signed by a trusted authority.' }
-        : { ok: false, text: `Not signed by a trusted authority (${cert.authError ?? 'unknown reason'}). mumh5 pinned this certificate the first time you connected and warns you if it changes.` }
+        : { ok: false, text: `Not signed by a trusted authority (${cert.authError ?? 'unknown reason'}). Libertad pinned this certificate the first time you connected and warns you if it changes.` }
     };
   }
 
@@ -138,7 +138,7 @@
 
   <header class="top">
     <button class="place" onclick={showCert} disabled={!cert} title={cert ? (cert.authorized ? 'Valid certificate. Click to view' : 'Self-signed or untrusted certificate. Click to view') : ''}>
-      <h1>{session.server?.label ?? 'mumh5'}</h1>
+      <h1>{session.server?.label ?? 'Libertad'}</h1>
       <span class="status">
         {#if connected}<span class="dot"></span>Connected{#if session.rtt}, {session.rtt} ms{/if}{#if cert}<Icon name={cert.authorized ? 'lock' : 'shield'} size={12} />{/if}
         {:else if session.status === 'connecting'}Connecting...

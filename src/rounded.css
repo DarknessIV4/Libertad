@@ -1,0 +1,164 @@
+/* Rounded edges (Settings > Appearance > Interface). app.css squares every corner; while
+   <html data-rounded> is set, the surfaces below get a radius from --round, a factor from 0 to 1.
+   Windows and cards reach 28px, menus 18px, server icons and pictures a full circle. */
+
+:root[data-rounded] {
+  --r-window: calc(var(--round, 0) * 28px);
+  --r-menu: calc(var(--round, 0) * 18px);
+  --r-item: calc(var(--round, 0) * 10px);
+  --r-tile: calc(var(--round, 0) * 50%);
+  /* Pills: buttons and the message box. A radius of half the height or more is a full pill, so 100% round is one */
+  --r-pill: calc(var(--round, 0) * 20px);
+  --r-pill-lg: calc(var(--round, 0) * 24px);
+  --r-inset: calc(var(--round, 0) * 6px);
+}
+
+/* Windows */
+:root[data-rounded] .modal { border-radius: var(--r-window) !important; overflow: hidden; }
+
+/* Menus and pop-ups, and the items inside them */
+:root[data-rounded] .menu,
+:root[data-rounded] .pop { border-radius: var(--r-menu) !important; }
+:root[data-rounded] .menu button,
+:root[data-rounded] .menu .item { border-radius: var(--r-item) !important; }
+
+/* Cards: the profile card is a window of its own, the others (link previews) are small */
+:root[data-rounded] .card { border-radius: var(--r-menu) !important; overflow: hidden; }
+:root[data-rounded] .card[role="dialog"] { border-radius: var(--r-window) !important; overflow-y: auto; }
+:root[data-rounded] .card.sheet { border-radius: var(--r-window) var(--r-window) 0 0 !important; }
+:root[data-rounded] .card .pic,
+:root[data-rounded] .card .pic-edit,
+:root[data-rounded] .avatar,
+:root[data-rounded] .avatar img { border-radius: var(--r-tile) !important; }
+:root[data-rounded] .card .pic { overflow: hidden; }
+
+/* People in a voice channel */
+:root[data-rounded] .stage .tile { border-radius: var(--r-menu) !important; }
+
+/* The server bar: server icons (with their pictures), add, browse and settings */
+:root[data-rounded] .rail .tile,
+:root[data-rounded] .rail .tile .icon { border-radius: var(--r-tile) !important; }
+:root[data-rounded] .rail .tile { overflow: visible; }
+:root[data-rounded] .rail .tile .icon { overflow: hidden; }
+:root[data-rounded] .rail .tile::after,
+:root[data-rounded] .rail .unread { border-radius: var(--r-tile) !important; }
+:root[data-rounded] .rail .tile.active::before { border-radius: calc(var(--round, 0) * 2px) !important; }
+:root[data-rounded] .rail .drop-line { border-radius: calc(var(--round, 0) * 2px) !important; }
+
+/* Buttons everywhere (Done, Test microphone, profile card buttons, ...) */
+:root[data-rounded] .btn { border-radius: var(--r-pill) !important; }
+
+/* Drop-down lists (microphone, speakers / headphones, and the other settings selects) and text boxes
+   (text, number, search, password ... but not checkboxes, radios, sliders, colors or files) */
+:root[data-rounded] select,
+:root[data-rounded] input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]) { border-radius: var(--r-pill) !important; }
+
+/* Multi-line text boxes are tall, so they use the smaller menu radius instead of a pill */
+:root[data-rounded] textarea { border-radius: var(--r-menu) !important; }
+
+/* Transmit mode cards in Settings > Voice (Voice activity, Push to talk, Always on) */
+:root[data-rounded] .modes button { border-radius: var(--r-menu) !important; }
+
+/* Settings: the section list on the left */
+:root[data-rounded] .tabs button { border-radius: var(--r-item) !important; }
+
+/* Settings > Appearance: color scheme cards, their previews, color swatches, background boxes, buttons */
+:root[data-rounded] .themes > button { border-radius: var(--r-menu) !important; }
+:root[data-rounded] .themes .mini { border-radius: var(--r-item) !important; }
+:root[data-rounded] .custom,
+:root[data-rounded] .bgbox { border-radius: var(--r-menu) !important; overflow: hidden; }
+:root[data-rounded] .pick { border-radius: var(--r-item) !important; }
+:root[data-rounded] .sw { border-radius: var(--r-inset) !important; }
+:root[data-rounded] .bgbtns button,
+:root[data-rounded] .custom .reset { border-radius: var(--r-pill) !important; }
+
+/* Settings > Identities */
+:root[data-rounded] .ids li { border-radius: var(--r-menu) !important; }
+:root[data-rounded] .ids .tag { border-radius: var(--r-inset) !important; }
+
+/* Share dialog: the tabs, the preview, screen and window thumbnails, the video and file info boxes */
+:root[data-rounded] .kinds button,
+:root[data-rounded] .watch-modes button { border-radius: var(--r-item) !important; }
+:root[data-rounded] .preview,
+:root[data-rounded] .torrent-files,
+:root[data-rounded] .yt-preview,
+:root[data-rounded] .file-preview { border-radius: var(--r-menu) !important; overflow: hidden; }
+:root[data-rounded] .sources button { border-radius: var(--r-menu) !important; overflow: hidden; }
+:root[data-rounded] .sources button img { border-radius: var(--r-item) !important; }
+:root[data-rounded] .yt-preview img { border-radius: var(--r-item) !important; }
+
+/* The Next button in the middle of a finished torrent video */
+:root[data-rounded] .next-big { border-radius: var(--r-menu) !important; }
+
+/* The message box */
+:root[data-rounded] .composer .frame { border-radius: var(--r-pill-lg) !important; overflow: hidden; }
+
+/* The title panels: the server name on the left, the chat title, the members title and the voice channel title.
+   They are set in a little from the edges so their corners show. */
+:root[data-rounded] .sidebar > header,
+:root[data-rounded] .cheader,
+:root[data-rounded] aside.panel > header,
+:root[data-rounded] .stage > header { border-radius: var(--r-menu) !important; margin: var(--r-inset) var(--r-inset) 0; }
+
+/* The server bar and your own bar under the channel list */
+:root[data-rounded] .rail { border-radius: var(--r-menu) !important; margin: var(--r-inset) 0 var(--r-inset) var(--r-inset); }
+:root[data-rounded] .sidebar .me { border-radius: var(--r-menu) !important; margin: 0 var(--r-inset) var(--r-inset); }
+
+/* Checkboxes: drawn here (the browser's own box cannot be rounded) */
+:root[data-rounded] input[type=checkbox] {
+  appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; cursor: pointer;
+  background: var(--bg-3); border: 1.5px solid var(--line-strong); border-radius: calc(var(--round, 0) * 6px) !important;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
+}
+:root[data-rounded] input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
+:root[data-rounded] input[type=checkbox]::after {
+  content: ''; width: 8px; height: 4px; margin-top: -2px; transform: rotate(-45deg) scale(0);
+  border-left: 2px solid var(--accent-text); border-bottom: 2px solid var(--accent-text); transition: transform 100ms var(--ease);
+}
+:root[data-rounded] input[type=checkbox]:checked::after { transform: rotate(-45deg) scale(1); }
+:root[data-rounded] input[type=checkbox]:disabled { opacity: 0.45; cursor: default; }
+:root[data-rounded] input[type=checkbox]:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+
+/* The start screen (Servers): each server card and its picture, and your own bar along the bottom with its buttons */
+:root[data-rounded] .home .server { border-radius: var(--r-menu) !important; overflow: hidden; }
+:root[data-rounded] .home .server .pic { border-radius: var(--r-tile) !important; }
+:root[data-rounded] .home .me { border-radius: var(--r-menu) !important; margin: 0 var(--r-inset) var(--r-inset); }
+:root[data-rounded] .me .icon-btn,
+:root[data-rounded] .home .server .icon-btn,
+:root[data-rounded] .me .profile { border-radius: var(--r-item) !important; }
+
+/* ---------------------------------------------------------------------------------------------
+   Everything else with a corner. app.css squares every element, so any surface that is not named
+   above would stay sharp. The rules below catch the rest by kind. :where() gives them no weight of
+   their own, so every rule above (windows, pills, server icons ...) still wins where it names the same element. */
+
+/* Anything you can press or that lights up when the pointer is on it: buttons, list rows (channels,
+   people, chats, messages), tabs, menu items, search hits, the title that folds a voice channel ... */
+:root[data-rounded] :where(
+  button, [role=button], [role=tab], [role=menuitem], [role=option], summary, label.choice,
+  .channel, .user, .dm, .msg, .title, .choice, .item, .mute, .open, .join, .scope, .s-hit, .s-title, .s-chip,
+  .ibtn, .ghost, .desc-btn, .gif-tab, .gif-btn, .tool, .add, .pic-edit, .state, .site, .reg, .quality, .play,
+  .cmd, .person, .entry, .profile, .banner-edit, .bmenu button, .list button, .subs .opt,
+  .chip, .unmute, .hint, .yt-len, .src, .tabs button
+) { border-radius: var(--r-item) !important; }
+
+/* Small tags, badges and counters over or beside things (the name on a video, Host, unread counts) */
+:root[data-rounded] :where(.who, .badge, .host-tag, .count, .tag, .stamp, .note, .mtag, .mark) { border-radius: var(--r-inset) !important; }
+:root[data-rounded] :where(.badge, .count, .online) { border-radius: var(--r-pill) !important; }
+
+/* Boxes, bars and pop-up panels */
+:root[data-rounded] :where(
+  .subs, .gif-menu, .memo-menu, .desc-pop, .ended, .box, .file, .quality, .pending, .stream-menu, .bmenu,
+  .torrent-files, .s-titles, .s-found, .look, .find, .toolbar, .cmds, .cues
+) { border-radius: var(--r-menu) !important; }
+:root[data-rounded] .cues { border-radius: calc(var(--round, 0) * 0.4em) !important; }
+
+/* Pictures and thumbnails inside lists and cards */
+:root[data-rounded] :where(.yt-thumb, .s-title img, .s-nopic, .m-pic, .swatch) { border-radius: var(--r-item) !important; overflow: hidden; }
+:root[data-rounded] .yt-thumb img { border-radius: 0 !important; }
+
+/* The text in the message box and the buttons in it */
+:root[data-rounded] .composer :where(.tool) { border-radius: var(--r-pill) !important; }
+
+/* Scroll bars */
+:root[data-rounded] ::-webkit-scrollbar-thumb { border-radius: var(--r-pill); }

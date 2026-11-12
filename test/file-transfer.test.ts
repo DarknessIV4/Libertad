@@ -62,8 +62,8 @@ test('pieces are recognized and parsed in both forms', () => {
     assert.deepEqual(parsePiece(msg), { id: 'abc123', index: 42, payload });
   }
   assert.equal(isPiece('<img src="data:image/png;base64,AAAA"/>'), false);
-  assert.equal(parsePiece('<img alt="mumh5:f:ABC:1" src="data:,x"/>'), null);
-  assert.equal(parsePiece('<img alt="mumh5:f:abc:1" src="data:,x"'), null);
+  assert.equal(parsePiece('<img alt="libertad:f:ABC:1" src="data:,x"/>'), null);
+  assert.equal(parsePiece('<img alt="libertad:f:abc:1" src="data:,x"'), null);
 });
 
 const meta: FileMeta = { i: 'k3f9abc', n: 'clip--final.mp4', s: 1_000_000, m: 'video/mp4', c: 245_745, h: 'ab'.repeat(32) };
@@ -72,7 +72,7 @@ test('announcements hide their marker from other clients and come back intact', 
   const html = announce(meta, '<b>clip--final.mp4</b> (976.6 KB)<br/><img src="data:image/jpeg;base64,/9j/AA=="/>');
   // A comment that other clients do not show, and nothing that would end it early
   const comment = html.slice(0, html.indexOf('-->') + 3);
-  assert.ok(comment.startsWith('<!--mumh5:file:'));
+  assert.ok(comment.startsWith('<!--libertad:file:'));
   assert.ok(!comment.slice(4, -3).includes('--'));
   const got = takeFiles('before ' + html + ' after');
   assert.equal(got.html, 'before  after');
@@ -83,15 +83,16 @@ test('announcements hide their marker from other clients and come back intact', 
 test('announced details are checked', () => {
   assert.deepEqual(validMeta(meta), meta);
   assert.equal(validMeta({ ...meta, s: 0 }), null);
-  assert.equal(validMeta({ ...meta, s: 3 * 1024 ** 3 }), null);
+  assert.equal(validMeta({ ...meta, s: 101 * 1024 ** 3 }), null);
+  assert.ok(validMeta({ ...meta, s: 100 * 1024 ** 3 }), "exactly at the limit");
   assert.equal(validMeta({ ...meta, c: 1485 }), null);
-  assert.equal(validMeta({ ...meta, s: 2 * 1024 ** 3, c: 15000 }), null, 'too many pieces');
+  assert.equal(validMeta({ ...meta, s: 100 * 1024 ** 3, c: 50000 }), null, 'too many pieces');
   assert.equal(validMeta({ ...meta, h: 'xyz' }), null);
   assert.equal(validMeta({ ...meta, i: 'A/B' }), null);
   assert.equal(validMeta({ ...meta, m: 'text/html<script>' }), null);
   assert.equal(validMeta({ ...meta, n: '../../etc/passwd' })!.n, '.._.._etc_passwd');
   // A marker with broken details stays in the message as it was
-  const bad = '<!--mumh5:file:%7B%7D-->x<!--/mumh5:file-->';
+  const bad = '<!--libertad:file:%7B%7D-->x<!--/libertad:file-->';
   assert.deepEqual(takeFiles(bad), { html: bad, files: [] });
 });
 

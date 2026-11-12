@@ -58,7 +58,7 @@ function safeGet(rawUrl: string, hops = 0): Promise<http.IncomingMessage & { fin
     const req = lib.get(url, {
       lookup: safeLookup,
       timeout: TIMEOUT_MS,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mumh5-linkpreview/1.0)', 'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1' }
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; libertad-linkpreview/1.0)', 'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1' }
     }, res => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();

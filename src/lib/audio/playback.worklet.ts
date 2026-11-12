@@ -92,4 +92,4 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('mumh5-playback', PlaybackProcessor);
+registerProcessor('libertad-playback', PlaybackProcessor);

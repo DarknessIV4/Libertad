@@ -5,12 +5,15 @@
   const hue = $derived([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360);
   let failed = $state<string | null>(null);
   const picture = $derived(src && failed !== src ? src : null);
+  // A video avatar comes with #video on its address (see session.avatar)
+  const isVideo = $derived(!!picture && picture.endsWith('#video'));
 </script>
 
 <span class="avatar" class:speaking class:picture style:width="{size}px" style:height="{size}px"
   style:font-size="{Math.round(size * 0.45)}px" style:background={picture ? undefined : `hsl(${hue} 45% 38%)`}>
   {#if picture}
-    <img src={picture} alt="" draggable="false" onerror={() => (failed = picture)} />
+    {#if isVideo}<video src={picture} autoplay loop muted playsinline disablepictureinpicture draggable="false" onerror={() => (failed = picture)}></video>
+    {:else}<img src={picture} alt="" draggable="false" onerror={() => (failed = picture)} />{/if}
   {:else}
     {(name.trim()[0] ?? '?').toUpperCase()}
   {/if}
@@ -23,6 +26,6 @@
     transition: box-shadow 80ms;
   }
   .avatar.picture { background: var(--bg-3); }
-  img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  img, video { width: 100%; height: 100%; object-fit: cover; display: block; }
   .speaking { box-shadow: 0 0 0 2px var(--speaking); }
 </style>

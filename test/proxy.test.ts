@@ -33,10 +33,10 @@ test('server list parsing', () => {
 });
 
 test('empty environment variables fall back to the defaults', () => {
-  const c = configFromEnv({ MUMH5_PORT: '', MUMH5_BIND: '', MUMH5_STUN_PORT: '', MUMH5_STUN_BIND: '', MUMH5_MAX_CONNECTIONS: '', MUMH5_SERVERS: 'a.example', MUMH5_ALLOW_ANY: '' });
+  const c = configFromEnv({ LIBERTAD_PORT: '', LIBERTAD_BIND: '', LIBERTAD_STUN_PORT: '', LIBERTAD_STUN_BIND: '', LIBERTAD_MAX_CONNECTIONS: '', LIBERTAD_SERVERS: 'a.example', LIBERTAD_ALLOW_ANY: '' });
   assert.deepEqual([c.port, c.bind, c.stunPort, c.stunBind, c.maxConnections, c.allowAny], [8080, '127.0.0.1', 3478, '::', 200, false]);
-  assert.equal(configFromEnv({ MUMH5_STUN_PORT: '0' }).stunPort, null);
-  assert.equal(configFromEnv({ MUMH5_PORT: '8089' }).port, 8089);
+  assert.equal(configFromEnv({ LIBERTAD_STUN_PORT: '0' }).stunPort, null);
+  assert.equal(configFromEnv({ LIBERTAD_PORT: '8089' }).port, 8089);
 });
 
 test('private address detection', () => {
@@ -113,7 +113,7 @@ test('the proxy answers STUN over UDP and announces the port', async () => {
     assert.equal((await (await fetch(`${base}/api/config`)).json()).turn, true);
     // What clients need for screen sharing: the port, and relay credentials that expire.
     // Readable from any origin, since the desktop app asks from outside this site.
-    const res = await fetch(`${base}/api/relay`, { headers: { Origin: 'app://mumh5' } });
+    const res = await fetch(`${base}/api/relay`, { headers: { Origin: 'app://libertad' } });
     assert.equal(res.headers.get('access-control-allow-origin'), '*');
     const cred = await res.json();
     assert.ok(Number(cred.username) > Date.now() / 1000 && cred.credential.length > 20 && cred.port === proxy.stunPort);

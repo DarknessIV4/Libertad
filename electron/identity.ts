@@ -17,7 +17,7 @@ export function generateIdentity(name: string, email = ''): Identity {
   cert.validity.notBefore = new Date();
   cert.validity.notAfter = new Date();
   cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 20);
-  const attrs: { name: string; value: string }[] = [{ name: 'commonName', value: name || 'mumh5 user' }];
+  const attrs: { name: string; value: string }[] = [{ name: 'commonName', value: name || 'Libertad user' }];
   if (email) attrs.push({ name: 'emailAddress', value: email });
   cert.setSubject(attrs);
   cert.setIssuer(attrs);

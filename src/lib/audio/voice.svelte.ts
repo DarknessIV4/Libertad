@@ -66,7 +66,7 @@ export const userKey = (u: { hash: string; name: string }) => u.hash || `name:${
 export interface DeviceInfo { id: string; label: string }
 
 class VoiceEngine {
-  settings = $state<VoiceSettings>(load('mumh5.voice', defaults));
+  settings = $state<VoiceSettings>(load('libertad.voice', defaults));
   inputDevices = $state<DeviceInfo[]>([]);
   outputDevices = $state<DeviceInfo[]>([]);
   running = $state(false);
@@ -119,7 +119,7 @@ class VoiceEngine {
   }
 
   save(): void {
-    save('mumh5.voice', $state.snapshot(this.settings));
+    save('libertad.voice', $state.snapshot(this.settings));
   }
 
   update(patch: Partial<VoiceSettings>): void {
@@ -154,9 +154,9 @@ class VoiceEngine {
     try {
       const builtIn = typeof AudioEncoder !== 'undefined' && typeof AudioDecoder !== 'undefined' &&
         (await AudioEncoder.isConfigSupported(this.encoderConfig()).catch(() => ({ supported: false }))).supported;
-      // mumh5.forceWasmOpus in localStorage: use the built-in codec regardless, for testing it
+      // libertad.forceWasmOpus in localStorage: use the built-in codec regardless, for testing it
       let forced = false;
-      try { forced = localStorage.getItem('mumh5.forceWasmOpus') === '1'; } catch { /* storage unavailable */ }
+      try { forced = localStorage.getItem('libertad.forceWasmOpus') === '1'; } catch { /* storage unavailable */ }
       if (!builtIn || forced) {
         // Firefox on Android, for one, has no audio codec for pages; bring our own
         try {
@@ -171,14 +171,14 @@ class VoiceEngine {
       await ctx.audioWorklet.addModule(playbackUrl);
 
       this.outputGainNode = new GainNode(ctx, { gain: this.settings.outputVolume });
-      this.playback = new AudioWorkletNode(ctx, 'mumh5-playback', { numberOfInputs: 0, outputChannelCount: [2] });
+      this.playback = new AudioWorkletNode(ctx, 'libertad-playback', { numberOfInputs: 0, outputChannelCount: [2] });
       this.playback.port.onmessage = e => this.onLevels(e.data.levels);
       this.playback.port.postMessage({ jitterMs: this.settings.jitterMs });
       for (const [s, g] of this.sessionGains) this.playback.port.postMessage({ session: s, gain: g });
       this.playback.connect(this.outputGainNode).connect(ctx.destination);
 
       this.inputGainNode = new GainNode(ctx, { gain: this.settings.inputGain });
-      this.capture = new AudioWorkletNode(ctx, 'mumh5-capture', { numberOfOutputs: 0 });
+      this.capture = new AudioWorkletNode(ctx, 'libertad-capture', { numberOfOutputs: 0 });
       this.capture.port.onmessage = e => this.onFrame(e.data.frame, e.data.rms);
       this.inputGainNode.connect(this.capture);
 

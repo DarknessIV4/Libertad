@@ -122,3 +122,80 @@ export async function makeAvatar(file: Blob, maxBytes: number): Promise<Uint8Arr
     bmp.close();
   }
 }
+
+
+// A profile banner. Small enough for a description, it comes back as a data: URI to put in there;
+// otherwise as a file, which other people fetch over WebRTC. A GIF is kept as it is (its animation
+// would be lost otherwise). Other pictures are cut to the 5:2 of the banner from the middle and
+// kept at good quality, so a detailed picture is simply shared as a file. Null: not a picture.
+// keepShape: a picture the person already cropped (see ImageEditor): it keeps its shape, only scaled down
+export async function makeBanner(file: Blob, keepShape = false): Promise<{ blob: Blob; mime: string } | null> {
+  if (file.type === 'image/gif' || /^video\/(mp4|webm)$/.test(file.type)) return { blob: file, mime: file.type };
+  if (!/^image\/(png|jpeg|webp|avif|bmp)$/.test(file.type)) return null;
+  const bmp = await createImageBitmap(file);
+  try {
+    let width: number, height: number;
+    if (keepShape) {
+      const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+      width = Math.max(1, Math.round(bmp.width * k));
+      height = Math.max(1, Math.round(bmp.height * k));
+    } else {
+      width = Math.min(1280, bmp.width);
+      height = Math.round(width * 0.4);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingQuality = 'high';
+    if (keepShape) ctx.drawImage(bmp, 0, 0, width, height);
+    else {
+      // Cover: the picture fills the banner, the overhang is cut off
+      ctx.fillStyle = '#1a1b1f';
+      ctx.fillRect(0, 0, width, height);
+      const scale = Math.max(width / bmp.width, height / bmp.height);
+      const sw = width / scale, sh = height / scale;
+      ctx.drawImage(bmp, (bmp.width - sw) / 2, (bmp.height - sh) / 2, sw, sh, 0, 0, width, height);
+    }
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    return blob ? { blob, mime: 'image/jpeg' } : null;
+  } finally {
+    bmp.close();
+  }
+}
+
+// A picture of one frame of a video (a moment in, past a black first frame), at most 1280 px on its long side,
+// for the picture editor to crop on. Null: not a video this browser can decode.
+export async function videoFrame(file: Blob): Promise<File | null> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  const wait = (event: string) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), 8000);
+    video.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
+    video.addEventListener('error', () => { clearTimeout(timer); reject(new Error('undecodable')); }, { once: true });
+  });
+  try {
+    video.muted = true;
+    video.preload = 'auto';
+    video.src = url;
+    await wait('loadeddata');
+    const at = Number.isFinite(video.duration) ? Math.min(1, video.duration / 10) : 0;
+    if (at > 0) {
+      video.currentTime = at;
+      await wait('seeked');
+    }
+    if (!video.videoWidth || !video.videoHeight) return null;
+    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+    return blob ? new File([blob], 'frame.jpg', { type: 'image/jpeg' }) : null;
+  } catch {
+    return null;
+  } finally {
+    video.removeAttribute('src');
+    URL.revokeObjectURL(url);
+  }
+}

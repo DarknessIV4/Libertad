@@ -1,7 +1,20 @@
 import type { Transport, ServerCertInfo, CertDetails, UdpChannel } from '../core/transport.ts';
 import { webApi, openWebTransport } from './web.svelte.ts';
+import type { MediaInfo } from '../core/transcode.ts';
+import type { TorrentInfo, TorrentPlay, TorrentStats } from '../core/torrent-meta.ts';
+import type { FoundEpisodes } from '../core/episodes.ts';
+import type { FoundTorrent, TitleResult } from '../core/search.ts';
+import type { YoutubeResult } from '../core/youtube-search.ts';
+import type { EmbeddedBatch, EmbeddedTrack } from '../core/mkv.ts';
+import type { Cue, SubtitleOption } from '../core/subtitles.ts';
+
+// What an IPC call to the desktop app's main process rejects with: "Error invoking remote method 'x': Error: the sentence"
+export const torrentError = (e: unknown): string =>
+  String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']*': (Error: )?/, '') || 'Something went wrong';
 
 // What both the desktop app and the browser build (through the web proxy) provide
+export type YoutubeAccountState = { signedIn: boolean; noHistory: boolean };
+
 export interface PlatformApi {
   platformInfo(): Promise<{ os: string; osVersion: string }>;
   describeCerts(ders: Uint8Array[]): Promise<CertDetails[]>;
@@ -22,11 +35,120 @@ export interface PlatformApi {
   };
 }
 
+export type FileBegin = { ok: true } | { ok: false; reason: 'canceled' | 'space' | 'toolarge' | 'error'; free?: number };
+export type FileExport = { ok: true; path: string } | { ok: false; reason: 'canceled' | 'space' | 'toolarge' | 'error'; free?: number };
+
 // The desktop app's preload API
 interface NativeApi extends PlatformApi {
+  // Other people's profile backgrounds in the app's data folder (user-profiles/<name>/<file>); bytes null deletes
+  profiles: {
+    read(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile'): Promise<Uint8Array | null>;
+    write(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile', bytes: Uint8Array | null): Promise<boolean>;
+  };
+  files: {
+    // Asks where to save (a Save dialog) and creates the file there; nothing is fetched before this says ok
+    begin(id: string, name: string, size: number, hash: string): Promise<FileBegin>;
+    write(id: string, offset: number, bytes: Uint8Array): Promise<boolean>;
+    // Puts the finished file in place and returns its path
+    finish(id: string): Promise<string>;
+    // Drops an unfinished download and any cached copy; never a file the person saved
+    remove(id: string): Promise<boolean>;
+    where(id: string, hash: string): Promise<{ kind: 'saved'; path: string } | { kind: 'cache' } | null>;
+    reveal(id: string): Promise<boolean>;
+    // Moves a file an older version cached out to a place the person picks
+    export(id: string, name: string, hash: string): Promise<FileExport>;
+    // Asks where to save a picture and writes it; the path, or null when cancelled
+    saveFrame(name: string, bytes: Uint8Array): Promise<string | null>;
+  };
+  // Torrent Together (desktop only). Errors come back as rejections with a sentence a person can read, see torrentError.
+  torrent: {
+    // A magnet link, a bare info hash or the address of a .torrent file; resolves once the file list is known
+    inspect(input: string): Promise<TorrentInfo>;
+    // Asks for a .torrent file on this computer; null when cancelled
+    openFile(): Promise<TorrentInfo | null>;
+    // Starts downloading the file and returns the local address to play it from
+    play(meta: { magnet: string; fileIdx: number }): Promise<TorrentPlay>;
+    // What the file holds, and where its converted form (H.264 + AAC, HLS) is served from. `info` is null when ffmpeg is
+    // missing or the file can not be read; `hls` ends with a slash: add "<voice>/index.m3u8".
+    probe(infoHash: string, fileIdx: number): Promise<{ info: MediaInfo | null; hls: string | null }>;
+    stats(infoHash: string, fileIdx: number): Promise<TorrentStats>;
+    // Stops downloading and forgets the files
+    stop(infoHash: string): Promise<void>;
+    // `query`: a title or an IMDb id typed by the person, when the file's own name finds nothing
+    subtitles(infoHash: string, fileIdx: number, query?: string): Promise<SubtitleOption[]>;
+    subtitleFile(url: string, lang: string): Promise<Cue[]>;
+    // The `count` episodes after the one the file is, looked up online in the same release (group and resolution) when possible
+    findEpisodes(filename: string, count: number): Promise<FoundEpisodes>;
+    // Films, series and anime matching a title typed by the person
+    searchTitles(query: string): Promise<TitleResult[]>;
+    // The torrents of every Torrentio provider for a film, or for one episode of a series (season and episode are ignored for a film)
+    searchTorrents(title: Pick<TitleResult, 'source' | 'id' | 'type'>, season: number, episode: number): Promise<FoundTorrent[]>;
+    // The text subtitle tracks inside the video file (a Matroska file; none for any other kind)
+    embeddedTracks(infoHash: string, fileIdx: number): Promise<EmbeddedTrack[]>;
+    // Reads the file for the cues of those tracks, starting at `startMs`; they arrive through onEmbeddedCues
+    embeddedScan(infoHash: string, fileIdx: number, startMs: number): Promise<void>;
+    embeddedStop(infoHash: string, fileIdx: number): Promise<void>;
+    onEmbeddedCues(fn: (batch: EmbeddedBatch) => void): () => void;
+  };
   updateTray(state: { icon: string; tooltip: string; connected: boolean; server: string; muted: boolean; deafened: boolean; mode: string }): void;
   onTrayAction(fn: (action: string) => void): void;
+  // Settings Chromium reads at start-up; changes apply after a restart
+  system: {
+    get(): Promise<{ hardwareAcceleration: boolean; autoUpdate: boolean; launchOnStartup: boolean; platform: string }>;
+    setAutoUpdate(on: boolean): Promise<void>;
+    setHardwareAcceleration(on: boolean): Promise<void>;
+    // Starts Libertad when you sign in to the computer (takes effect at once, no restart)
+    setLaunchOnStartup(on: boolean): Promise<void>;
+    relaunch(): Promise<void>;
+    // Closes the app for good (not just to the tray)
+    quit(): Promise<void>;
+  };
+  // Updates from the latest GitHub release: AppImage replaces itself, the Windows installer is opened
+  update: {
+    check(): Promise<{ available: boolean; current: string; latest: string; kind: 'appimage' | 'windows' | 'manual'; page: string; size: number }>;
+    install(): Promise<void>;
+    onProgress(fn: (done: number, total: number) => void): () => void;
+  };
+  // Keyboard shortcuts that work while the app is in the background; resolves to the ids the system refused
+  shortcuts: {
+    setGlobal(list: { id: string; accelerator: string }[]): Promise<{ failed: string[]; wayland: boolean }>;
+  };
+  setFullScreen(fullscreen: boolean): Promise<void>;
+  isFullScreen(): Promise<boolean>;
+  // Full screen of one pop-out window (by the name it was opened with); omit `fullscreen` to toggle. Resolves to the state asked for.
+  // The YouTube account of the embedded player (see electron/youtube-account.ts)
+  youtube: {
+    // Videos matching a title typed by the person
+    search(query: string): Promise<YoutubeResult[]>;
+    account(): Promise<YoutubeAccountState>;
+    // The app's own sign-in window (asks like Firefox; Google may still refuse); resolves when it closes
+    signIn(): Promise<YoutubeAccountState>;
+    // Opens the default browser; resolves when the companion extension has delivered the sign-in, or it was cancelled
+    browserSignIn(): Promise<YoutubeAccountState & { error?: string }>;
+    browserCancel(): Promise<void>;
+    // The folder holding the browser extension (written on demand); the second also opens it in the file manager
+    companionFolder(): Promise<string>;
+    openCompanionFolder(): Promise<string>;
+    // Cookie text copied from the browser: a "Cookie:" header, a Cookie-Editor JSON export, cookies.txt or table rows
+    importCookies(text: string): Promise<YoutubeAccountState & { imported?: number; error?: string }>;
+    signOut(): Promise<YoutubeAccountState>;
+    setNoHistory(on: boolean): Promise<YoutubeAccountState>;
+  };
+  setPopoutFullScreen(name: string, fullscreen?: boolean): Promise<boolean>;
+  isPopoutFullScreen(name: string): Promise<boolean>;
   linkPreview(url: string): Promise<LinkPreviewData | null>;
+  gifFetch(url: string): Promise<Uint8Array>;
+  gifSearch(q: string, page: number): Promise<{ gifs: { id: string; preview: string; url: string }[]; more: boolean }>;
+  // Sets the quality inside the YouTube player's frame (see electron/yt-quality.ts)
+  youtubeQuality(level: string): Promise<{ method: 'api' | 'menu' | 'none'; quality?: string; error?: string }>;
+  // Sets the playback speed inside the YouTube player's frame
+  youtubeRate(rate: number): Promise<{ method: 'api' | 'menu' | 'none'; rate?: number; error?: string }>;
+  // The size of the picture the YouTube player plays (null while unknown)
+  youtubeVideoSize(): Promise<{ width: number; height: number } | null>;
+  // One frame of the YouTube picture as a small JPEG data address (null when there is none)
+  youtubeFrame(): Promise<string | null>;
+  // The video's preview picture from YouTube, as a small JPEG data address (null when there is none)
+  youtubeThumbnail(id: string): Promise<string | null>;
   publicServers(url: string): Promise<PublicServer[]>;
   onContextMenu(fn: (params: ContextParams) => void): void;
   editAction(action: string, arg?: unknown): void;
@@ -88,11 +210,11 @@ export interface IdentitySummary {
 }
 
 declare global {
-  interface Window { mumh5Native?: NativeApi }
+  interface Window { libertadNative?: NativeApi }
 }
 
 // Desktop-only features (tray, UDP voice, public list, direct link previews) check `desktop`
-export const desktop: NativeApi | null = typeof window !== 'undefined' ? window.mumh5Native ?? null : null;
+export const desktop: NativeApi | null = typeof window !== 'undefined' ? window.libertadNative ?? null : null;
 // The browser build (vite --mode web) talks to the web proxy instead
 export const isWeb = !desktop && import.meta.env?.MODE === 'web';
 export const native: PlatformApi | null = desktop ?? (isWeb ? webApi : null);

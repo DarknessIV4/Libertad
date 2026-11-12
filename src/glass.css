@@ -1,0 +1,72 @@
+/* See-through windows, menus and buttons (Settings > Appearance). App.svelte sets, on the root, how much of the
+   color stays (--win-solid, --btn-solid), the darkness (--win-shade, --btn-shade) and the blur (--win-blur,
+   --btn-blur), and the attributes below while the transparency is above 0, so with 0 nothing here applies.
+   The darkness is an inset shadow: it lies over the surface's own background and under what is inside it. */
+
+/* Windows and menus: dialogs, the profile card, menus, pop-ups and the color picker */
+:root[data-win-glass] :is(.modal, .menu, .pop, .desc-pop, .gif-menu, .card[role="dialog"]) {
+  background-color: color-mix(in srgb, var(--bg-1) var(--win-solid, 100%), transparent) !important;
+  backdrop-filter: blur(var(--win-blur, 0px));
+}
+:root[data-win-glass] :is(.modal, .card[role="dialog"]) {
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / var(--win-shade, 0)), var(--shadow-modal) !important;
+}
+:root[data-win-glass] :is(.menu, .pop, .desc-pop, .gif-menu) {
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / var(--win-shade, 0)), var(--shadow-pop) !important;
+}
+/* The bar with the buttons at the bottom of a window */
+:root[data-win-glass] .modal footer {
+  background-color: color-mix(in srgb, var(--bg-0) var(--win-solid, 100%), transparent) !important;
+}
+
+/* The dark box inside the profile card (channel and description) follows the windows too */
+:root[data-win-glass] .card[role="dialog"] .box {
+  background-color: color-mix(in srgb, var(--bg-0) var(--win-solid, 100%), transparent) !important;
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / var(--win-shade, 0));
+  backdrop-filter: blur(var(--win-blur, 0px));
+}
+
+/* Buttons: the same ones that rounded edges round */
+:root[data-btn-glass] :is(.btn:not(.danger), .bgbtns button, .gif-tab) {
+  background-color: color-mix(in srgb, var(--bg-3) var(--btn-solid, 100%), transparent) !important;
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / var(--btn-shade, 0));
+  backdrop-filter: blur(var(--btn-blur, 0px));
+}
+:root[data-btn-glass] .btn:hover:not(:disabled):not(.danger) {
+  background-color: color-mix(in srgb, var(--bg-hover) var(--btn-solid, 100%), transparent) !important;
+}
+:root[data-btn-glass] .btn:active:not(:disabled):not(.danger) {
+  background-color: color-mix(in srgb, var(--bg-active) var(--btn-solid, 100%), transparent) !important;
+}
+:root[data-btn-glass] .btn.primary:not(.danger),
+:root[data-btn-glass] .btn.primary:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) var(--btn-solid, 100%), transparent) !important;
+}
+:root[data-btn-glass] .btn.primary:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent-hover) var(--btn-solid, 100%), transparent) !important;
+}
+:root[data-btn-glass] .bgbtns button:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) var(--btn-solid, 100%), transparent) !important;
+}
+:root[data-btn-glass] .btn.danger {
+  backdrop-filter: blur(var(--btn-blur, 0px));
+}
+
+/* The GIF button and the menu's tabs: the same hover as the other buttons */
+:root[data-btn-glass] .gif-tab:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--bg-hover) var(--btn-solid, 100%), transparent) !important;
+}
+/* The GIF button has no background at rest, only when touched */
+:root[data-btn-glass] .gif-btn:is(:hover, :focus-visible):not(:disabled) {
+  background-color: color-mix(in srgb, var(--bg-hover) var(--btn-solid, 100%), transparent) !important;
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / var(--btn-shade, 0));
+  backdrop-filter: blur(var(--btn-blur, 0px));
+}
+
+/* The small icon buttons on the start screen (the server's settings, and the ones in your bar): see-through when
+   touched, like the other buttons. At rest they have no background, so there is nothing to darken. */
+:root[data-btn-glass] :is(.home .server .icon-btn, .me .icon-btn):is(:hover, :focus-visible):not(:disabled) {
+  background-color: color-mix(in srgb, var(--bg-hover) var(--btn-solid, 100%), transparent) !important;
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / var(--btn-shade, 0));
+  backdrop-filter: blur(var(--btn-blur, 0px));
+}

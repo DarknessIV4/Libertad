@@ -1,8 +1,10 @@
 <script lang="ts">
+  import Icon from '../ui/Icon.svelte';
   import VoiceStage from '../ui/VoiceStage.svelte';
   import VoiceControls from './VoiceControls.svelte';
   import { session, sessions } from '../lib/session.svelte.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   // The room you are in as a call: everyone as tiles, streams large, the controls underneath
   let { onrooms, onchat }: { onrooms: () => void; onchat: () => void } = $props();
@@ -27,7 +29,7 @@
       <p class="note">Voice is on {sessions.voiceSession?.server?.label}; you are deafened here.
         <button class="btn" onclick={() => sessions.setVoice(sessions.active)}>Talk here</button></p>
     {/if}
-    <div class="stage"><VoiceStage always fill /></div>
+    <div class="stage"><VoiceStage fill /></div>
     <footer><VoiceControls large /></footer>
   {:else}
     <div class="blank">

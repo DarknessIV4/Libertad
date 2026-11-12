@@ -1,4 +1,4 @@
-// The browser build: what the desktop app does in its main process goes through the mumh5 web
+// The browser build: what the desktop app does in its main process goes through the Libertad web
 // proxy instead (server/proxy.ts). Identities are kept in this browser and sent to the proxy
 // when connecting, because the proxy presents the certificate to the Mumble server.
 import type { CertDetails } from '../core/transport.ts';
@@ -16,7 +16,7 @@ interface StoredIdentity {
 }
 interface StoreData { identities: StoredIdentity[]; defaultId: string | null; setupDone: boolean }
 
-const KEY = 'mumh5.identities';
+const KEY = 'libertad.identities';
 
 // The proxy normally serves the page; VITE_PROXY_URL points a separately hosted page at it
 const base = (() => {
@@ -77,7 +77,7 @@ function add(fresh: Fresh, name: string): IdentitySummary {
 async function identityFor(id?: string): Promise<StoredIdentity> {
   let d = read();
   if (!d.identities.length) {
-    add(await call<Fresh>('identity/create', { name: 'mumh5 user', email: '' }), 'My identity');
+    add(await call<Fresh>('identity/create', { name: 'Libertad user', email: '' }), 'My identity');
     d = read();
   }
   return d.identities.find(i => i.id === id) ?? d.identities.find(i => i.id === d.defaultId) ?? d.identities[0];
@@ -156,7 +156,7 @@ class ProxyInfo {
 }
 export const proxyInfo = new ProxyInfo();
 
-// STUN and the relay of a mumh5 proxy, for screen sharing. The browser build uses the proxy it
+// STUN and the relay of a Libertad proxy, for screen sharing. The browser build uses the proxy it
 // is served from, a host the user already uses; the desktop app one the user entered. The relay
 // needs credentials, which the proxy hands out for a few hours at a time.
 const relays = new Map<string, { servers: RTCIceServer[]; until: number }>();

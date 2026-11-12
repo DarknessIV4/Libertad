@@ -64,7 +64,7 @@ async function allocate(c: Awaited<ReturnType<typeof connect>>, secret = SECRET)
   assert.equal(code(challenge), 401);
   const realm = attr(challenge, 0x0014)!, nonce = attr(challenge, 0x0015)!;
   const username = String(Math.floor(Date.now() / 1000) + 600);
-  const key = createHash('md5').update(`${username}:mumh5:${turnCredential(secret, username)}`).digest();
+  const key = createHash('md5').update(`${username}:libertad:${turnCredential(secret, username)}`).digest();
   const auth: [number, Uint8Array][] = [[0x0006, text(username)], [0x0014, realm], [0x0015, nonce]];
   const h = header();
   c.send(build(0x0003, h, [transport, ...auth], key));

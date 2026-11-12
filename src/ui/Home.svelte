@@ -6,10 +6,13 @@
   import { ui } from '../lib/ui.svelte.ts';
   import { desktop, isWeb } from '../lib/native.ts';
   import { serverStatus, peopleOn } from '../lib/server-status.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
+  import { menu } from '../lib/menu.svelte.ts';
+  import { homeBackgroundItems } from '../lib/custom-bg-menu.ts';
+  import QuickMessage from './QuickMessage.svelte';
 
   // The start screen while not connected: your saved servers with who is on them, ready to join.
-  // top: your buttons along the top, where the stacked layout keeps them
-  let { onadd, onedit, onbrowse, top = false }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void; top?: boolean } = $props();
+  let { onadd, onedit, onbrowse }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void } = $props();
 
   const initials = (label: string) =>
     label.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
@@ -30,10 +33,17 @@
   }
 
   const d = $derived(session.disconnectInfo);
+  // The server whose message box is open (send to the main channel without joining)
+  let messaging = $state<SavedServer | null>(null);
+
+  // Right-clicking free space (not a server, a button or text being edited): the custom background menu
+  function bgMenu(e: MouseEvent) {
+    if (e.target instanceof Element && e.target.closest('button, a, input, textarea, select, .server, .ended, footer')) return;
+    menu.show(e, homeBackgroundItems());
+  }
 </script>
 
-<section class="home" aria-label="Servers">
-  {#if top}<UserBar toolbar />{/if}
+<section class="home" aria-label="Servers" oncontextmenu={bgMenu}>
   <div class="scroll">
     <header>
       <div class="title">
@@ -83,6 +93,7 @@
             </button>
             <button class="btn" class:primary={state !== 'connected'} onclick={() => sessions.open(s)}>{state === 'connected' ? 'Open' : 'Connect'}</button>
             <button class="icon-btn" title="Edit {s.label}" aria-label="Edit {s.label}" onclick={() => onedit(s)}><Icon name="settings" size={16} /></button>
+            <button class="icon-btn" title="Message {s.label}" aria-label="Message {s.label}" onclick={() => (messaging = s)}><Icon name="message" size={16} /></button>
           </li>
         {/each}
       </ul>
@@ -90,8 +101,10 @@
       <p class="none">No saved servers yet.</p>
     {/if}
   </div>
-  {#if !top}<UserBar inline />{/if}
+  <UserBar inline />
 </section>
+
+{#if messaging}<QuickMessage server={messaging} onclose={() => (messaging = null)} />{/if}
 
 <style>
   .home { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-2); }
@@ -103,8 +116,12 @@
   .acts :global(svg) { flex: none; }
 
   .list { list-style: none; margin: 24px 0 0; padding: 0; max-width: 960px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; }
-  .server { display: flex; align-items: center; gap: 8px; padding: 0 12px 0 0; background: var(--bg-1); border: 1px solid var(--line); transition: border-color 120ms var(--ease), background 120ms var(--ease); }
-  .server:hover { border-color: var(--line-strong); background: color-mix(in srgb, var(--bg-1), var(--bg-hover) 50%); }
+  .server { display: flex; align-items: center; gap: 8px; padding: 0 12px 0 0; /* A server card is a panel: it follows the panel transparency, darkness and blur */
+    background-color: color-mix(in srgb, var(--bg-1) var(--panel-solid, 100%), transparent);
+    background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0)), rgb(0 0 0 / var(--panel-shade, 0)));
+    backdrop-filter: blur(var(--panel-blur, 0px));
+    border: 1px solid var(--line); transition: border-color 120ms var(--ease), background-color 120ms var(--ease); }
+  .server:hover { border-color: var(--line-strong); background-color: color-mix(in srgb, color-mix(in srgb, var(--bg-1), var(--bg-hover) 50%) var(--panel-solid, 100%), transparent); }
   .server.live { box-shadow: inset 3px 0 0 var(--speaking); }
   .main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 14px 4px 14px 14px; text-align: left; }
   .pic { width: 48px; height: 48px; flex: none; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--bg-3); font-weight: 650; font-size: 15px; }

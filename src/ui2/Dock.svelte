@@ -27,7 +27,7 @@
   <button class="where" onclick={onopen} disabled={!self} title="Open the voice screen">
     {#if self}<Avatar name={self.name} size={36} speaking={voice.transmitting} src={session.avatar(self.session)} />{/if}
     <span class="text">
-      <strong>{self ? room : 'mumh5'}</strong>
+      <strong>{self ? room : 'Libertad'}</strong>
       <span>{line}</span>
     </span>
   </button>

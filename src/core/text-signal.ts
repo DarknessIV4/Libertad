@@ -1,4 +1,4 @@
-// Text channels between mumh5 clients. Mumble only delivers a channel message to the people
+// Text channels between Libertad clients. Mumble only delivers a channel message to the people
 // sitting in that channel, so a channel you read while you are in voice elsewhere cannot be
 // a plain Mumble chat. A text channel is a normal Mumble channel with a marker in its
 // description; its messages travel as plugin data to everyone on the server, which other
@@ -6,19 +6,21 @@
 // ones to whoever connects later.
 import { encodeSignal, SignalAssembler } from './share-signal.ts';
 
-export const TEXT_DATA_ID = 'mumh5.text';
+export const TEXT_DATA_ID = 'libertad.text';
 
 export const TEXT = {
-  hello: 1,    // I just connected: who else runs mumh5?
+  hello: 1,    // I just connected: who else runs Libertad?
   here: 2,     // answer to hello
   msg: 3,      // a message: { i, c, h }
   want: 4,     // send me the recent messages
-  history: 5   // answer to want, one per channel: { c, m: [...] }
+  history: 5,  // answer to want, one per channel: { c, m: [...] }
+  edit: 6,     // the author changed a message: { i, c, h }
+  del: 7       // the author removed a message: { i, c }
 } as const;
 export type TextType = typeof TEXT[keyof typeof TEXT];
 
 // An HTML comment: invisible in every client, and Murmur keeps it
-export const TEXT_MARK = '<!--mumh5:text-->';
+export const TEXT_MARK = '<!--libertad:text-->';
 export const isTextChannel = (description: string) => description.includes(TEXT_MARK);
 export const stripMark = (description: string) => description.split(TEXT_MARK).join('');
 export const markText = (description: string, on: boolean) => (on ? TEXT_MARK : '') + stripMark(description);
@@ -62,6 +64,21 @@ export function parseMsg(text: string | undefined): { i: string; c: number; h: s
   const v = parse(text);
   return v && okId(v.i) && okChannel(v.c) && okHtml(v.h) ? { i: v.i, c: v.c, h: v.h } : null;
 }
+
+// An edit: the new text of a message. The receiver checks that its sender wrote the message.
+// dm: a direct message (c is then 0); otherwise a message of channel c, which may be a normal channel
+export function parseEdit(text: string | undefined): { i: string; c: number; h: string; dm: boolean } | null {
+  const v = parse(text);
+  return v && okId(v.i) && okChannel(v.c) && okHtml(v.h) ? { i: v.i, c: v.c, h: v.h, dm: v.dm === true } : null;
+}
+
+export function parseDel(text: string | undefined): { i: string; c: number; dm: boolean } | null {
+  const v = parse(text);
+  return v && okId(v.i) && okChannel(v.c) ? { i: v.i, c: v.c, dm: v.dm === true } : null;
+}
+
+// Normal channel and direct messages carry their id in an invisible comment, so Libertad clients can find them again
+export const MSG_ID = /<!--libertad:id=([A-Za-z0-9]{1,40})-->/;
 
 // Messages another client kept. Times from the future are pulled back to now.
 export function parseHistory(text: string | undefined, now = Date.now()): TextMsg[] {

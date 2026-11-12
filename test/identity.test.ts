@@ -6,7 +6,7 @@ import path from 'node:path';
 import { generateIdentity, identityFromP12, identityToP12 } from '../electron/identity.ts';
 import { IdentityStore } from '../electron/identity-store.ts';
 
-const tmp = () => mkdtempSync(path.join(tmpdir(), 'mumh5-id-'));
+const tmp = () => mkdtempSync(path.join(tmpdir(), 'libertad-id-'));
 
 test('PKCS#12 export and import round trip', () => {
   const id = generateIdentity('roundtrip', 'rt@example.com');

@@ -45,21 +45,21 @@ function within<T>(p: Promise<T>, label: string, ms = 10000): Promise<T> {
 const proxyPort = 18000 + Math.floor(Math.random() * 1000);
 const { ELECTRON_RUN_AS_NODE, ...env } = process.env;
 const proxy = spawn(process.execPath, [path.join(root, 'dist-proxy/proxy.mjs')], {
-  env: { ...env, MUMH5_PORT: String(proxyPort), MUMH5_SERVERS: `${target}=Test Server`, MUMH5_STUN_PORT: String(proxyPort + 1000), MUMH5_STUN_BIND: '127.0.0.1',
+  env: { ...env, LIBERTAD_PORT: String(proxyPort), LIBERTAD_SERVERS: `${target}=Test Server`, LIBERTAD_STUN_PORT: String(proxyPort + 1000), LIBERTAD_STUN_BIND: '127.0.0.1',
     // Everything is on this machine, so the relay has to be allowed to reach loopback
-    MUMH5_ALLOW_PRIVATE: '1', MUMH5_TURN_IP: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit']
+    LIBERTAD_ALLOW_PRIVATE: '1', LIBERTAD_TURN_IP: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit']
 });
 await within(new Promise<void>((res, rej) => {
   proxy.stdout.on('data', d => { if (String(d).includes('listening')) res(); });
   proxy.on('exit', code => rej(new Error(`proxy exited with ${code}`)));
 }), 'proxy start');
 
-const downloads = mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-dl-'));
+const downloads = mkdtempSync(path.join(tmpdir(), 'libertad-e2e-dl-'));
 const browser = () => electron.launch({
   executablePath: electronPath as unknown as string,
-  args: [path.join(root, 'test/e2e/web-shell.cjs'), `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'mumh5-e2e-'))}`, '--ozone-platform=x11',
+  args: [path.join(root, 'test/e2e/web-shell.cjs'), `--user-data-dir=${mkdtempSync(path.join(tmpdir(), 'libertad-e2e-'))}`, '--ozone-platform=x11',
     '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
-  env: { ...env, MUMH5_WEB_URL: `http://127.0.0.1:${proxyPort}/`, MUMH5_DOWNLOADS: downloads } as Record<string, string>
+  env: { ...env, LIBERTAD_WEB_URL: `http://127.0.0.1:${proxyPort}/`, LIBERTAD_DOWNLOADS: downloads } as Record<string, string>
 });
 const app = await browser();
 let second: Awaited<ReturnType<typeof browser>> | null = null;
@@ -69,7 +69,7 @@ try {
   const page = await app.firstWindow();
   page.on('console', m => { if (m.type() === 'error') console.log('[page]', m.text()); });
   await page.setViewportSize({ width: 1280, height: 800 });
-  assert.equal(await page.evaluate(() => 'mumh5Native' in window), false, 'no desktop API in the page');
+  assert.equal(await page.evaluate(() => 'libertadNative' in window), false, 'no desktop API in the page');
 
   // Identity: created through the proxy, kept in the browser
   await page.getByRole('dialog', { name: 'Set up your identity' }).waitFor();
@@ -92,7 +92,7 @@ try {
   await page.getByRole('tab', { name: 'Appearance' }).click();
   await page.getByRole('radio', { name: 'Modern' }).click();
   await page.getByRole('button', { name: 'Done', exact: true }).click();
-  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('mumh5.identities')!));
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('libertad.identities')!));
   assert.equal(stored.identities.length, 1);
   assert.equal(stored.setupDone, true);
   console.log('ok: identity created through the proxy and backed up');
@@ -131,7 +131,7 @@ try {
   // A file from the page, in pieces through the proxy and the server
   const data = Buffer.alloc(400_000);
   for (let i = 0; i < data.length; i += 65536) crypto.getRandomValues(data.subarray(i, i + 65536));
-  const announced = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('<!--mumh5:file:')) res(m.html); }));
+  const announced = new Promise<string>(res => bob.on('text', m => { if (m.html.includes('<!--libertad:file:')) res(m.html); }));
   await page.locator('.chat .composer input[type=file]').first().setInputFiles({ name: 'page.bin', mimeType: 'application/octet-stream', buffer: data });
   const [f] = takeFiles(await within(announced, 'file announcement')).files;
   const count = pieceCount(f.meta);
@@ -201,7 +201,7 @@ try {
   await page2.getByRole('button', { name: /Create a new identity/ }).click();
   const carol = `webcarol${Date.now() % 100000}`;
   // This browser is made to use the built-in Opus codec, as one without WebCodecs audio would
-  await page2.evaluate(() => localStorage.setItem('mumh5.forceWasmOpus', '1'));
+  await page2.evaluate(() => localStorage.setItem('libertad.forceWasmOpus', '1'));
   await page2.getByLabel('Name', { exact: true }).fill(carol);
   await page2.getByRole('button', { name: 'Create', exact: true }).click();
   await page2.getByRole('button', { name: 'Skip for now' }).click();
@@ -247,7 +247,7 @@ try {
   await page.locator('.stage .status', { hasText: '0 watching' }).waitFor();
   // The viewer is limited to what a browser without direct UDP has (Vanadium's default): only
   // the proxy's relay, reached over TCP
-  await page2.evaluate(() => localStorage.setItem('mumh5.iceDebug', 'relay-tcp'));
+  await page2.evaluate(() => localStorage.setItem('libertad.iceDebug', 'relay-tcp'));
   await page2.locator('.stage .tile', { hasText: name }).click();
   await page2.getByRole('button', { name: 'Continue' }).click();
   await page2.waitForFunction(() => (document.querySelector('.spot video') as HTMLVideoElement | null)?.videoWidth! > 0, null, { timeout: 30000 });

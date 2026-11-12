@@ -1,4 +1,5 @@
-/* Color schemes. Dark is the default in app.css; each theme overrides the same variables.
+/* Color schemes: Dark (the default in app.css), Light, Midnight, High contrast, Abyss, Windows 95 Light
+   and Windows 95 Dark. Each overrides the same variables; "custom" is set from Settings (see lib/theme.ts).
    [data-theme-preview] applies a theme to a single element (the pickers in Settings). */
 
 :root:not([data-theme]), [data-theme-preview="dark"] {
@@ -67,138 +68,6 @@
   color-scheme: dark;
 }
 
-:root[data-theme="frost"], [data-theme-preview="frost"] {
-  --rail: var(--bg-0);
-  --bg-0: #242933;
-  --bg-1: #2e3440;
-  --bg-2: #333a47;
-  --bg-3: #3b4252;
-  --bg-hover: #434c5e;
-  --bg-active: #4c566a;
-  --line: #3f4758;
-  --text: #eceff4;
-  --text-dim: #b4bccb;
-  --text-faint: #7f8a9e;
-  --accent: #88c0d0;
-  --accent-hover: #8fbcbb;
-  --accent-text: #1c222c;
-  --speaking: #a3be8c;
-  --danger: #bf616a;
-  --warn: #ebcb8b;
-  --link: #81a1c1;
-  color-scheme: dark;
-}
-
-:root[data-theme="forest"], [data-theme-preview="forest"] {
-  --rail: var(--bg-0);
-  --bg-0: #0c1410;
-  --bg-1: #111c16;
-  --bg-2: #16231c;
-  --bg-3: #1f3027;
-  --bg-hover: #263a2f;
-  --bg-active: #2f4739;
-  --line: #243529;
-  --text: #e2ebe4;
-  --text-dim: #9db3a4;
-  --text-faint: #67806f;
-  --accent: #4fbf7b;
-  --accent-hover: #66d08f;
-  --accent-text: #07140c;
-  --speaking: #f2c14e;
-  --danger: #f0605a;
-  --warn: #e8b23c;
-  --link: #7fd4c1;
-  color-scheme: dark;
-}
-
-:root[data-theme="ember"], [data-theme-preview="ember"] {
-  --rail: var(--bg-0);
-  --bg-0: #120d0a;
-  --bg-1: #1a130f;
-  --bg-2: #211914;
-  --bg-3: #2d221b;
-  --bg-hover: #372a21;
-  --bg-active: #443428;
-  --line: #33271f;
-  --text: #efe6dd;
-  --text-dim: #b5a596;
-  --text-faint: #7d6f62;
-  --accent: #f08a3c;
-  --accent-hover: #ff9d52;
-  --accent-text: #1a0d03;
-  --speaking: #5fd08a;
-  --danger: #f0554e;
-  --warn: #f0c04a;
-  --link: #f4b27a;
-  color-scheme: dark;
-}
-
-:root[data-theme="ocean"], [data-theme-preview="ocean"] {
-  --rail: var(--bg-0);
-  --bg-0: #071018;
-  --bg-1: #0b1722;
-  --bg-2: #0f1e2c;
-  --bg-3: #172a3c;
-  --bg-hover: #1d3348;
-  --bg-active: #254058;
-  --line: #1b2f42;
-  --text: #e0ebf5;
-  --text-dim: #93a9bd;
-  --text-faint: #5f7689;
-  --accent: #2fc4e0;
-  --accent-hover: #56d6ee;
-  --accent-text: #041018;
-  --speaking: #4be0a0;
-  --danger: #ff6259;
-  --warn: #f0c04a;
-  --link: #7cc4ff;
-  color-scheme: dark;
-}
-
-:root[data-theme="plum"], [data-theme-preview="plum"] {
-  --rail: var(--bg-0);
-  --bg-0: #120c16;
-  --bg-1: #19111f;
-  --bg-2: #201628;
-  --bg-3: #2c1f37;
-  --bg-hover: #372743;
-  --bg-active: #443152;
-  --line: #32243e;
-  --text: #eee4f3;
-  --text-dim: #b3a2bf;
-  --text-faint: #7a6a86;
-  --accent: #e667a8;
-  --accent-hover: #f07fba;
-  --accent-text: #1c0612;
-  --speaking: #5fd08a;
-  --danger: #ff6259;
-  --warn: #f0c04a;
-  --link: #c9a2ff;
-  color-scheme: dark;
-}
-
-:root[data-theme="paper"], [data-theme-preview="paper"] {
-  --rail: var(--bg-0);
-  --bg-0: #e4dccb;
-  --bg-1: #efe8d9;
-  --bg-2: #f8f3e7;
-  --bg-3: #e6dfcf;
-  --bg-hover: #ded6c3;
-  --bg-active: #d2c9b3;
-  --line: #d3cab6;
-  --text: #2b2620;
-  --text-dim: #5f574b;
-  --text-faint: #8a8172;
-  --accent: #a2542a;
-  --accent-hover: #8a441f;
-  --accent-text: #ffffff;
-  --speaking: #2e7d46;
-  --danger: #b93a2f;
-  --warn: #96690f;
-  --link: #2a5f9e;
-  color-scheme: light;
-}
-
 :root[data-theme="contrast"], [data-theme-preview="contrast"] {
   --rail: var(--bg-0);
   --bg-0: #000000;
@@ -221,9 +90,42 @@
   color-scheme: dark;
 }
 
-/* ─── Windows 95 ───────────────────────────────────────────────────────────── */
+:root[data-theme="abyss"], [data-theme-preview="abyss"] {
+  --rail: var(--bg-0);
+  --bg-0: #04050b;
+  --bg-1: #080a17;
+  --bg-2: #0b0e21;
+  --bg-3: #111632;
+  --bg-hover: #141b3d;
+  --bg-active: #1b2450;
+  --line: #121836;
+  --text: #e3e5ed;
+  --text-dim: #9ba0b5;
+  --text-faint: #656a81;
+  --accent: #47caf5;
+  --accent-hover: #69d4f7;
+  --accent-text: #0b0b0b;
+  --speaking: #3bd16f;
+  --danger: #f0574c;
+  --warn: #e8b23c;
+  --link: #71e9f4;
+  color-scheme: dark;
+}
 
-:root[data-theme="win95"], [data-theme-preview="win95"] {
+/* ─── Windows 95 ─────────────────────────────────────────────────────────────
+   Both variants share every rule below through [data-theme^="win95"]; they differ only in the
+   --w-* palette: face, highlight, light, shadow and dark edge of the 3D borders, field color,
+   title bar and selection. */
+
+:root[data-theme="win95-light"], [data-theme-preview="win95-light"] {
+  --w-face: #c0c0c0;
+  --w-hi: #ffffff;
+  --w-light: #dfdfdf;
+  --w-shadow: #808080;
+  --w-dark: #000000;
+  --w-field: #ffffff;
+  --w-title: linear-gradient(90deg, #000080, #1084d0);
+  --w-sel: #000080;
   --bg-0: #c0c0c0;
   --bg-1: #c0c0c0;
   --bg-2: #ffffff;
@@ -241,147 +143,189 @@
   --danger: #c00000;
   --warn: #808000;
   --link: #0000ee;
-  --font: Tahoma, "MS Sans Serif", "Microsoft Sans Serif", Geneva, Verdana, sans-serif;
-  --fs: 13px;
   --rail: #008080;
-  --raised: inset -1px -1px #000, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
-  --sunken: inset -1px -1px #fff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #000;
   color-scheme: light;
 }
 
-:root[data-theme="win95"] body { -webkit-font-smoothing: none; }
-:root[data-theme="win95"] ::selection { background: #000080; color: #fff; }
+:root[data-theme="win95-dark"], [data-theme-preview="win95-dark"] {
+  --w-face: #2d2d2d;
+  --w-hi: #6a6a6a;
+  --w-light: #4a4a4a;
+  --w-shadow: #1a1a1a;
+  --w-dark: #000000;
+  --w-field: #141414;
+  --w-title: linear-gradient(90deg, #000080, #1084d0);
+  --w-sel: #000080;
+  --bg-0: #2d2d2d;
+  --bg-1: #2d2d2d;
+  --bg-2: #141414;
+  --bg-3: #2d2d2d;
+  --bg-hover: #3b3b3b;
+  --bg-active: #000080;
+  --line: #0d0d0d;
+  --text: #e6e6e6;
+  --text-dim: #c0c0c0;
+  --text-faint: #8a8a8a;
+  --accent: #1470c8;
+  --accent-hover: #3a8fe0;
+  --accent-text: #ffffff;
+  --speaking: #2ecc40;
+  --danger: #ff5a52;
+  --warn: #d0c040;
+  --link: #6ab0ff;
+  --rail: #004d4d;
+  color-scheme: dark;
+}
+
+:root[data-theme^="win95"], [data-theme-preview^="win95"] {
+  --font: Tahoma, "MS Sans Serif", "Microsoft Sans Serif", Geneva, Verdana, sans-serif;
+  --fs: 13px;
+  --raised: inset -1px -1px var(--w-dark), inset 1px 1px var(--w-hi), inset -2px -2px var(--w-shadow), inset 2px 2px var(--w-light);
+  --sunken: inset -1px -1px var(--w-hi), inset 1px 1px var(--w-shadow), inset -2px -2px var(--w-light), inset 2px 2px var(--w-dark);
+}
+
+:root[data-theme^="win95"] body { -webkit-font-smoothing: none; }
+:root[data-theme^="win95"] ::selection { background: var(--w-sel); color: #fff; }
 
 /* Buttons: raised, pressed in when active */
-:root[data-theme="win95"] .btn,
-:root[data-theme="win95"] .icon-btn,
-:root[data-theme="win95"] .rail .tile,
-:root[data-theme="win95"] .modes button,
-:root[data-theme="win95"] .tabs button,
-:root[data-theme="win95"] .tool,
-:root[data-theme="win95"] .facade .play {
-  background: #c0c0c0;
-  color: #000;
+:root[data-theme^="win95"] .btn,
+:root[data-theme^="win95"] .icon-btn,
+:root[data-theme^="win95"] .rail .tile,
+:root[data-theme^="win95"] .modes button,
+:root[data-theme^="win95"] .tabs button,
+:root[data-theme^="win95"] .tool,
+:root[data-theme^="win95"] .facade .play {
+  background: var(--w-face);
+  color: var(--text);
   border: 0;
   box-shadow: var(--raised);
 }
-:root[data-theme="win95"] .btn:active:not(:disabled),
-:root[data-theme="win95"] .icon-btn:active,
-:root[data-theme="win95"] .rail .tile:active,
-:root[data-theme="win95"] .modes button.active,
-:root[data-theme="win95"] .tabs button.active,
-:root[data-theme="win95"] .tool.on {
+:root[data-theme^="win95"] .btn:active:not(:disabled),
+:root[data-theme^="win95"] .icon-btn:active,
+:root[data-theme^="win95"] .rail .tile:active,
+:root[data-theme^="win95"] .modes button.active,
+:root[data-theme^="win95"] .tabs button.active,
+:root[data-theme^="win95"] .tool.on {
   box-shadow: var(--sunken);
-  background: #c0c0c0;
-  color: #000;
+  background: var(--w-face);
+  color: var(--text);
 }
-:root[data-theme="win95"] .btn.primary { background: #c0c0c0; color: #000; outline: 1px solid #000; outline-offset: -1px; }
-:root[data-theme="win95"] .btn.danger { color: #c00000; }
-:root[data-theme="win95"] .icon-btn { color: #000; }
-:root[data-theme="win95"] .icon-btn.on { color: #c00000; }
-:root[data-theme="win95"] .btn:hover:not(:disabled),
-:root[data-theme="win95"] .icon-btn:hover,
-:root[data-theme="win95"] .tool:hover:not(:disabled) { background: #c0c0c0; color: #000; }
+:root[data-theme^="win95"] .btn.primary { background: var(--w-face); color: var(--text); outline: 1px solid var(--w-dark); outline-offset: -1px; }
+:root[data-theme^="win95"] .btn.danger { color: var(--danger); }
+:root[data-theme^="win95"] .icon-btn { color: var(--text); }
+:root[data-theme^="win95"] .icon-btn.on { color: var(--danger); }
+:root[data-theme^="win95"] .btn:hover:not(:disabled),
+:root[data-theme^="win95"] .icon-btn:hover,
+:root[data-theme^="win95"] .tool:hover:not(:disabled) { background: var(--w-face); color: var(--text); }
 
-/* Text fields: sunken and white */
-:root[data-theme="win95"] input:not([type=range]):not([type=checkbox]):not([type=color]),
-:root[data-theme="win95"] textarea,
-:root[data-theme="win95"] select,
-:root[data-theme="win95"] .rich,
-:root[data-theme="win95"] .composer .box,
-:root[data-theme="win95"] .meter {
-  background: #fff;
-  color: #000;
+/* Text fields: sunken */
+:root[data-theme^="win95"] input:not([type=range]):not([type=checkbox]):not([type=color]),
+:root[data-theme^="win95"] textarea,
+:root[data-theme^="win95"] select,
+:root[data-theme^="win95"] .rich,
+:root[data-theme^="win95"] .composer .box,
+:root[data-theme^="win95"] .meter {
+  background: var(--w-field);
+  color: var(--text);
   border: 0;
   box-shadow: var(--sunken);
 }
-:root[data-theme="win95"] .composer .box textarea { box-shadow: none; }
+:root[data-theme^="win95"] .composer .box textarea { box-shadow: none; }
 /* Raised frame in the window face color around the sunken input */
-:root[data-theme="win95"] .composer .frame { border: 2px outset #c0c0c0; background: #c0c0c0; }
-:root[data-theme="win95"] .rich .area, :root[data-theme="win95"] .rich textarea { box-shadow: none; }
-:root[data-theme="win95"] input[type=range] { accent-color: #000080; }
+:root[data-theme^="win95"] .composer .frame { border: 2px outset var(--w-face); background: var(--w-face); }
+:root[data-theme^="win95"] .rich .area, :root[data-theme^="win95"] .rich textarea { box-shadow: none; }
+:root[data-theme^="win95"] input[type=range] { accent-color: var(--accent); }
 
 /* Title bars */
-:root[data-theme="win95"] .modal header,
-:root[data-theme="win95"] .sidebar header,
-:root[data-theme="win95"] .chat > header,
-:root[data-theme="win95"] .panel > header {
-  background: linear-gradient(90deg, #000080, #1084d0);
+:root[data-theme^="win95"] .modal header,
+:root[data-theme^="win95"] .sidebar header,
+:root[data-theme^="win95"] .chat > header,
+:root[data-theme^="win95"] .panel > header {
+  background: var(--w-title);
   color: #fff;
   border: 0;
 }
-:root[data-theme="win95"] .modal header { margin: 3px 3px 0; padding: 4px 4px 4px 8px; }
-:root[data-theme="win95"] .modal header h2 { font-size: 13px; font-weight: 700; color: #fff; }
-:root[data-theme="win95"] .modal header .icon-btn { width: 18px; height: 16px; }
-:root[data-theme="win95"] .chat > header h1,
-:root[data-theme="win95"] .panel > header h2,
-:root[data-theme="win95"] .sidebar header strong,
-:root[data-theme="win95"] .sidebar header .status,
-:root[data-theme="win95"] .chat > header .topic { color: #fff; }
-:root[data-theme="win95"] .chat > header .icon-btn,
-:root[data-theme="win95"] .panel > header .icon-btn,
-:root[data-theme="win95"] .sidebar header .icon-btn { width: 22px; height: 20px; }
+:root[data-theme^="win95"] .modal header { margin: 3px 3px 0; padding: 4px 4px 4px 8px; }
+:root[data-theme^="win95"] .modal header h2 { font-size: 13px; font-weight: 700; color: #fff; }
+:root[data-theme^="win95"] .modal header .icon-btn { width: 18px; height: 16px; }
+:root[data-theme^="win95"] .chat > header h1,
+:root[data-theme^="win95"] .panel > header h2,
+:root[data-theme^="win95"] .sidebar header strong,
+:root[data-theme^="win95"] .sidebar header .status,
+:root[data-theme^="win95"] .chat > header .topic { color: #fff; }
+:root[data-theme^="win95"] .chat > header .icon-btn,
+:root[data-theme^="win95"] .panel > header .icon-btn,
+:root[data-theme^="win95"] .sidebar header .icon-btn { width: 22px; height: 20px; }
 
 /* Windows and panels */
-:root[data-theme="win95"] .modal,
-:root[data-theme="win95"] .menu,
-:root[data-theme="win95"] .pop {
-  background: #c0c0c0;
+:root[data-theme^="win95"] .modal,
+:root[data-theme^="win95"] .menu,
+:root[data-theme^="win95"] .pop {
+  background: var(--w-face);
   border: 0;
   box-shadow: var(--raised), 2px 2px 0 rgb(0 0 0 / 0.35);
 }
-:root[data-theme="win95"] .modal footer { background: #c0c0c0; border-top: 0; }
-:root[data-theme="win95"] .menu button:hover:not(:disabled),
-:root[data-theme="win95"] .menu button:focus-visible { background: #000080; color: #fff; }
-:root[data-theme="win95"] .rail { background: var(--rail); }
-:root[data-theme="win95"] .rail .tile.active::before { background: #fff; }
-:root[data-theme="win95"] .rail .add,
-:root[data-theme="win95"] .rail .ghost { color: #000; }
-:root[data-theme="win95"] .sidebar,
-:root[data-theme="win95"] .panel { border-left: 0; box-shadow: inset 1px 0 #fff; }
-:root[data-theme="win95"] .sidebar .scroll,
-:root[data-theme="win95"] .chat .list,
-:root[data-theme="win95"] .members,
-:root[data-theme="win95"] .panel .body {
-  background: #fff;
+:root[data-theme^="win95"] .modal footer { background: var(--w-face); border-top: 0; }
+:root[data-theme^="win95"] .menu button:hover:not(:disabled),
+:root[data-theme^="win95"] .menu button:focus-visible { background: var(--w-sel); color: #fff; }
+:root[data-theme^="win95"] .rail { background: var(--rail); }
+:root[data-theme^="win95"] .rail .tile.active::before { background: #fff; }
+:root[data-theme^="win95"] .rail .add,
+:root[data-theme^="win95"] .rail .ghost { color: #000; }
+:root[data-theme^="win95"] .sidebar,
+:root[data-theme^="win95"] .panel { border-left: 0; box-shadow: inset 1px 0 var(--w-hi); }
+:root[data-theme^="win95"] .sidebar .scroll,
+:root[data-theme^="win95"] .chat .list,
+:root[data-theme^="win95"] .members,
+:root[data-theme^="win95"] .panel .body {
+  background: var(--w-field);
   box-shadow: var(--sunken);
   margin: 2px;
 }
-:root[data-theme="win95"] .me,
-:root[data-theme="win95"] .elsewhere { background: #c0c0c0; box-shadow: var(--raised); }
-:root[data-theme="win95"] .chat { background: #c0c0c0; }
-:root[data-theme="win95"] .row.channel.selected,
-:root[data-theme="win95"] .dm.viewing { background: #000080; color: #fff; }
-:root[data-theme="win95"] .row.channel.selected .label { color: #fff; }
-:root[data-theme="win95"] .badge,
-:root[data-theme="win95"] .unread { background: #c00000; }
-:root[data-theme="win95"] .card { background: #fff; box-shadow: var(--sunken); border-top: 0; border-right: 0; border-bottom: 0; }
-:root[data-theme="win95"] .stage { background: #c0c0c0; }
-:root[data-theme="win95"] .stage .tile { background: #c0c0c0; border: 0; box-shadow: var(--raised); }
-:root[data-theme="win95"] .stage .tile.talking { box-shadow: var(--raised), inset 0 0 0 3px #008000; }
+:root[data-theme^="win95"] .me,
+:root[data-theme^="win95"] .elsewhere { background: var(--w-face); box-shadow: var(--raised); }
+:root[data-theme^="win95"] .chat { background: var(--w-face); }
+:root[data-theme^="win95"] .row.channel.selected,
+:root[data-theme^="win95"] .dm.viewing { background: var(--w-sel); color: #fff; }
+:root[data-theme^="win95"] .row.channel.selected .label { color: #fff; }
+:root[data-theme^="win95"] .badge,
+:root[data-theme^="win95"] .unread { background: var(--danger); }
+:root[data-theme^="win95"] .card { background: var(--w-field); box-shadow: var(--sunken); border-top: 0; border-right: 0; border-bottom: 0; }
+:root[data-theme^="win95"] .stage { background: var(--w-face); }
+:root[data-theme^="win95"] .stage .tile { background: var(--w-face); border: 0; box-shadow: var(--raised); }
+:root[data-theme^="win95"] .stage .tile.talking { box-shadow: var(--raised), inset 0 0 0 3px var(--speaking); }
 
 /* Classic scroll bars */
-:root[data-theme="win95"] ::-webkit-scrollbar { width: 16px; height: 16px; }
-:root[data-theme="win95"] ::-webkit-scrollbar-track {
-  background-color: #dfdfdf;
-  background-image: repeating-conic-gradient(#c0c0c0 0% 25%, #fff 0% 50%);
+:root[data-theme^="win95"] ::-webkit-scrollbar { width: 16px; height: 16px; }
+:root[data-theme^="win95"] ::-webkit-scrollbar-track {
+  background-color: var(--w-light);
+  background-image: repeating-conic-gradient(var(--w-face) 0% 25%, var(--w-hi) 0% 50%);
   background-size: 2px 2px;
 }
-:root[data-theme="win95"] ::-webkit-scrollbar-thumb {
-  background: #c0c0c0;
+:root[data-theme^="win95"] ::-webkit-scrollbar-thumb {
+  background: var(--w-face);
   border: 0;
   box-shadow: var(--raised);
 }
-:root[data-theme="win95"] ::-webkit-scrollbar-button:single-button {
+:root[data-theme^="win95"] ::-webkit-scrollbar-button:single-button {
   display: block;
   height: 16px;
   width: 16px;
-  background: #c0c0c0 no-repeat center / 8px 8px;
+  background: var(--w-face) no-repeat center / 8px 8px;
   box-shadow: var(--raised);
 }
-:root[data-theme="win95"] ::-webkit-scrollbar-button:single-button:vertical:decrement {
+:root[data-theme^="win95"] ::-webkit-scrollbar-button:single-button:vertical:decrement {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M4 2L7 6H1z'/%3E%3C/svg%3E");
 }
-:root[data-theme="win95"] ::-webkit-scrollbar-button:single-button:vertical:increment {
+:root[data-theme^="win95"] ::-webkit-scrollbar-button:single-button:vertical:increment {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1 2h6L4 6z'/%3E%3C/svg%3E");
 }
+/* Dark variant: light arrows */
+:root[data-theme="win95-dark"] ::-webkit-scrollbar-button:single-button:vertical:decrement {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath fill='%23e6e6e6' d='M4 2L7 6H1z'/%3E%3C/svg%3E");
+}
+:root[data-theme="win95-dark"] ::-webkit-scrollbar-button:single-button:vertical:increment {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath fill='%23e6e6e6' d='M1 2h6L4 6z'/%3E%3C/svg%3E");
+}
+:root[data-theme="win95-dark"] .rail .add,
+:root[data-theme="win95-dark"] .rail .ghost { color: #e6e6e6; }

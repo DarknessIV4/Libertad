@@ -5,6 +5,12 @@ import { store } from './settings.svelte.ts';
 import { voice, userKey } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
 import { menu, type MenuItem } from './menu.svelte.ts';
+import { ownCard, ownProfile, cardSource } from './banner.svelte.ts';
+import { bgPause } from './still.svelte.ts';
+import { hiddenCards } from './hidden-cards.svelte.ts';
+import { pickColor, pickFile } from './pick.ts';
+import { setBannerFromFile } from './banner-actions.ts';
+import { imageEditor, EDITABLE_OR_GIF } from './image-editor.svelte.ts';
 import { PERM, type Channel, type User } from '../core/client.ts';
 
 // A person's profile card, next to the element that was clicked (or at a point, from a menu)
@@ -71,19 +77,36 @@ export function channelMenu(c: Channel): MenuItem[] {
 
 // Right-click menu for a user. Moderation entries are always offered; the server decides
 // whether we may use them and answers with a permission denial otherwise.
-export function userMenu(u: User): MenuItem[] {
+// card: the menu of the profile card itself, which is not the user's menu in the lists. There is no "View profile"
+// (it is the profile), nothing about the user card (its background, hiding it), and your own mute and deafen stay
+// out; the choices for your avatar, banner and profile card take their place.
+export interface CardChoices { avatar: () => void; banner: () => void; lower: () => void; whole: () => void; remove?: () => void }
+export function userMenu(u: User, card?: CardChoices): MenuItem[] {
   const self = session.self;
   const isSelf = u.session === self?.session;
-  const items: MenuItem[] = [
-    { header: true, label: store.displayName(u) },
-    { label: 'View profile', action: () => openProfile(u.session, menu.last) }
-  ];
+  const items: MenuItem[] = [{ header: true, label: store.displayName(u) }];
+  if (!card) items.push({ label: 'View profile', action: () => openProfile(u.session, menu.last) });
+  // Only on this computer: their tile leaves your voice view. Unhide it here, from the channel list.
+  if (!isSelf && !card) items.push({ label: 'Hide card', checked: hiddenCards.has(u), action: () => hiddenCards.set(u, !hiddenCards.has(u)) });
   if (isSelf) {
-    items.push(
-      { label: 'Mute', checked: u.selfMute, action: () => session.setSelfMute(!u.selfMute) },
-      { label: 'Deafen', checked: u.selfDeaf, action: () => session.setSelfDeaf(!u.selfDeaf) },
-      { label: 'Change name...', action: () => changeNamePrompt(u) }
-    );
+    if (!card) {
+      items.push(
+        { label: 'Change Card Background', action: () => menu.showAt(menu.last.x, menu.last.y, cardBackgroundMenu()) },
+        pauseBackgroundItem(u),
+        { label: 'Mute', checked: u.selfMute, action: () => session.setSelfMute(!u.selfMute) },
+        { label: 'Deafen', checked: u.selfDeaf, action: () => session.setSelfDeaf(!u.selfDeaf) }
+      );
+    }
+    items.push({ label: 'Change name...', action: () => changeNamePrompt(u) });
+    if (card) {
+      items.push(
+        { label: 'Change avatar...', action: card.avatar },
+        { label: 'Change banner...', action: card.banner },
+        { label: 'Change profile card, lower half...', action: card.lower },
+        { label: 'Change whole profile card...', action: card.whole }
+      );
+      if (card.remove) items.push({ label: 'Remove profile card', danger: true, action: card.remove });
+    }
     if (u.userId == null) items.push({ label: 'Register on this server', action: () => session.register(u.session) });
   } else {
     const sharing = session.sharing[u.session];
@@ -93,6 +116,7 @@ export function userMenu(u: User): MenuItem[] {
       items.push({ label: hidden ? 'Show camera' : 'Hide camera', action: () => share.hideCamera(sessions.active, u.session, !hidden) });
     } else if (sharing) items.push({ label: `Watch ${sharing}`, action: () => share.watch(sessions.active, u.session) });
     items.push(
+      ...(card ? [] : [pauseBackgroundItem(u)]),
       { label: 'Send message', action: () => session.selectView(`dm:${u.session}`) },
       { label: 'Mute for me', checked: !!voice.settings.localMutes[userKey(u)], action: () => voice.setLocalMute(u, !voice.settings.localMutes[userKey(u)]) },
       {
@@ -129,12 +153,66 @@ export function userMenu(u: User): MenuItem[] {
   return items;
 }
 
+// Pause Background: only on this computer, nobody else sees a change. Checked while this person's
+// background is stopped; a click then brings it back, otherwise it asks what to stop.
+function pauseBackgroundItem(u: User): MenuItem {
+  const paused = bgPause.paused(u);
+  return {
+    label: 'Pause Background', checked: paused,
+    action: () => {
+      if (paused) {
+        bgPause.setUser(u, false);
+        bgPause.setAll(false);
+        return;
+      }
+      menu.showAt(menu.last.x, menu.last.y, [
+        { header: true, label: 'Pause Background' },
+        { label: 'Stop for this user', action: () => bgPause.setUser(u, true) },
+        { label: 'Stop for all users', action: () => bgPause.setAll(true) }
+      ]);
+    }
+  };
+}
+
+// The picture behind your tile (the user card): a color, or a picture, GIF or video of its own, or your banner
+export function cardBackgroundMenu(): MenuItem[] {
+  const own = ownCard.value;
+  const profile = ownProfile.value && ownProfile.value.kind !== 'color' ? ownProfile.value : null;
+  const add = async () => {
+    const f = await pickFile('image/*,video/mp4,video/webm');
+    if (!f) return;
+    // Like every other background: a picture or GIF is cropped, turned, darkened and blurred first. A video is used as it is.
+    let use: File = f, keepShape = false;
+    if (EDITABLE_OR_GIF.test(f.type)) {
+      const r = await imageEditor.open(f, { effects: true, scopes: false, title: 'Crop card background' });
+      if (!r) return;
+      use = r.file;
+      // A picture the person did not change keeps the usual cut; a cropped one keeps its shape
+      keepShape = r.file !== f;
+    }
+    await setBannerFromFile('card', use, { keepShape });
+  };
+  return [
+    { header: true, label: 'Card background' },
+    { label: 'Choose a color...', action: async () => {
+      const c = await pickColor(own?.kind === 'color' ? own.color : '#26282d');
+      if (c) await sessions.setBanner('card', { kind: 'color', color: c.toLowerCase() });
+    } },
+    { label: 'Add user card...', action: add },
+    { separator: true, label: '' },
+    { label: 'Same as my banner', checked: !own && cardSource.from === 'banner', action: () => sessions.setCardFrom('banner') },
+    // The picture of your profile card background: needs one set for that part of the card
+    { label: 'Same as profile card, lower half', checked: !own && cardSource.from === 'under', disabled: profile?.scope !== 'under', action: () => sessions.setCardFrom('under') },
+    { label: 'Same as whole profile card', checked: !own && cardSource.from === 'whole', disabled: profile?.scope !== 'whole', action: () => sessions.setCardFrom('whole') }
+  ];
+}
+
 export function changeNamePrompt(u: User): void {
   ui.prompt = {
     title: 'Change your name', label: 'New name', confirm: 'Reconnect with this name', initial: u.name,
     text: u.userId != null
       ? 'You are registered here, so the server keeps your registered name. The new name applies on servers where you are a guest.'
-      : 'Mumble cannot rename you while connected, so mumh5 reconnects with the new name and remembers it for this server.',
+      : 'Mumble cannot rename you while connected, so Libertad reconnects with the new name and remembers it for this server.',
     onsubmit: name => session.changeName(name)
   };
 }

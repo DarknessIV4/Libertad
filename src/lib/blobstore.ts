@@ -1,5 +1,5 @@
 // Small IndexedDB store for user files (custom sounds): localStorage is too small for audio.
-const DB = 'mumh5';
+const DB = 'libertad';
 const STORE = 'files';
 
 function open(): Promise<IDBDatabase> {

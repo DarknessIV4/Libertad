@@ -7,6 +7,7 @@
   import { ui } from '../lib/ui.svelte.ts';
   import { userMenu, openProfile } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   // Everyone on the server, by room; yours first
   let { onchat }: { onchat: () => void } = $props();
@@ -49,9 +50,29 @@
                 <Avatar name={u.name} size={40} speaking={talking(u.session)} src={session.avatar(u.session)} />
                 <span class="text">
                   <span class="name" class:talking={talking(u.session)}>{store.displayName(u)}</span>
-                  <span class="sub">{me ? 'You' : u.userId != null ? 'Registered' : 'Guest'}{u.deaf || u.selfDeaf ? ', deafened' : u.mute || u.selfMute || u.suppress ? ', muted' : ''}{session.sharing[u.session] ? `, sharing ${session.sharing[u.session]}` : ''}{u.recording ? ', recording' : ''}</span>
+                  <span class="sub">{me ? 'You' : u.userId != null ? 'Registered' : 'Guest'}{u.deaf || u.selfDeaf ? ', deafened' : u.mute || u.selfMute || u.suppress ? ', muted' : ''}{session.sharing[u.session] ? `, sharing ${session.sharing[u.session]}` : ''}{session.watchTogether[u.session] ? `, watching together: ${session.watchTogether[u.session].title}` : ''}{u.recording ? ', recording' : ''}</span>
                 </span>
               </button>
+              {#if session.watchTogether[u.session]}
+                {@const wt = session.watchTogether[u.session]}
+                {#if me}
+                  <span class="state watch-together host" role="button" tabindex="0" title="Hosting watch together: {wt.title}. Click to open controls, double-click to rejoin" aria-label="Hosting watch together: {wt.title}"
+                    onclick={e => { e.stopPropagation(); watchTogether.focus(); }}
+                    ondblclick={e => { e.stopPropagation(); if (watchTogether.isHostWithParty) watchTogether.join(u.session); }}
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="screen" size={14} /></span>
+                {:else}
+                  <span class="state watch-together" role="button" tabindex="0" title="Watching together: {wt.title}. Click to join, double-click to open" aria-label="Join watch together: {wt.title}"
+                    onclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                    ondblclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="screen" size={14} /></span>
+                {/if}
+              {:else if session.sharing[u.session]}
+                <span class="state sharing" title="Sharing their {session.sharing[u.session]}"><Icon name={session.sharing[u.session]} size={14} /></span>
+              {:else if u.deaf || u.selfDeaf}
+                <span class="state" title="Deafened"><Icon name="headphones-off" size={14} /></span>
+              {:else if u.mute || u.selfMute || u.suppress}
+                <span class="state" title="Muted"><Icon name="mic-off" size={14} /></span>
+              {/if}
               {#if !me}
                 <button class="icon-btn" aria-label="Message {store.displayName(u)}" title="Send a message" onclick={() => { session.selectView(`dm:${u.session}`); onchat(); }}><Icon name="message" size={18} /></button>
               {/if}
@@ -88,4 +109,7 @@
   .sub { font-size: 13px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .icon-btn { flex: none; width: 40px; height: 40px; }
   .none { padding: 12px 8px; color: var(--text-dim); }
+  .state.watch-together { color: var(--speaking); }
+  .state.watch-together.host { color: var(--success); }
+  .state.watch-together:hover { background: var(--bg-active); }
 </style>

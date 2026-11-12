@@ -6,6 +6,7 @@
   import { userMenu, openProfile } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { store } from '../lib/settings.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   let { onnavigate }: { onnavigate: () => void } = $props();
 
@@ -29,7 +30,23 @@
                 <span class="name">{store.displayName(u)}</span>
                 <span class="sub">{u.userId != null ? 'Registered' : 'Guest'}{title !== 'In channel' ? ` in ${session.channel(u.channelId)?.name || 'Root'}` : ''}</span>
               </span>
-              {#if u.selfDeaf || u.deaf}<Icon name="headphones-off" size={14} />{:else if u.selfMute || u.mute}<Icon name="mic-off" size={14} />{/if}
+              {#if session.sharing[u.session]}
+              {@const kind = session.sharing[u.session]}
+              <span class="state sharing" title="Sharing their {kind}. Click to watch"><Icon name={kind} size={14} /></span>
+            {:else if session.watchTogether[u.session]}
+              {@const wt = session.watchTogether[u.session]}
+              {#if isSelf}
+                <span class="state watch-together host" role="button" tabindex="0" title="Hosting watch together: {wt.title}. Click to open controls, double-click to rejoin" aria-label="Hosting watch together: {wt.title}"
+                  onclick={e => { e.stopPropagation(); watchTogether.focus(); }}
+                  ondblclick={e => { e.stopPropagation(); if (watchTogether.isHostWithParty) watchTogether.join(u.session); }}
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="screen" size={14} /></span>
+              {:else}
+                <span class="state watch-together" role="button" tabindex="0" title="Watching together: {wt.title}. Click to join, double-click to open" aria-label="Join watch together: {wt.title}"
+                  onclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                  ondblclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="screen" size={14} /></span>
+              {/if}
+            {:else if u.selfDeaf || u.deaf}<Icon name="headphones-off" size={14} />{:else if u.selfMute || u.mute}<Icon name="mic-off" size={14} />{/if}
             </button>
           </li>
         {/each}
@@ -49,4 +66,7 @@
   .who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
   .name { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub { font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .state.watch-together { color: var(--speaking); }
+  .state.watch-together.host { color: var(--success); }
+  .state.watch-together:hover { background: var(--bg-active); }
 </style>

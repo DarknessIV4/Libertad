@@ -13,7 +13,7 @@ const link = (id: number, outPort: number, inPort: number, inNode: number) =>
 const graph = [
   node(10, { 'node.name': VIRTUAL_MIC, 'media.class': 'Audio/Source/Virtual' }), port(11, 10, 'input', 'FL'), port(12, 10, 'input', 'FR'),
   port(13, 10, 'output', 'FL'), port(14, 10, 'output', 'FR'),
-  client(2, 'mumh5', 500), node(20, { 'media.class': 'Stream/Output/Audio', 'node.name': 'mumh5', 'client.id': 2 }), port(21, 20, 'output', 'FL'), port(22, 20, 'output', 'FR'),
+  client(2, 'Libertad', 500), node(20, { 'media.class': 'Stream/Output/Audio', 'node.name': 'Libertad', 'client.id': 2 }), port(21, 20, 'output', 'FL'), port(22, 20, 'output', 'FR'),
   client(3, 'Firefox', 600), node(30, { 'media.class': 'Stream/Output/Audio', 'node.name': 'Firefox', 'client.id': 3 }), port(31, 30, 'output', 'FL'), port(32, 30, 'output', 'FR'),
   node(40, { 'media.class': 'Stream/Output/Audio', 'application.name': 'Game', 'application.process.id': 700 }), port(41, 40, 'output', 'MONO'),
   node(50, { 'media.class': 'Stream/Output/Audio', 'application.name': 'Spotify' }), port(51, 50, 'output', 'FL'), port(52, 50, 'output', 'FR'), port(53, 50, 'output', 'LFE'),

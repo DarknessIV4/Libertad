@@ -27,11 +27,12 @@ export const SOUND_EVENTS = [
   { id: 'userBanned', group: 'Your channel', name: 'Someone in your channel was banned', ts: 'CLIENT_WAS_BANNED_CURRENT_CHANNEL', keys: ['banned_server_currentchannel'] },
   { id: 'recordingStarted', group: 'Your channel', name: 'Someone started recording', ts: 'CLIENT_RECORDING_START', keys: ['recording_started'] },
   { id: 'recordingStopped', group: 'Your channel', name: 'Someone stopped recording', ts: 'CLIENT_RECORDING_STOP', keys: ['recording_stopped'] },
-  { id: 'shareStarted', group: 'Screen sharing', name: 'A screen share started (yours or in your channel)', ts: 'MUMH5_SHARE_STARTED', keys: ['share_started', 'stream_started'] },
-  { id: 'shareStopped', group: 'Screen sharing', name: 'A screen share stopped', ts: 'MUMH5_SHARE_STOPPED', keys: ['share_stopped', 'stream_stopped'] },
-  { id: 'viewerJoined', group: 'Screen sharing', name: 'Someone started watching your screen', ts: 'MUMH5_VIEWER_JOINED', keys: ['viewer_joined'] },
-  { id: 'viewerLeft', group: 'Screen sharing', name: 'Someone stopped watching your screen', ts: 'MUMH5_VIEWER_LEFT', keys: ['viewer_left'] },
+  { id: 'shareStarted', group: 'Screen sharing', name: 'A screen share started (yours or in your channel)', ts: 'LIBERTAD_SHARE_STARTED', keys: ['share_started', 'stream_started'] },
+  { id: 'shareStopped', group: 'Screen sharing', name: 'A screen share stopped', ts: 'LIBERTAD_SHARE_STOPPED', keys: ['share_stopped', 'stream_stopped'] },
+  { id: 'viewerJoined', group: 'Screen sharing', name: 'Someone started watching your screen', ts: 'LIBERTAD_VIEWER_JOINED', keys: ['viewer_joined'] },
+  { id: 'viewerLeft', group: 'Screen sharing', name: 'Someone stopped watching your screen', ts: 'LIBERTAD_VIEWER_LEFT', keys: ['viewer_left'] },
   { id: 'message', group: 'Chat', name: 'Channel message', ts: 'CHAT_RECEIVED_MESSAGE_CHANNEL', keys: ['chat_message_inbound', 'message'] },
+  { id: 'mention', group: 'Chat', name: 'Someone mentioned you (@name or @all)', ts: 'LIBERTAD_MENTION', keys: ['mention', 'ping'] },
   { id: 'privateMessage', group: 'Chat', name: 'Direct message', ts: 'CHAT_RECEIVED_MESSAGE_CLIENT', keys: ['private', 'direct', 'pm'] },
   { id: 'messageSent', group: 'Chat', name: 'You sent a message', ts: 'CHAT_SENT_MESSAGE_CHANNEL', keys: ['chat_message_outbound', 'sent'], off: true },
   { id: 'uploadDone', group: 'Chat', name: 'A file arrived', ts: 'OTHER_FILETRANSFER_COMPLETE', keys: ['filetransfer_complete', 'upload_done'] },
@@ -88,6 +89,7 @@ const TONES: Record<SoundEvent, [number, number, number][]> = {
   viewerJoined: [[880, 0, 0.05], [1109, 0.06, 0.08]],
   viewerLeft: [[1109, 0, 0.05], [880, 0.06, 0.08]],
   message: [[1047, 0, 0.06]],
+  mention: [[880, 0, 0.07], [1175, 0.08, 0.07], [1568, 0.16, 0.14]],
   privateMessage: [[1047, 0, 0.05], [1319, 0.07, 0.07]],
   messageSent: [[1319, 0, 0.04]],
   uploadDone: [[784, 0, 0.06], [1047, 0.07, 0.08]],
@@ -150,7 +152,7 @@ function toWav(samples: Float32Array, rate: number): Blob {
 }
 
 class Sounds {
-  settings = $state<SoundSettings>(load('mumh5.sounds', { enabled: true, volume: 0.6, on: {}, custom: {} }));
+  settings = $state<SoundSettings>(load('libertad.sounds', { enabled: true, volume: 0.6, on: {}, custom: {} }));
   private defaults = new Map<SoundEvent, Promise<string>>();
   // Object URLs of custom sounds; blob: is what the content security policy allows for media
   private urls = new Map<SoundEvent, string>();
@@ -187,7 +189,7 @@ class Sounds {
   private lastPlayed = new Map<SoundEvent, number>();
 
   private persist(): void {
-    save('mumh5.sounds', $state.snapshot(this.settings));
+    save('libertad.sounds', $state.snapshot(this.settings));
   }
 
   update(patch: Partial<Pick<SoundSettings, 'enabled' | 'volume'>>): void {
@@ -302,7 +304,7 @@ class Sounds {
       if (sink && sink !== 'default' && el.setSinkId) await el.setSinkId(sink).catch(() => {});
       await el.play();
       // Inspection hook for the end-to-end tests: events that really started playing
-      const log = ((window as any).__mumh5Sounds ??= []) as string[];
+      const log = ((window as any).__libertadSounds ??= []) as string[];
       log.push(ev);
       if (log.length > 50) log.shift();
     } catch (e) {

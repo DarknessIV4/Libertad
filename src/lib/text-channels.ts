@@ -2,7 +2,7 @@
 // Messages go to everyone on the server as plugin data; the server has checked the sender's
 // certificate, so a live message is known to come from that user. Messages handed over by
 // another client after connecting are that client's word for what was said.
-import { TEXT, TEXT_DATA_ID, KEEP, MAX_HTML, TextAssembler, encodeText, encodeHistory, parseMsg, parseHistory, mergeMsgs, newId, isTextChannel, type TextMsg, type TextType } from '../core/text-signal.ts';
+import { TEXT, TEXT_DATA_ID, KEEP, MAX_HTML, TextAssembler, encodeText, encodeHistory, parseMsg, parseEdit, parseDel, parseHistory, mergeMsgs, newId, isTextChannel, type TextMsg, type TextType } from '../core/text-signal.ts';
 import type { Session } from './session.svelte.ts';
 import { getData, putData } from './blobstore.ts';
 import { sounds } from './audio/sounds.svelte.ts';
@@ -33,6 +33,8 @@ interface State {
   askTimer: ReturnType<typeof setTimeout> | undefined;
   saveTimer: ReturnType<typeof setTimeout> | undefined;
   storeKey: string;
+  // Removed in this session, so a client handing over old messages does not bring them back
+  deleted: Set<string>;
 }
 
 class TextChannels {
@@ -54,7 +56,7 @@ class TextChannels {
     const st: State = {
       assembler: new TextAssembler(), msgs: new Map(), shown: new Set(), loaded: false, queue: [], level: 0, levelAt: Date.now(), timer: undefined,
       peers: [], asked: [], caughtUp: false, askTimer: undefined, saveTimer: undefined,
-      storeKey: `text:${s.server.host.toLowerCase()}:${s.server.port}`
+      storeKey: `text:${s.server.host.toLowerCase()}:${s.server.port}`, deleted: new Set()
     };
     this.states.set(s, st);
     // The marker is in the description, and long descriptions are only announced by hash
@@ -127,6 +129,61 @@ class TextChannels {
     return null;
   }
 
+  // Can this person edit or remove it? Only messages they sent themselves
+  canModify(s: Session, channelId: number, id: string): boolean {
+    const m = this.states.get(s)?.msgs.get(channelId)?.find(x => x.i === id);
+    return !!m && this.mine(s, m);
+  }
+
+  // The message as it was sent (HTML), for the edit box
+  html(s: Session, channelId: number, id: string): string | null {
+    return this.states.get(s)?.msgs.get(channelId)?.find(x => x.i === id)?.h ?? null;
+  }
+
+  async edit(s: Session, channelId: number, id: string, html: string): Promise<string | null> {
+    const st = this.states.get(s);
+    const m = st?.msgs.get(channelId)?.find(x => x.i === id);
+    if (!st || !m || !this.mine(s, m)) return 'You can only edit your own messages.';
+    if (html.length > MAX_HTML) return `Message too long for a text channel (${html.length} / ${MAX_HTML} characters)`;
+    let packets: Uint8Array[];
+    try { packets = await encodeText(TEXT.edit, { i: id, c: channelId, h: html }); } catch { return 'Message too long for a text channel.'; }
+    m.h = html;
+    this.saveSoon(st);
+    s.updateText(channelId, id, html);
+    const to = this.everyone(s);
+    for (const packet of packets) st.queue.push({ to, packet });
+    this.flush(s, st);
+    return null;
+  }
+
+  async remove(s: Session, channelId: number, id: string): Promise<void> {
+    const st = this.states.get(s);
+    const list = st?.msgs.get(channelId);
+    const m = list?.find(x => x.i === id);
+    if (!st || !list || !m || !this.mine(s, m)) return;
+    this.drop(st, channelId, id);
+    s.removeText(channelId, id);
+    this.send(s, this.everyone(s), TEXT.del, { i: id, c: channelId });
+  }
+
+  // A change to a normal channel or direct message, told to the Libertad users who got it
+  notify(s: Session, key: string, type: typeof TEXT.edit | typeof TEXT.del, id: string, html?: string): void {
+    const client = s.client;
+    if (!client || !this.states.has(s)) return;
+    const [kind, n] = key.split(':');
+    const to = kind === 'dm' ? [Number(n)] : [...client.users.values()].filter(u => u.channelId === Number(n) && u.session !== client.session).map(u => u.session);
+    const body: Record<string, unknown> = { i: id, c: kind === 'dm' ? 0 : Number(n) };
+    if (kind === 'dm') body.dm = true;
+    if (html !== undefined) body.h = html;
+    void this.send(s, to, type, body);
+  }
+
+  private drop(st: State, channelId: number, id: string): void {
+    st.deleted.add(id);
+    st.msgs.set(channelId, (st.msgs.get(channelId) ?? []).filter(x => x.i !== id));
+    this.saveSoon(st);
+  }
+
   async receive(s: Session, sender: number, dataId: string, data: Uint8Array): Promise<void> {
     const st = this.states.get(s);
     if (dataId !== TEXT_DATA_ID || !st) return;
@@ -151,8 +208,31 @@ class TextChannels {
         if (!this.keep(st, [msg]).length) return;
         if (st.shown.has(m.c)) {
           s.addText(msg, false, false, sender);
-          sounds.play('message');
+          sounds.play(s.mentionsMe(msg.h) ? 'mention' : 'message');
         }
+        break;
+      }
+      case TEXT.edit: {
+        const e = parseEdit(signal.text);
+        const from = client.users.get(sender);
+        // A normal channel or a direct message: the log holds it, and its author is who sent this
+        if (e && from && (e.dm || !this.isText(s, e.c))) { s.remoteChange(sender, e.dm ? `dm:${sender}` : `ch:${e.c}`, e.i, e.h); return; }
+        const m = e && st.msgs.get(e.c)?.find(x => x.i === e.i);
+        // Only the author may change a message; the server vouches for the sender's certificate
+        if (!e || !from || !m || !(m.k ? m.k === from.hash : m.n === from.name)) return;
+        m.h = e.h;
+        this.saveSoon(st);
+        s.updateText(e.c, e.i, e.h);
+        break;
+      }
+      case TEXT.del: {
+        const d = parseDel(signal.text);
+        const from = client.users.get(sender);
+        if (d && from && (d.dm || !this.isText(s, d.c))) { s.remoteChange(sender, d.dm ? `dm:${sender}` : `ch:${d.c}`, d.i, null); return; }
+        const m = d && st.msgs.get(d.c)?.find(x => x.i === d.i);
+        if (!d || !from || !m || !(m.k ? m.k === from.hash : m.n === from.name)) return;
+        this.drop(st, d.c, d.i);
+        s.removeText(d.c, d.i);
         break;
       }
       case TEXT.want: {
@@ -213,6 +293,8 @@ class TextChannels {
   private keep(st: State, list: TextMsg[]): TextMsg[] {
     if (!list.length) return [];
     const c = list[0].c;
+    list = list.filter(m => !st.deleted.has(m.i));
+    if (!list.length) return [];
     const { all, added } = mergeMsgs(st.msgs.get(c) ?? [], list, KEEP);
     if (added.length) {
       st.msgs.set(c, all);
@@ -231,7 +313,12 @@ class TextChannels {
     st.saveTimer = undefined;
     try {
       const kept = await getData<Record<number, TextMsg[]>>(st.storeKey) ?? {};
-      for (const [c, list] of st.msgs) kept[c] = mergeMsgs(Array.isArray(kept[c]) ? kept[c] : [], list).all;
+      for (const [c, list] of st.msgs) {
+        const have = (Array.isArray(kept[c]) ? kept[c] : []).filter(m => !st.deleted.has(m.i));
+        const now = new Map(list.map(m => [m.i, m]));
+        // What is stored takes the edited text; removed messages stay out
+        kept[c] = mergeMsgs(have.map(m => now.get(m.i) ?? m), list).all;
+      }
       await putData(st.storeKey, kept);
     } catch { /* storage unavailable */ }
   }

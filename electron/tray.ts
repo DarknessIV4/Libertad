@@ -35,7 +35,7 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
     const win = getWindow();
     const s = state;
     const menu = Menu.buildFromTemplate([
-      { label: win?.isVisible() ? 'Hide mumh5' : 'Show mumh5', click: () => (win?.isVisible() ? win.hide() : show()) },
+      { label: win?.isVisible() ? 'Hide Libertad' : 'Show Libertad', click: () => (win?.isVisible() ? win.hide() : show()) },
       { type: 'separator' },
       { label: s.connected ? `Connected: ${s.server}` : 'Not connected', enabled: false },
       { label: 'Mute', type: 'checkbox', checked: s.muted, enabled: s.connected, click: () => send('toggle-mute') },
@@ -56,11 +56,11 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
           fs.writeFile(prefsFile(), JSON.stringify({ closeToTray })).catch(() => {});
         }
       },
-      { label: 'Quit mumh5', click: () => { quitting = true; app.quit(); } }
+      { label: 'Quit Libertad', click: () => { quitting = true; app.quit(); } }
     ]);
     tray.setContextMenu(menu);
     // Inspection hook for the end-to-end tests (tray menus cannot be clicked by automation)
-    (globalThis as any).__mumh5Tray = {
+    (globalThis as any).__libertadTray = {
       state: { ...s, icon: s.icon.slice(0, 22) },
       tooltip: s.tooltip,
       items: menu.items.map(i => ({ label: i.label, checked: i.checked, enabled: i.enabled })),
@@ -94,4 +94,10 @@ export let onWindowVisibility: () => void = () => {};
 // Closing the window hides it while the tray is there, unless the user quits
 export function shouldHideOnClose(): boolean {
   return !!tray && closeToTray && !quitting && process.platform !== 'darwin';
+}
+
+// Quits for real, also with the window hidden to the tray
+export function quitApp(): void {
+  quitting = true;
+  app.quit();
 }

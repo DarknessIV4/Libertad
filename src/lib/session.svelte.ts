@@ -2,17 +2,23 @@ import { createCodec } from '../core/proto.ts';
 import { MumbleClient, describeDenial, type Channel, type User, type TextMessage } from '../core/client.ts';
 import { native, openTransport } from './native.ts';
 import { share, type ShareKind } from './share.svelte.ts';
+import { thumbs } from './thumbs.svelte.ts';
+import { watchTogether, type WatchMode } from './watch-together.svelte.ts';
 import { textChannels } from './text-channels.ts';
-import { MAX_HTML, type TextMsg } from '../core/text-signal.ts';
+import { MAX_HTML, TEXT, MSG_ID, newId, type TextMsg } from '../core/text-signal.ts';
 import type { ServerCertInfo } from '../core/transport.ts';
 import { store, type SavedServer } from './settings.svelte.ts';
 import { renderIncoming, textToHtml, escapeHtml, formatBytes, type Embed } from './html.ts';
 import { makeInlineImage, originalImage, videoPoster } from './images.ts';
-import { ownAvatar } from './avatar.svelte.ts';
+import { OWN, cardSource, type CardFrom, type OwnBannerInput } from './banner.svelte.ts';
+import { profileCache, type CachedSlot, type CachedProfile } from './profile-cache.ts';
+import { parseBanner, withBanners, stripBanner, dataMime, bannerSignature, SLOTS, isVideoMime, type Banner, type BannerView, type Slot } from '../core/banner.ts';
+import type { FileMeta } from '../core/file-transfer.ts';
 import { files, fileKind } from './files.svelte.ts';
 import { announce, isPiece } from '../core/file-transfer.ts';
 import { voice } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
+import { mentions } from './mentions.ts';
 
 const codec = createCodec();
 
@@ -28,6 +34,13 @@ export interface ChatEntry {
   html: string;
   embeds: Embed[];
   time: number;
+  // Someone else's message that mentions us (@name or @all)
+  mention?: boolean;
+  // Text channel messages: which one, so it can be edited or removed
+  msgId?: string;
+  channel?: number;
+  // The chat it is in
+  key?: string;
 }
 
 // A file being read before it is announced
@@ -66,8 +79,12 @@ export class Session {
   preparing = $state<FileJob[]>([]);
   certPrompt = $state<CertPrompt | null>(null);
   rtt = $state(0);
-  // Who in our channel is sharing their screen, by session (mumh5 clients only)
+  // Who in our channel is sharing their screen, by session (Libertad clients only)
   sharing = $state<Record<number, ShareKind>>({});
+  // A small frame of what someone hosts (see thumbs.svelte.ts), as an object URL, by session
+  frames = $state<Record<number, string>>({});
+  // Who in our channel is hosting a watch together session, by session
+  watchTogether = $state<Record<number, { mode: WatchMode; title: string }>>({});
   // Why the last connection ended, shown with a Reconnect button (null after a normal disconnect)
   disconnectInfo = $state<{ kind: 'kicked' | 'banned' | 'lost' | 'rejected'; by: string; reason: string } | null>(null);
   private removedBy: { kind: 'kicked' | 'banned'; by: string; reason: string } | null = null;
@@ -85,14 +102,12 @@ export class Session {
   private attempt = 0;
   // Blob hashes already requested, so a preview does not ask the server repeatedly
   private requested = new Set<string>();
-  // Pictures of people here as object URLs, made the first time each one is shown
-  private pictures = new Map<number, { bytes: Uint8Array; url: string }>();
-  // Pictures to fetch, collected while a list renders and asked for in one request
-  private wantedPictures = new Set<number>();
   // Last file announcement with a preview picture, resent without it if the server refuses it
   private lastImageSend: { key: string; fallback: string; at: number } | null = null;
   // Channel we asked to move to; the chat view switches when the server confirms it
   private pendingJoin: number | null = null;
+  // A channel to enter as soon as the login is done (connect on start); the name guards against ids that changed
+  autoJoin: { id: number; name: string } | null = null;
   // Mute and deafen the app set by itself (your choice from before connecting, or restored when
   // voice comes back here); the server's confirmation of exactly that plays no sound
   private applied: { mute: boolean; deaf: boolean } | null = null;
@@ -203,7 +218,7 @@ export class Session {
   }
 
   // Whether a channel lies somewhere below another (a channel cannot move into its own subtree)
-  // A channel that is read and written without joining it (mumh5 clients only)
+  // A channel that is read and written without joining it (Libertad clients only)
   isText(channelId: number): boolean {
     void this.tick;
     return textChannels.isText(this, channelId);
@@ -244,7 +259,6 @@ export class Session {
     this.selectedChannel = null;
     this.panel = { kind: 'members' };
     this.requested.clear();
-    this.dropPictures();
     this.applied = null;
     this.own = null;
     this.serverCert = null;
@@ -253,7 +267,7 @@ export class Session {
     this.status = 'connecting';
 
     if (!native) {
-      this.fail('Connecting needs the desktop app or the web build served by a mumh5 proxy.');
+      this.fail('Connecting needs the desktop app or the web build served by a Libertad proxy.');
       return;
     }
 
@@ -312,15 +326,21 @@ export class Session {
   }
 
   disconnect(): void {
+    this.autoJoin = null;
     this.attempt++;
     const client = this.client;
     this.client = null;
     client?.disconnect();
     share.closed(this);
+    thumbs.closed(this);
     textChannels.closed(this);
     files.closed(this);
-    this.dropPictures();
+    watchTogether.closed(this);
+    this.dropFrames();
     this.sharing = {};
+    this.ownManifest = null;
+    this.bannerFiles = {};
+    this.dropProfiles();
     sessions.onClosed(this);
     this.status = 'idle';
     this.tick++;
@@ -344,18 +364,31 @@ export class Session {
       for (const u of client.users.values()) this.lastChannel.set(u.session, u.channelId);
       // What we may do per channel, for menus (not rate limited by the server)
       for (const id of client.channels.keys()) client.requestPermissions(id);
+      // Connect on start: go back to the channel you were last in, if it is still there
+      if (!this.autoJoin && this.server && client.self) store.rememberChannel(this.server.id, client.self.channelId, client.channels.get(client.self.channelId)?.name ?? '');
+      const back = this.autoJoin;
+      this.autoJoin = null;
+      if (back) {
+        const ch = client.channels.get(back.id);
+        if (ch && (ch.name || 'Root') === (back.name || 'Root') && client.self?.channelId !== back.id) this.joinChannel(back.id);
+      }
       if (client.welcomeText) this.system(this.view, client.welcomeText, true);
       // Your picture, kept on this device (servers drop it when you leave unless you are registered)
-      ownAvatar.loaded.then(() => { if (live() && ownAvatar.bytes) this.sendPicture(ownAvatar.bytes); });
+      // Your banner, cards and avatar are announced in your description, and fetched from this computer
+      Promise.all(SLOTS.map(s => OWN[s].loaded)).then(() => { if (live()) this.syncBanner(); });
       share.entered(this);
+      thumbs.entered(this);
       textChannels.entered(this);
+      watchTogether.entered(this);
       bump();
     });
     client.on('pluginData', (sender, dataId, data) => {
       if (!live()) return;
       share.receive(this, sender, dataId, data);
+      thumbs.receive(this, sender, dataId, data);
       textChannels.receive(this, sender, dataId, data);
       files.receive(this, sender, dataId, data);
+      watchTogether.receive(this, sender, dataId, data);
     });
     client.on('channel', ch => {
       if (live() && client.synced && !client.permissions.has(ch.id)) client.requestPermissions(ch.id);
@@ -387,8 +420,12 @@ export class Session {
       const before = this.lastChannel.get(user.session);
       this.lastChannel.set(user.session, user.channelId);
       if (client.synced && self && (isNew || changed.includes('channelId'))) {
-        if (user.session === self.session) share.entered(this);
-        else share.userMoved(this, user);
+        if (user.session === self.session) {
+          share.entered(this); watchTogether.selfMoved(this);
+          // Not while a channel is still being entered on start: that would overwrite where we are going
+          if (this.server && !this.autoJoin) store.rememberChannel(this.server.id, user.channelId, client.channels.get(user.channelId)?.name ?? '');
+        }
+        else { share.userMoved(this, user); thumbs.userMoved(this, user); }
       }
       let flips = { mute: false, deaf: false };
       if (self && user.session === self.session) {
@@ -432,6 +469,7 @@ export class Session {
       share.userMoved(this, user, true);
       textChannels.userLeft(this, user.session);
       files.userLeft(this, user.session);
+      watchTogether.userMoved(this, user, true);
       if (self && user.session !== self.session && this.isVoice() && user.channelId === self.channelId) {
         const byOther = actor != null && actor !== user.session;
         sounds.play(ban ? 'userBanned' : byOther ? 'userKicked' : 'userDisconnected');
@@ -443,8 +481,9 @@ export class Session {
         this.system(`ch:${self.channelId}`, `${escapeHtml(user.name)} ${what}${reason ? `: ${escapeHtml(reason)}` : ''}`);
       }
       if (this.panel.kind === 'user' && this.panel.session === user.session) this.panel = { kind: 'members' };
-      const pic = this.pictures.get(user.session);
-      if (pic) { URL.revokeObjectURL(pic.url); this.pictures.delete(user.session); }
+      this.manifests.delete(user.session);
+      this.dropFrame(user.session);
+      this.dropProfile(user.session);
       bump();
     });
 
@@ -456,7 +495,9 @@ export class Session {
         return;
       }
       this.receive(client, msg);
-      if (msg.actor != null && msg.actor !== client.session) sounds.play(msg.channels.length || msg.trees.length ? 'message' : 'privateMessage');
+      if (msg.actor != null && msg.actor !== client.session) {
+        sounds.play(this.mentionsMe(msg.html) ? 'mention' : msg.channels.length || msg.trees.length ? 'message' : 'privateMessage');
+      }
     });
 
     client.on('permissionDenied', d => {
@@ -490,6 +531,7 @@ export class Session {
       this.client = null;
       textChannels.closed(this);
       files.closed(this);
+      watchTogether.closed(this);
       sessions.onClosed(this);
       this.status = 'idle';
       this.error = reason === 'Disconnected' ? '' : reason;
@@ -557,57 +599,40 @@ export class Session {
     this.client!.requestBlob({ comments: [session] });
   }
 
-  // Object URL of someone's picture, or null for the letter instead. Pictures are only announced
-  // by hash; the first call asks the server for them, and the view updates when they arrive.
+  // Object URL of someone's avatar (a picture, GIF or video), or null for the letter instead. It comes from
+  // their computer over WebRTC, like their banner and cards (see ensureProfile).
   avatar(session: number | null | undefined): string | null {
     void this.tick;
     const client = this.client;
     if (!client || session == null) return null;
-    if (session === client.session && ownAvatar.url) return ownAvatar.url;
+    // A video avatar carries #video so the picture can tell it from an image
+    const media = (v: BannerView | null) => (v?.kind === 'image' ? v.src + (isVideoMime(v.mime) ? '#video' : '') : null);
+    if (session === client.session) return media(OWN.avatar.view());
     const u = client.users.get(session);
     if (!u) return null;
-    if (!u.texture) {
-      if (u.textureHash) this.wantPicture(session, u.textureHash);
-      return null;
-    }
-    // Empty: the picture was removed
-    if (!u.texture.length) return null;
-    const have = this.pictures.get(session);
-    if (have?.bytes === u.texture) return have.url;
-    if (have) URL.revokeObjectURL(have.url);
-    const url = URL.createObjectURL(new Blob([u.texture as BlobPart]));
-    this.pictures.set(session, { bytes: u.texture, url });
-    return url;
+    // Until their profile has arrived, it is asked for (once the render is done)
+    if (!this.manifests.has(session)) queueMicrotask(() => this.ensureProfile(u));
+    return media(this.profiles[session]?.avatar ?? null);
   }
 
-  private wantPicture(session: number, hash: Uint8Array): void {
-    const tag = `t:${session}:${[...hash].join(',')}`;
-    if (this.requested.has(tag)) return;
-    this.requested.add(tag);
-    this.wantedPictures.add(session);
-    if (this.wantedPictures.size > 1) return;
-    // Called while rendering: ask once the render is done, for everyone seen in it
-    queueMicrotask(() => {
-      const ids = [...this.wantedPictures];
-      this.wantedPictures.clear();
-      this.client?.requestBlob({ textures: ids });
-    });
+  // The frame of what someone hosts, for their tile
+  frame(session: number): string | null {
+    return this.frames[session] ?? null;
   }
-
-  private dropPictures(): void {
-    for (const p of this.pictures.values()) URL.revokeObjectURL(p.url);
-    this.pictures.clear();
-    this.wantedPictures.clear();
+  setFrame(session: number, bytes: Uint8Array): void {
+    const old = this.frames[session];
+    this.frames[session] = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/jpeg' }));
+    if (old) URL.revokeObjectURL(old);
   }
-
-  // Sends your picture if this server takes one that large (it drops larger ones without a word)
-  sendPicture(bytes: Uint8Array): boolean {
-    const client = this.client;
-    if (!client || this.status !== 'connected') return false;
-    const limit = client.config.imageMessageLength;
-    if (limit > 0 && bytes.length > limit) return false;
-    client.setTexture(bytes);
-    return true;
+  dropFrame(session: number): void {
+    const old = this.frames[session];
+    if (!old) return;
+    URL.revokeObjectURL(old);
+    delete this.frames[session];
+  }
+  private dropFrames(): void {
+    for (const url of Object.values(this.frames)) URL.revokeObjectURL(url);
+    this.frames = {};
   }
 
   register(session: number): void {
@@ -623,9 +648,212 @@ export class Session {
     this.connect(updated);
   }
 
-  // html comes from the rich editor, already sanitized XHTML
+  // html comes from the rich editor, already sanitized XHTML. Only the text goes to the server: pictures never do.
   setComment(html: string): void {
-    this.client?.setComment(html);
+    this.client?.setComment(stripBanner(html));
+  }
+
+  // ─── Other people's banners and card backgrounds ────────────────────────────
+
+  // What each person in view has, as it can be drawn (see ensureProfile)
+  profiles = $state<Record<number, Record<Slot, BannerView | null>>>({});
+  private profileKey = new Map<number, string>();
+  private profileUrls = new Map<number, string[]>();
+
+  // Someone's banner (or card background) as the card draws it; null: none, not here yet, or too large to fetch
+  banner(session: number | null | undefined, slot: Slot = 'banner'): BannerView | null {
+    void this.tick;
+    const client = this.client;
+    if (!client || session == null) return null;
+    if (session === client.session) return OWN[slot].view() ?? (slot === 'card' ? cardSource.view() : null);
+    return this.profiles[session]?.[slot] ?? null;
+  }
+
+  // What a tile shows behind someone: their card background, else their banner
+  cardBackground(session: number | null | undefined): BannerView | null {
+    return this.banner(session, 'card') ?? this.banner(session, 'banner');
+  }
+
+  // What each person has sent us of their profile: the text that says which picture, GIF or video is their avatar,
+  // banner and cards (see core/banner.ts). It comes over the direct WebRTC channel to them, never through the server.
+  private manifests = new Map<number, string>();
+  onManifest(from: number, text: string): void {
+    const user = this.client?.users.get(from);
+    if (!user) return;
+    this.manifests.set(from, text);
+    this.ensureProfile(user);
+  }
+  // A direct channel to someone opened: they get our profile at once
+  onLinkOpen(peer: number): void {
+    if (this.ownManifest !== null) files.sendProfile(this, peer, this.ownManifest);
+  }
+
+  // Gets someone's profile ready: opens the direct channel to them when there is none, shows what this computer
+  // kept of them while they have not sent it, and when they have: the same text as last time is the same profile
+  // (the copy kept here is used), else each picture is fetched from them over WebRTC, within the limit in Settings,
+  // unless the copy kept here has the same hash.
+  ensureProfile(user: { session: number; name: string }): void {
+    const client = this.client;
+    if (!client || user.session === client.session) return;
+    files.profileLink(this, user.session);
+    const text = this.manifests.get(user.session);
+    const key = `${user.name}:${text === undefined ? 'none' : bannerSignature(text)}`;
+    if (this.profileKey.get(user.session) === key) return;
+    this.profileKey.set(user.session, key);
+    void this.buildProfile(user.session, user.name, text, key).catch(() => {});
+  }
+
+  private setProfile(session: number, key: string, slot: Slot, view: BannerView | null): void {
+    if (this.profileKey.get(session) !== key) return;
+    this.profiles = { ...this.profiles, [session]: { ...(this.profiles[session] ?? { banner: null, card: null, profile: null, avatar: null }), [slot]: view } };
+  }
+
+  private async buildProfile(session: number, name: string, text: string | undefined, key: string): Promise<void> {
+    const stale = () => this.profileKey.get(session) !== key || !this.client;
+    const cached = await profileCache.read(name);
+    if (stale()) return;
+    const sig = text === undefined ? '' : bannerSignature(text);
+    const urls: string[] = [];
+    if (text === undefined || (cached && cached.commentHash === sig)) {
+      if (!cached) return;
+      for (const slot of SLOTS) {
+        const c = cached[slot];
+        const view = c ? await this.cachedView(name, slot, c, urls) : null;
+        if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
+        this.setProfile(session, key, slot, view);
+      }
+      this.keepUrls(session, urls);
+      return;
+    }
+    const results = await Promise.all(SLOTS.map(async slot => {
+      const r = await this.resolveSlot(session, name, slot, parseBanner(text, slot), cached, urls);
+      this.setProfile(session, key, slot, r.view);
+      return r;
+    }));
+    if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
+    this.keepUrls(session, urls);
+    const meta: CachedProfile = { v: 1, commentHash: sig, banner: results[0].saved, card: results[1].saved, profile: results[2].saved, avatar: results[3].saved };
+    await profileCache.write(name, meta, { banner: results[0].blob, card: results[1].blob, profile: results[2].blob, avatar: results[3].blob });
+  }
+
+  private keepUrls(session: number, urls: string[]): void {
+    for (const u of this.profileUrls.get(session) ?? []) URL.revokeObjectURL(u);
+    if (urls.length) this.profileUrls.set(session, urls); else this.profileUrls.delete(session);
+  }
+
+  private async cachedView(name: string, slot: Slot, c: CachedSlot, urls: string[]): Promise<BannerView | null> {
+    if (c.kind === 'color' && c.color) return { kind: 'color', color: c.color, ...(c.scope && { scope: c.scope }) };
+    if (!c.mime) return null;
+    const blob = await profileCache.readBlob(name, slot, c.mime);
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    urls.push(url);
+    return { kind: 'image', src: url, mime: c.mime, ...(c.scope && { scope: c.scope }) };
+  }
+
+  private async resolveSlot(session: number, name: string, slot: Slot, wire: Banner | null, cached: CachedProfile | null,
+    urls: string[]): Promise<{ view: BannerView | null; saved: CachedSlot | null; blob: Blob | null }> {
+    const none = { view: null, saved: null, blob: null };
+    if (!wire) return none;
+    if (wire.kind === 'color') return { view: wire, saved: { kind: 'color', color: wire.color, ...(wire.scope && { scope: wire.scope }) }, blob: null };
+    if (wire.kind === 'image') {
+      const mime = dataMime(wire.src);
+      const bytes = Uint8Array.from(atob(wire.src.slice(wire.src.indexOf(',') + 1)), c => c.charCodeAt(0));
+      return { view: { kind: 'image', src: wire.src, mime, ...(wire.scope && { scope: wire.scope }) }, saved: { kind: 'image', mime, ...(wire.scope && { scope: wire.scope }) }, blob: new Blob([bytes], { type: mime }) };
+    }
+    const meta = wire.meta;
+    // The copy kept here, when it is the same picture
+    const c = cached?.[slot];
+    if (c?.kind === 'file' && c.hash === meta.h && c.mime) {
+      const view = await this.cachedView(name, slot, c, urls);
+      // The same picture, perhaps with another scope now
+      if (view?.kind === 'image') return { view: { ...view, scope: wire.scope }, saved: { ...c, scope: wire.scope }, blob: await profileCache.readBlob(name, slot, c.mime) };
+    }
+    // Fetched from them, if the limit in Settings allows it
+    const limit = store.settings.bannerMaxMbit * 1_000_000 / 8;
+    if (!(limit > 0) || meta.s > limit || !files.supported(this)) return none;
+    await files.check(meta);
+    const t = files.transfers[meta.i];
+    files.p2pOnly.add(meta.i);
+    if (!t || t.state === 'idle' || t.state === 'failed') files.download(this, meta, session);
+    const url = await this.waitReady(meta.i);
+    const blob = url ? await files.blobOf(meta.i) : null;
+    if (!url || !blob) return none;
+    return { view: { kind: 'image', src: url, mime: meta.m, ...(wire.scope && { scope: wire.scope }) }, saved: { kind: 'file', hash: meta.h, mime: meta.m, ...(wire.scope && { scope: wire.scope }) }, blob };
+  }
+
+  // The address of a file once it has arrived; null when the transfer fails or takes too long
+  private waitReady(id: string): Promise<string | null> {
+    return new Promise(resolve => {
+      let stop: (() => void) | undefined;
+      let done = false;
+      const finish = (v: string | null) => { if (done) return; done = true; clearTimeout(timer); queueMicrotask(() => stop?.()); resolve(v); };
+      const timer = setTimeout(() => finish(null), 120000);
+      stop = $effect.root(() => {
+        $effect(() => {
+          const t = files.transfers[id];
+          if (t?.state === 'ready' && t.url) finish(t.url);
+          else if (t?.state === 'failed') finish(null);
+        });
+      });
+    });
+  }
+
+  private dropProfile(session: number): void {
+    this.profileKey.delete(session);
+    this.keepUrls(session, []);
+    if (this.profiles[session]) {
+      const { [session]: _, ...rest } = this.profiles;
+      this.profiles = rest;
+    }
+  }
+  private dropProfiles(): void {
+    for (const urls of this.profileUrls.values()) for (const u of urls) URL.revokeObjectURL(u);
+    this.profileUrls.clear();
+    this.profileKey.clear();
+    this.manifests.clear();
+    this.profiles = {};
+  }
+
+  // ─── Our own banner and card background ─────────────────────────────────────
+
+  // As other people read them on this server. A file one is shared first, under an id from its
+  // content, so it stays the same from connect to connect.
+  private bannerFiles: Partial<Record<Slot, { blob: Blob; meta: FileMeta }>> = {};
+  private async wireBanner(slot: Slot): Promise<Banner | null> {
+    const own = OWN[slot].value ?? (slot === 'card' ? cardSource.value() : null);
+    if (!own) return null;
+    if (own.kind !== 'file') return own;
+    const have = this.bannerFiles[slot];
+    if (have?.blob === own.blob) return { kind: 'file', meta: have.meta, ...(own.scope && { scope: own.scope }) };
+    if (!files.supported(this)) return null;
+    const meta = await files.share(this, new File([own.blob], slot, { type: own.mime }), () => {}, true);
+    if (typeof meta === 'string') return null;
+    this.bannerFiles[slot] = { blob: own.blob, meta };
+    return { kind: 'file', meta, ...(own.scope && { scope: own.scope }) };
+  }
+  // Our own profile as others read it: which file is each of our avatar, banner and cards. Every file is shared
+  // first (under an id from its content), and the text is sent to whoever has a direct channel to us, now and
+  // whenever one opens. Nothing of it goes into our Mumble description.
+  private ownManifest: string | null = null;
+  syncBanner(): void {
+    void this.runBannerSync();
+  }
+  // Each change starts a run; a run that is no longer the latest drops its result, so a slow earlier one
+  // (a file still being read) can never send an old profile after a newer one (a background removed)
+  private bannerRun = 0;
+  private async runBannerSync(): Promise<void> {
+    const client = this.client;
+    if (!client || this.status !== 'connected') return;
+    const run = ++this.bannerRun;
+    const made = await Promise.all(SLOTS.map(x => this.wireBanner(x).catch(() => null)));
+    if (this.client !== client || this.status !== 'connected' || run !== this.bannerRun) return;
+    this.ownManifest = withBanners('', Object.fromEntries(SLOTS.map((x, i) => [x, made[i]])) as Record<Slot, Banner | null>);
+    const open = new Set(files.openPeers(this));
+    for (const peer of open) files.sendProfile(this, peer, this.ownManifest);
+    // Everybody else on the server: open the direct channel again, which sends them the profile as it opens
+    // (a removed background must reach people whose channel to us had dropped, not only the ones open now)
+    for (const u of client.users.values()) if (u.session !== client.session && !open.has(u.session)) files.profileLink(this, u.session);
   }
 
   // Largest description or image message the server accepts (0: no limit)
@@ -644,10 +872,21 @@ export class Session {
     const time = opts.time ?? Date.now();
     let at = log.length;
     while (at > 0 && log[at - 1].time > time) at--;
-    log.splice(at, 0, { ...entry, id: nextId++, time });
+    log.splice(at, 0, { ...entry, id: nextId++, time, key });
     if (!opts.quiet && (sessions.active !== this || !this.visibleKeys().includes(key))) this.unread[key] = (this.unread[key] ?? 0) + 1;
     // Files announced just now; ones from earlier wait for a click
     if (!opts.quiet && !entry.self) for (const e of entry.embeds) if (e.file) files.offered(this, e.file, entry.authorSession);
+  }
+
+  // Empties the chat on screen, for this person only: nothing is sent to anybody
+  clearChat(): void {
+    for (const k of this.visibleKeys()) { this.logs[k] = []; delete this.unread[k]; }
+  }
+
+  // Does this message name us (@name) or everybody (@all)?
+  mentionsMe(html: string): boolean {
+    const me = this.client?.self;
+    return !!me && mentions(html, [me.name]);
   }
 
   // A text channel message: live, kept from earlier, or handed over by another client
@@ -657,8 +896,65 @@ export class Session {
     const online = sender != null ? client.users.get(sender) : self ? client.self : m.k ? [...client.users.values()].find(u => u.hash === m.k) : undefined;
     this.push(`ch:${m.c}`, {
       kind: 'text', author: online ? store.displayName(online) : m.n, authorSession: online?.session ?? null, self,
+      mention: !self && this.mentionsMe(m.h), msgId: m.i, channel: m.c,
       ...renderIncoming(m.h, store.trustedHosts)
     }, { time: m.t, quiet });
+  }
+
+  // Your own messages can be edited and removed, for everybody who runs Libertad
+  ownMessage(e: ChatEntry): boolean {
+    if (e.kind !== 'text' || !e.self || !e.msgId) return false;
+    return e.channel !== undefined ? textChannels.canModify(this, e.channel, e.msgId) : !!e.key;
+  }
+
+  // The text of a message that holds nothing but text, for the edit box; null when it holds a picture or a file
+  editableText(e: ChatEntry): string | null {
+    const html = e.channel !== undefined && e.msgId ? textChannels.html(this, e.channel, e.msgId) : e.html;
+    if (html === null || /<img/i.test(html) || e.embeds.some(x => x.kind === 'file')) return null;
+    const doc = new DOMParser().parseFromString(html.replace(/<br\s*\/?>/gi, '\n'), 'text/html');
+    return (doc.body.textContent ?? '').trim();
+  }
+
+  editMessage(e: ChatEntry, text: string): void {
+    const t = text.trim();
+    if (!t || !e.msgId) return;
+    const html = textToHtml(t);
+    if (e.channel === undefined) {
+      if (!e.key) return;
+      Object.assign(e, renderIncoming(html, store.trustedHosts));
+      textChannels.notify(this, e.key, TEXT.edit, e.msgId, html);
+      return;
+    }
+    textChannels.edit(this, e.channel, e.msgId, html).then(problem => { if (problem) this.system(`ch:${e.channel}`, escapeHtml(problem)); });
+  }
+
+  deleteMessage(e: ChatEntry): void {
+    if (!e.msgId) return;
+    if (e.channel !== undefined) { void textChannels.remove(this, e.channel, e.msgId); return; }
+    if (!e.key) return;
+    textChannels.notify(this, e.key, TEXT.del, e.msgId);
+    this.logs[e.key] = (this.logs[e.key] ?? []).filter(x => x.msgId !== e.msgId);
+  }
+
+  // Somebody changed or removed one of their normal channel or direct messages (html null: removed)
+  remoteChange(sender: number, key: string, msgId: string, html: string | null): void {
+    const log = this.logs[key];
+    const e = log?.find(x => x.msgId === msgId);
+    // Only the one who wrote it
+    if (!e || e.self || e.authorSession !== sender) return;
+    if (html === null) this.logs[key] = log.filter(x => x !== e);
+    else Object.assign(e, renderIncoming(html, store.trustedHosts));
+  }
+
+  // A text channel message was edited or removed (by its author; textChannels has checked that)
+  updateText(channel: number, msgId: string, html: string): void {
+    const e = this.logs[`ch:${channel}`]?.find(x => x.msgId === msgId);
+    if (e) Object.assign(e, renderIncoming(html, store.trustedHosts));
+  }
+
+  removeText(channel: number, msgId: string): void {
+    const key = `ch:${channel}`;
+    if (this.logs[key]) this.logs[key] = this.logs[key].filter(x => x.msgId !== msgId);
   }
 
   private system(key: string, html: string, trusted = false): void {
@@ -674,11 +970,12 @@ export class Session {
     else if (msg.channels.length || msg.trees.length) key = `ch:${msg.channels[0] ?? self?.channelId ?? 0}`;
     else key = `dm:${msg.actor}`;
 
-    const rendered = renderIncoming(msg.html, store.trustedHosts);
+    const sentId = MSG_ID.exec(msg.html)?.[1];
+    const rendered = renderIncoming(msg.html.replace(MSG_ID, ''), store.trustedHosts);
     if (msg.actor == null) {
       this.push(key, { kind: 'system', author: '', authorSession: null, self: false, ...rendered });
     } else {
-      this.push(key, { kind: 'text', author: sender ? store.displayName(sender) : `#${msg.actor}`, authorSession: msg.actor, self: false, ...rendered });
+      this.push(key, { kind: 'text', author: sender ? store.displayName(sender) : `#${msg.actor}`, authorSession: msg.actor, self: false, mention: msg.actor !== client.session && this.mentionsMe(msg.html), msgId: sentId, ...rendered });
     }
   }
 
@@ -742,10 +1039,12 @@ export class Session {
       this.system(key, `Message too long for this server (${html.length} / ${limit} characters)`);
       return false;
     }
-    client.sendText(this.target(key), html);
+    // Libertad users can then edit or remove it later (needs the plugin data of a 1.4 server)
+    const msgId = textChannels.supported(this) ? newId() : undefined;
+    client.sendText(this.target(key), msgId ? `${html}<!--libertad:id=${msgId}-->` : html);
     sounds.play('messageSent');
     const rendered = renderIncoming(html, store.trustedHosts);
-    this.push(key, { kind: 'text', author: client.self?.name ?? '', authorSession: client.session, self: true, ...rendered });
+    this.push(key, { kind: 'text', author: client.self?.name ?? '', authorSession: client.session, self: true, msgId, ...rendered });
     return true;
   }
 
@@ -755,7 +1054,7 @@ export class Session {
   }
 
   // Pictures that fit as they are go inline, like a pasted picture in the desktop client, and
-  // everyone sees them. Everything else is announced in the chat and sent to mumh5 users who
+  // everyone sees them. Everything else is announced in the chat and sent to Libertad users who
   // ask for it, through the server (see files.svelte.ts); other clients get a preview picture.
   async sendFiles(list: File[], key: string = this.view): Promise<void> {
     const client = this.client;
@@ -792,8 +1091,8 @@ export class Session {
         sounds.play('uploadFailed');
         continue;
       }
-      // What other clients show; mumh5 shows its own card instead
-      const visible = `<b>${escapeHtml(meta.n)}</b> (${formatBytes(meta.s)}, file shared with mumh5)`;
+      // What other clients show; Libertad shows its own card instead
+      const visible = `<b>${escapeHtml(meta.n)}</b> (${formatBytes(meta.s)}, file shared with Libertad)`;
       const plain = announce(meta, visible);
       let preview: string | null = null;
       if (store.settings.sendThumbnails) {
@@ -811,9 +1110,20 @@ export class Session {
 
   setSharing(session: number, kind: ShareKind | false): void {
     if (kind) this.sharing[session] = kind;
-    else delete this.sharing[session];
+    else { delete this.sharing[session]; if (!this.watchTogether[session]) this.dropFrame(session); }
   }
   clearSharing(): void { this.sharing = {}; }
+
+  setWatchTogether(session: number, info: { mode: WatchMode; title: string } | false): void {
+    if (info) {
+      this.watchTogether = { ...this.watchTogether, [session]: info };
+    } else {
+      const { [session]: _, ...rest } = this.watchTogether;
+      this.watchTogether = rest;
+      if (!this.sharing[session]) this.dropFrame(session);
+    }
+  }
+  clearWatchTogether(): void { this.watchTogether = {}; }
 
   // The choice is remembered, so it also works while disconnected and carries to the next connect
   setSelfMute(v: boolean) {
@@ -870,9 +1180,31 @@ class Sessions {
   }
 
   // Your picture for every server: saved here and sent to the ones you are on (null removes it)
-  async setAvatar(bytes: Uint8Array | null): Promise<void> {
-    await ownAvatar.save(bytes);
-    for (const s of this.list) if (s.status === 'connected') s.sendPicture(bytes ?? new Uint8Array(0));
+  // Your banner for every server: saved here and written into your description on the ones you are on
+  async setBanner(slot: Slot, b: OwnBannerInput | null): Promise<void> {
+    // A card background over the whole card would hide a new banner: it gives way
+    if (slot === 'banner' && b && OWN.profile.value && OWN.profile.value.scope === 'whole') await OWN.profile.set(null);
+    // A background of its own for the tile replaces "same as ..."
+    if (slot === 'card' && b) cardSource.set('banner');
+    await OWN[slot].set(b);
+    for (const s of this.list) if (s.status === 'connected') s.syncBanner();
+  }
+
+  // The tile follows your banner, or the picture of your profile card (lower half or whole card); it has none of its own then
+  async setCardFrom(from: CardFrom): Promise<void> {
+    cardSource.set(from);
+    await OWN.card.set(null);
+    for (const s of this.list) if (s.status === 'connected') s.syncBanner();
+  }
+
+  // At app start: reconnect to the server and channel you were last in
+  restoreLast(): void {
+    const l = store.lastChannel;
+    const server = l.serverId ? store.servers.find(x => x.id === l.serverId) : undefined;
+    if (!server || this.byServer(server.id)) return;
+    this.open(server);
+    const s = this.byServer(server.id);
+    if (s) s.autoJoin = { id: l.channelId, name: l.name };
   }
 
   // Show a server, connecting if needed

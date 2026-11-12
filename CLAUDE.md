@@ -11,7 +11,7 @@
 
 ## Project overview
 
-mumh5 is a Mumble client: Electron desktop app (Windows, macOS, Linux), Svelte 5 + TypeScript + Vite UI, Discord-like layout, responsive down to phone width. It must stay compatible with stock Murmur servers and with people on the desktop Mumble client. There is also a browser build that connects through a self-hosted WebSocket proxy with a server allowlist (`server/`).
+Libertad is a Mumble client: Electron desktop app (Windows, macOS, Linux), Svelte 5 + TypeScript + Vite UI, Discord-like layout, responsive down to phone width. It must stay compatible with stock Murmur servers and with people on the desktop Mumble client. There is also a browser build that connects through a self-hosted WebSocket proxy with a server allowlist (`server/`).
 
 Files go through the Mumble server itself, no file host (see File transfer below).
 
@@ -26,9 +26,11 @@ npm run test:e2e       # drives the built app (needs npm run build first)
 npm run screenshots    # regenerates docs/screenshots (see test/e2e/screenshots.ts)
 npm run build:web      # browser build to dist-web/, proxy bundle to dist-proxy/proxy.mjs
 npm run dev:web        # browser build with hot reload: starts the proxy (any server allowed) and Vite
-npm run proxy          # run the proxy from source (MUMH5_SERVERS=host:port required)
+npm run proxy          # run the proxy from source (LIBERTAD_SERVERS=host:port required)
 npm run test:e2e:web   # drives the browser build through the proxy (needs npm run build:web first)
 npm run test:e2e:share # screen sharing between two instances of the built app
+npm run test:e2e:files # large files: Save dialog first, one copy, cleanup (needs npm run build first)
+npm run test:e2e:files:web # the same in the browser build, picker replaced by a private-file-system handle (needs npm run build:web first)
 npm run themes         # regenerate src/themes-generated.css and src/lib/themes-generated.ts (scripts/gen-themes.mjs)
 npm run proto          # regenerate src/core/mumble-pb.js and mumble-udp-pb.js from proto/
 ```
@@ -36,7 +38,7 @@ npm run proto          # regenerate src/core/mumble-pb.js and mumble-udp-pb.js f
 Test server (autoban off because tests reconnect a lot; SuperUser for channel setup):
 
 ```bash
-docker run -d --name mumh5-test-murmur -p 64739:64738 -p 64739:64738/udp \
+docker run -d --name libertad-test-murmur -p 64739:64738 -p 64739:64738/udp \
   -e MUMBLE_CONFIG_AUTOBANATTEMPTS=0 -e MUMBLE_SUPERUSER_PASSWORD=testsuper mumblevoip/mumble-server
 MUMBLE_TEST_HOST=localhost:64739 MUMBLE_SUPERUSER_PASSWORD=testsuper npm run test:e2e
 ```
@@ -45,19 +47,19 @@ A reused test server keeps registrations and channels from earlier runs; tests m
 
 ## Architecture
 
-- `electron/` (Node, main process): window, TLS sockets to Mumble servers (`tls-transport.ts`), encrypted UDP voice (`udp-voice.ts`, `ocb2.ts`, tested against Mumble's OCB2 vectors), identities and PKCS#12 (`identity.ts`, `identity-store.ts`), certificate parsing (`certs.ts`), tray (`tray.ts`). The renderer only gets the narrow `window.mumh5Native` API from `preload.ts` (context isolation, sandbox).
-- `server/` (Node): the web proxy. `proxy.ts` serves `dist-web`, bridges WebSocket connections to Mumble over TLS (reusing `electron/tls-transport.ts`) and has stateless identity endpoints. It stores nothing; the browser keeps identities in localStorage and sends one with each connect. `turn.ts` is its STUN and TURN server for screen sharing between browser users (UDP and TCP on one port, credentials from `GET /api/relay`, which any origin may read so the desktop app can use a proxy as its relay; secret made up at start). `localStorage mumh5.iceDebug = relay` or `relay-tcp` limits a client to relayed routes, which is how the E2E exercises the relay.
+- `electron/` (Node, main process): window, TLS sockets to Mumble servers (`tls-transport.ts`), encrypted UDP voice (`udp-voice.ts`, `ocb2.ts`, tested against Mumble's OCB2 vectors), identities and PKCS#12 (`identity.ts`, `identity-store.ts`), certificate parsing (`certs.ts`), tray (`tray.ts`). The renderer only gets the narrow `window.LibertadNative` API from `preload.ts` (context isolation, sandbox).
+- `server/` (Node): the web proxy. `proxy.ts` serves `dist-web`, bridges WebSocket connections to Mumble over TLS (reusing `electron/tls-transport.ts`) and has stateless identity endpoints. It stores nothing; the browser keeps identities in localStorage and sends one with each connect. `turn.ts` is its STUN and TURN server for screen sharing between browser users (UDP and TCP on one port, credentials from `GET /api/relay`, which any origin may read so the desktop app can use a proxy as its relay; secret made up at start). `localStorage Libertad.iceDebug = relay` or `relay-tcp` limits a client to relayed routes, which is how the E2E exercises the relay.
 - `src/core/` (browser-safe TypeScript, also runs in Node for tests): framing and codec (`proto.ts`), the Mumble client state machine (`client.ts`), voice packet formats (`voice-packet.ts`). No DOM, no Electron, no Node imports here.
 - `src/lib/native.ts`: `desktop` is the Electron preload API or null; `native` is what both platforms provide (identities, certificates), backed by `web.svelte.ts` in the browser build (`isWeb`, vite `--mode web`). Desktop-only features check `desktop`.
-- `src/lib/`: app state. `session.svelte.ts` has one `Session` per server plus the `sessions` manager; `session` is a Proxy to the active one. `audio/voice.svelte.ts` is the voice engine (WebCodecs Opus, capture and playback AudioWorklets); where a browser has no WebCodecs audio it uses libopus in WebAssembly (`audio/opus-wasm.ts`, `localStorage mumh5.forceWasmOpus = 1` forces it). `html.ts` sanitizes incoming HTML and serializes outgoing rich text.
-- Screen sharing: `src/core/share-signal.ts` (signals as Mumble plugin data, id `mumh5.share`, compressed and chunked) and `src/lib/share.svelte.ts` (one WebRTC connection per viewer and stream, candidates inside the description, no trickle; a viewer holds one screen and any number of cameras in `share.watches`). The start dialog is `ShareDialog.svelte`, the tiles and the large view are `VoiceStage.svelte`. Desktop source listing is `share:sources` / `share:pick` in `electron/main.ts`; Linux sound is `electron/pipewire.ts` (a virtual microphone fed with pw-link, never with this app's own playback).
+- `src/lib/`: app state. `session.svelte.ts` has one `Session` per server plus the `sessions` manager; `session` is a Proxy to the active one. `audio/voice.svelte.ts` is the voice engine (WebCodecs Opus, capture and playback AudioWorklets); where a browser has no WebCodecs audio it uses libopus in WebAssembly (`audio/opus-wasm.ts`, `localStorage Libertad.forceWasmOpus = 1` forces it). `html.ts` sanitizes incoming HTML and serializes outgoing rich text.
+- Screen sharing: `src/core/share-signal.ts` (signals as Mumble plugin data, id `libertad.share`, compressed and chunked) and `src/lib/share.svelte.ts` (one WebRTC connection per viewer and stream, candidates inside the description, no trickle; a viewer holds one screen and any number of cameras in `share.watches`). The start dialog is `ShareDialog.svelte`, the tiles and the large view are `VoiceStage.svelte`. Desktop source listing is `share:sources` / `share:pick` in `electron/main.ts`; Linux sound is `electron/pipewire.ts` (a virtual microphone fed with pw-link, never with this app's own playback).
 - `src/ui/`: Svelte components. `App.svelte` owns layout and global dialogs (`ui.svelte.ts` store). Stacked is the default layout (`settings.arrangement`). While the shown server is not connected, `Home.svelte` (saved servers, people counts, the kicked or lost-connection notice) replaces channels and chat in every layout. `UserBar.svelte` is your name and the mute, deafen and other buttons, under the channel list, as the stacked toolbar, and on the start screen.
 - `src/ui2/`: the Rooms interface (`settings.interface === 'rooms'`), a second shell on the same state: `Shell.svelte` (screens and bar, rooms beside the screen from 900px), `Rooms`, `ChatScreen`, `VoiceScreen`, `People`, `You`, `Dock`. It reuses `ChatLog`, `Composer`, `VoiceStage` (`fill`), `RightPanel` (as a sheet) and every dialog and menu from `src/ui/`. A feature added to one interface needs its place in the other. Class names there must not collide with ones `themes.css` styles (`.tabs`, `.rail`, `.tile`).
 
-- File transfer: `src/core/file-transfer.ts` (announcement marker in a chat message, pieces as chat messages addressed to the downloaders with 15 bits per character inside `<img src="data:,...">`, requests as plugin data `mumh5.file`, the `Sender` scheduler and `pump`) and `src/lib/files.svelte.ts` (downloads split between up to four holders, serving, files kept in IndexedDB up to 2 GB). Pieces use `MumbleClient.sendBulk`, which leaves two messages of the rate limit to the user and waits for `flushed()` (a ping round trip) every three pieces. The card is `FileCard.svelte`. Small pictures still go inline as `<img>`.
+- File transfer: `src/core/file-transfer.ts` (announcement marker in a chat message, pieces as chat messages addressed to the downloaders with 15 bits per character inside `<img src="data:,...">`, requests as plugin data `libertad.file`, the `Sender` scheduler and `pump`) and `src/lib/files.svelte.ts` (downloads split between up to four holders, serving, files kept in IndexedDB up to 100 GB). Files of `diskMin()` (256 MB) and up are not Blobs: the Save dialog opens on the click (never automatically, so no auto-download for them), pieces are written to `<chosen>.libertadpart` and renamed once the hash matches (`electron/filestore-core.ts`, driven by `electron/filestore.ts`; browsers with `showSaveFilePicker` stream into the picked file the same way). Nothing is cached for them, so there is one copy; failed or stopped downloads delete their part file at once and a restart sweeps the rest. Files an older version cached in `userData/files` are only moved out (`files:export`) or removed. Pieces use `MumbleClient.sendBulk`, which leaves two messages of the rate limit to the user and waits for `flushed()` (a ping round trip) every three pieces. The card is `FileCard.svelte`. Small pictures still go inline as `<img>`.
 - Profiles and pictures: a click on a person opens `ProfileCard.svelte` (`openProfile` in `actions.ts`, state `ui.profile`), placed beside what was clicked; the side panel is only for editing your description. Pictures are Mumble textures (`MumbleClient.setTexture`): servers announce a hash, `session.avatar(id)` fetches with RequestBlob and returns an object URL; your own is kept in IndexedDB (`avatar.svelte.ts`) and sent on every connect, since servers do not echo it and forget it for unregistered users. Over `imagemessagelength` it is dropped silently.
 - People on saved servers: `server-status.svelte.ts` pings each one (desktop: UDP from main; browser: `POST /api/ping` on the proxy, listed servers only) at start and every minute; connected servers count live. Shown on the start screen and the Rooms server tiles, not in the server rail.
-- Text channels: `src/core/text-signal.ts` (a marker in the channel description, messages as plugin data, id `mumh5.text`, sent to everyone on the server) and `src/lib/text-channels.ts` (pacing under Murmur's plugin limit, messages kept in IndexedDB per server, catch-up from one other client after connecting). They share the `ch:<id>` chat view; `session.isText(id)` tells them apart. Channel order for drag and drop is `src/core/channel-order.ts`.
+- Text channels: `src/core/text-signal.ts` (a marker in the channel description, messages as plugin data, id `libertad.text`, sent to everyone on the server) and `src/lib/text-channels.ts` (pacing under Murmur's plugin limit, messages kept in IndexedDB per server, catch-up from one other client after connecting). They share the `ch:<id>` chat view; `session.isText(id)` tells them apart. Channel order for drag and drop is `src/core/channel-order.ts`.
 
 Voice runs on one server at a time (where you last joined a channel); background servers are auto self-deafened and restored when voice returns.
 
@@ -91,7 +93,7 @@ Voice runs on one server at a time (where you last joined a channel); background
 - A chat message may be as long as `imagemessagelength` (131072 characters by default) only if what remains after removing `src="data:..."` values from `<img>` tags fits the text limit. Murmur counts UTF-16 units, not bytes, so BMP characters carry more than base64 (measured: U+4000 to U+BFFF pass unchanged).
 - Murmur drops PluginDataTransmission over 1000 bytes and rate limits it (measured: burst 15, then 4 per second, per sender, dropped silently); keep packets at 900 bytes and few.
 - Murmur gives the id of a removed channel to the next one created; anything kept per channel id must be dropped on ChannelRemove.
-- Renaming while connected is not possible; mumh5 reconnects with the new name.
+- Renaming while connected is not possible; Libertad reconnects with the new name.
 - Murmur never sends SuperUser (user id 0) PermissionQuery answers; treat SuperUser as allowed everything.
 - In ACLs, Write overrides denies. Grant test rights to one user (`$<certhash>` group), not `@all`.
 - Murmur caches permissions per channel object; deleting and recreating channels quickly can leave stale denials. E2E runs use a fresh server.
@@ -101,7 +103,7 @@ Voice runs on one server at a time (where you last joined a channel); background
 
 - The shell has `ELECTRON_RUN_AS_NODE=1` set; strip it when launching Electron (the dev script and tests do).
 - The desktop is Wayland and Electron picks it automatically, so windows appear on the user's screen even with `DISPLAY=:99`. For hidden runs: `Xvfb :99`, `--ozone-platform=x11`, and unset `WAYLAND_DISPLAY` and `XDG_SESSION_TYPE`.
-- The user often has their own mumh5 (`npm run dev`) running. Only stop processes started with a `mumh5-e2e` profile; never kill Electron processes in general.
+- The user often has their own Libertad (`npm run dev`) running. Only stop processes started with a `libertad-e2e` profile; never kill Electron processes in general.
 - `pkill -f pattern` matches the invoking shell; use `pkill -f "[p]attern"`.
 
 ## Commits

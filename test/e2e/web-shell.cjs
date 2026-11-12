@@ -7,7 +7,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, cb) => cb(true));
   // Electron would open a save dialog; a browser saves to the downloads folder
   session.defaultSession.on('will-download', (_e, item) => {
-    const file = path.join(process.env.MUMH5_DOWNLOADS, item.getFilename());
+    const file = path.join(process.env.LIBERTAD_DOWNLOADS, item.getFilename());
     item.setSavePath(file);
     item.once('done', (_ev, state) => { if (state === 'completed') fs.writeFileSync(file + '.done', ''); });
   });
@@ -18,6 +18,6 @@ app.whenReady().then(() => {
     try { callback(sources.length ? { video: sources[0] } : {}); } catch { /* refused */ }
   });
   const win = new BrowserWindow({ width: 1280, height: 800, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
-  win.loadURL(process.env.MUMH5_WEB_URL);
+  win.loadURL(process.env.LIBERTAD_WEB_URL);
 });
 app.on('window-all-closed', () => app.quit());

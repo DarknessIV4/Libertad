@@ -30,4 +30,4 @@ class CaptureProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('mumh5-capture', CaptureProcessor);
+registerProcessor('libertad-capture', CaptureProcessor);

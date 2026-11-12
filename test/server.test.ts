@@ -87,8 +87,8 @@ test('two clients sync, see each other, exchange text, and update state', { skip
 
     // Plugin data between clients (used for rich chat)
     const pd = until<string>(res => bob.on('pluginData', (s, id, data) => res(`${s}:${id}:${new TextDecoder().decode(data)}`)));
-    alice.sendPluginData([bob.session!], 'mumh5', new TextEncoder().encode('{"t":"typing"}'));
-    assert.equal(await pd, `${alice.session}:mumh5:{"t":"typing"}`);
+    alice.sendPluginData([bob.session!], 'libertad', new TextEncoder().encode('{"t":"typing"}'));
+    assert.equal(await pd, `${alice.session}:libertad:{"t":"typing"}`);
 
     // Disconnect is seen as UserRemove
     const gone = until<number>(res => bob.on('userRemove', u => res(u.session)));

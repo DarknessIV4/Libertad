@@ -1,12 +1,13 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { store } from '../lib/settings.svelte.ts';
+  import { youtubeHost } from '../lib/youtube-account.svelte.ts';
 
   let { videoId, start = 0, url }: { videoId: string; start?: number; url: string } = $props();
 
   // Nothing is loaded from YouTube until the user clicks (unless thumbnails are enabled)
   let playing = $state(false);
-  const src = $derived(`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0${start ? `&start=${start}` : ''}`);
+  const src = $derived(`${youtubeHost()}/embed/${videoId}?autoplay=1&rel=0${start ? `&start=${start}` : ''}`);
   const thumb = $derived(store.settings.youtube === 'thumbnail' ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
 </script>
 

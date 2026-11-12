@@ -12,6 +12,7 @@
   import { userMenu, changeNamePrompt } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { renderIncoming } from '../lib/html.ts';
+  import { stripBanner } from '../core/banner.ts';
   import RichEditor from './RichEditor.svelte';
   import { share } from '../lib/share.svelte.ts';
   import { sessions } from '../lib/session.svelte.ts';
@@ -29,14 +30,14 @@
   $effect(() => { if (user?.commentHash && !user.comment) session.loadComment(user.session); });
 
   const description = $derived(channel?.description ? renderIncoming(channel.description, store.trustedHosts).html : '');
-  const comment = $derived(user?.comment ? renderIncoming(user.comment, store.trustedHosts).html : '');
+  const comment = $derived(user?.comment ? renderIncoming(stripBanner(user.comment), store.trustedHosts).html : '');
   const pendingDescription = $derived(!!channel?.descriptionHash && !channel.description);
   const pendingComment = $derived(!!user?.commentHash && !user.comment);
 
   // User-resizable width, remembered between sessions
   const MIN_W = 240, DEFAULT_W = 300;
   const maxW = () => Math.max(MIN_W, Math.min(900, window.innerWidth - 420));
-  let width = $state(Math.max(MIN_W, Number(localStorage.getItem('mumh5.panelWidth')) || DEFAULT_W));
+  let width = $state(Math.max(MIN_W, Number(localStorage.getItem('libertad.panelWidth')) || DEFAULT_W));
 
 
   let editing = $state(false);
@@ -44,9 +45,13 @@
   $effect(() => { void panel; editing = false; });
 
   function startEdit() {
-    draft = user?.comment ?? '';
+    draft = stripBanner(user?.comment ?? '');
     editing = true;
+    // The description is still on its way: start with it once it is here, never with an empty one
+    awaitingText = pendingComment;
   }
+  let awaitingText = $state(false);
+  $effect(() => { if (awaitingText && editing && !pendingComment) { draft = stripBanner(user?.comment ?? ''); awaitingText = false; } });
 
   // After the reset above, so a request from the toolbar survives the panel switching to the profile
   $effect(() => {
@@ -56,6 +61,7 @@
   });
 
   function saveComment() {
+    if (awaitingText) return;
     session.setComment(draft);
     editing = false;
   }
@@ -63,7 +69,7 @@
 </script>
 
 <aside class="panel" aria-label="Details" style:width="{width}px">
-  <ResizeHandle bind:width edge="left" min={MIN_W} max={maxW} initial={DEFAULT_W} storageKey="mumh5.panelWidth" label="Resize panel" />
+  <ResizeHandle bind:width edge="left" min={MIN_W} max={maxW} initial={DEFAULT_W} storageKey="libertad.panelWidth" label="Resize panel" />
   {#if panel.kind === 'members' || (!channel && !user)}
     <header><h2>Members</h2><button class="icon-btn" onclick={onclose} aria-label="Close"><Icon name="x" size={18} /></button></header>
     <Members {onnavigate} />
@@ -175,8 +181,9 @@
   .sharing { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; font-size: 13px; color: var(--speaking); border: 1px solid var(--line); background: var(--bg-0); }
   .sharing span { flex: 1; min-width: 0; color: var(--text); }
   .sharing .btn { padding: 4px 10px; font-size: 12px; }
-  .panel { position: relative; max-width: 100%; height: 100%; flex: none; display: flex; flex-direction: column; background: var(--bg-1); border-left: 1px solid var(--line); min-height: 0; }
-  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--text-dim); }
+  .panel { --rh-shift: 2.5px; position: relative; max-width: 100%; height: 100%; flex: none; display: flex; flex-direction: column; background: var(--panel-right, var(--bg-1)); border-left: 5px solid transparent; min-height: 0; }
+  .panel::before { content: ''; position: absolute; left: -5px; top: 0; bottom: 0; width: 5px; background: var(--panel-divider, rgb(0 0 0 / 0.4)); backdrop-filter: blur(var(--panel-blur, 10px)); pointer-events: none; }
+  header { height: var(--header-h); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); color: var(--text-dim); background-color: color-mix(in srgb, var(--panel-right, var(--bg-1)) var(--panel-solid, 100%), transparent); background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0.4)), rgb(0 0 0 / var(--panel-shade, 0.4))); backdrop-filter: blur(var(--panel-blur, 10px)); }
   h2 { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 650; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); }
   .tabs button { flex: 1; padding: 10px; color: var(--text-dim); font-weight: 600; display: inline-flex; justify-content: center; align-items: center; gap: 6px; transition: color 120ms var(--ease); }

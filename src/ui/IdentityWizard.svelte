@@ -97,7 +97,7 @@
   const passwordsOk = $derived(backupPassword.length >= 8 && backupPassword === backupConfirm);
 </script>
 
-<Modal {title} onclose={mode === 'setup' ? () => {} : onclose} width={560}>
+<Modal {title} onclose={mode === 'setup' ? finish : onclose} width={560}>
   {#if step === 'welcome'}
     <p>Mumble recognizes you by a <strong>certificate</strong>, not by a password. Registered names, admin rights and friends lists on servers are tied to it, so it is worth setting up once and keeping a backup.</p>
     {#if isWeb}<p class="dim">In the browser the certificate is kept in this browser's storage and passed to the proxy at {location.host} when you connect, which presents it to the Mumble server.</p>{/if}

@@ -57,7 +57,7 @@ export function startTray(): void {
       const state = { offline: 'not connected', idle: 'connected', talking: 'talking', muted: 'muted', deafened: 'deafened' }[look];
       api.updateTray({
         icon: drawIcon(look),
-        tooltip: server ? `mumh5: ${state} on ${server}` : 'mumh5: not connected',
+        tooltip: server ? `Libertad: ${state} on ${server}` : 'Libertad: not connected',
         connected: !!(voiceSession?.status === 'connected' || connected),
         server,
         muted,

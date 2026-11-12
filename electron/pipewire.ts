@@ -4,8 +4,8 @@
 // line tools (pw-cli, pw-dump, pw-link, pw-mon), no native module.
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 
-export const VIRTUAL_MIC = 'mumh5-share-audio';
-export const VIRTUAL_MIC_LABEL = 'mumh5 screen share audio';
+export const VIRTUAL_MIC = 'libertad-share-audio';
+export const VIRTUAL_MIC_LABEL = 'Libertad screen share audio';
 
 // What to capture: everything except this app's own sound, or one program
 export type AudioTarget = { kind: 'all' } | { kind: 'app'; name: string };

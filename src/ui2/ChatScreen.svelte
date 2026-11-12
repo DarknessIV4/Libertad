@@ -6,6 +6,7 @@
   import { menu } from '../lib/menu.svelte.ts';
   import { channelMenu, userMenu } from '../lib/actions.ts';
   import { stripMark } from '../core/text-signal.ts';
+import { watchTogether } from '../lib/watch-together.svelte.ts';
 
   // back: shown where the rooms are a screen of their own
   let { back, onback }: { back: boolean; onback: () => void } = $props();
@@ -45,7 +46,7 @@
         {#if connected}
           <h2>{isDm ? title : `#${title}`}</h2>
           <p>{isDm ? 'Messages here are only visible to the two of you.'
-            : isText ? 'A text channel: everyone on this server who uses mumh5 can read and write here, from any room. Other Mumble clients do not see these messages.'
+            : isText ? 'A text channel: everyone on this server who uses Libertad can read and write here, from any room. Other Mumble clients do not see these messages.'
             : mine ? 'Messages go to everyone in this room.'
             : 'You are not in this room. Your messages reach the people in it, but you only see theirs after joining.'}</p>
         {:else}
