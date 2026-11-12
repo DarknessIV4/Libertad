@@ -1,7 +1,7 @@
 {
   "name": "Libertad",
   "productName": "Libertad",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A modern Mumble client: Supports screen sharing, watch together, and more.",
   "license": "MIT",
   "type": "module",
