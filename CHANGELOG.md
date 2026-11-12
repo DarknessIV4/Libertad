@@ -2,6 +2,20 @@
  
 All notable changes to Libertad.
 
+## 0.4.0 -2026-11-12
+
+- Changed project name to Libertad, and changed icon.
+- Added an update button in system settings, and an auto-update toggle, Will ask you before updating.
+- Added custom background image, for the connect screen.
+- added a download button in torrent together, that saves a frame and downloads it for you.
+- Added playback speed for torrent together.
+- Added a memo for torrent together, shows last shows watched with their seasons and episodes.
+- fixes to UI and gif recents.
+- added the ability to edit or delete your sent messages.
+- added clear chat button on right click, for your client only.
+- Added the ability to quick send a message from outside the server, (will connect you for milliseconds to send and disconnect you after sending).
+- better right click menu for some panels.
+
 ## 0.3.0 - 2026-11-11
 
 ### Added
