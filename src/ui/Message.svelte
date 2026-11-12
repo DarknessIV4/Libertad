@@ -10,6 +10,7 @@
   import { userMenu, openProfile } from '../lib/actions.ts';
   import type { ChatEntry } from '../lib/session.svelte.ts';
   import { markMentions } from '../lib/mentions.ts';
+  import { useUrlAsProfileBackground, useUrlAsUserCard, saveImage } from '../lib/banner-actions.ts';
 
   let { entry, grouped }: { entry: ChatEntry; grouped: boolean } = $props();
 
@@ -44,6 +45,13 @@
       title: 'Edit message', label: 'Everybody sees the new text', confirm: 'Save', initial: text,
       onsubmit: v => session.editMessage(entry, v)
     }) });
+    // Right-click on a picture or GIF: the same background choices as on other people's messages, above Delete
+    const src = (e.target as Element | null)?.closest?.('.embed img')?.getAttribute('src');
+    if (src) items.push(
+      { label: 'Set as profile background', action: () => void useUrlAsProfileBackground(src) },
+      { label: 'Set as user card', action: () => void useUrlAsUserCard(src) },
+      { label: 'Save', action: () => saveImage(src) }
+    );
     items.push({ label: 'Delete', danger: true, action: () => (ui.prompt = {
       title: 'Delete message?', label: '', confirm: 'Delete', danger: true, input: 'none',
       text: 'It is removed for everybody in the channel.', onsubmit: () => session.deleteMessage(entry)

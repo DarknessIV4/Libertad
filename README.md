@@ -13,8 +13,8 @@ https://github.com/user-attachments/assets/832434a1-2b63-4d36-b25f-2f67f1e0feed
 - **Share your screen or your camera** with the people in your channel.
 - **Send files**, up to 100 GB, through WebRTC. No upload sites.
 - **See who is who.** Profile pictures and profile cards, and banners.
-- **Make it yours.** Custom Color schemes to your liking, add background image or video,cahnge how corners look, and control trasnparecny, darkness, and blur effects.
-- **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose, Unless you choose to login with your youtbe account in settings.
+- **Make it yours.** Custom color schemes to your liking, add a background image or video, change how corners look, and control transparency, darkness, and blur effects.
+- **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose, unless you choose to log in with your YouTube account in settings.
 
 ## Share your screen
 
@@ -24,13 +24,13 @@ Stream a game, show a bug, watch something together. Pick a screen or a window, 
 
 ## Watch Together
 
-Host a youtube watch together session "supprots search", a file watch together session, or even past a torrent link to start a session, evetyone can control the playback of the video, pause, resume, and seek.
+Host a YouTube Watch Together session (it supports search), a file Watch Together session, or even paste a torrent link to start a session. Everyone can control the playback of the video: pause, resume, and seek.
 
 ![watching with friends](docs/screenshots/watch-together.png)
 
 ## Get started
 
-1. **Download Libertad** from the [releases page](https://github.com/DarknessIV4/Libertad/releases) and install it for your system (appimage might require fuse2, if you don't have it already).
+1. **Download Libertad** from the [releases page](https://github.com/DarknessIV4/Libertad/releases) and install it for your system (the AppImage might require fuse2, if you don't have it already).
 2. **Create your identity.** Libertad asks for it on the first start: give it a name and it is made, or, if you used Mumble on this computer before, keep that one with all your registrations.
 3. **Add a server** with the plus button, using the address your friends gave you, or find one in the public server list (desktop app).
 
@@ -51,7 +51,7 @@ There is no macOS build yet; it can be built on a Mac from the source (see [For 
 
 | ![Profile card with a picture and a formatted description](docs/screenshots/profile.png) |
 
-Pick a color scheme, or Customize it yourself:
+Pick a color scheme, or customize it yourself:
 
 | Custom Colors | Custom Settings |
 |---|---|
@@ -252,7 +252,7 @@ test/       unit, server and end-to-end tests
 
 Libertad is built by **Kibi** together with **Claude**, Anthropic's AI model, working in Claude Code. Kibi decides what Libertad should be and whether a result is good enough. Claude writes most of the code, the tests and this documentation. Commits written with Claude carry a `Co-Authored-By: Claude` line.
 
-Windows version, deb, has not been testes thoroughly, i mainly tested on my Arch machine.
+The Windows version and the .deb have not been tested thoroughly; I mainly tested on my Arch machine.
 
 ## License
 

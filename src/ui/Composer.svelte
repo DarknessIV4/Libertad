@@ -3,7 +3,7 @@
   import FormatToolbar from './FormatToolbar.svelte';
   import GifPicker from './GifPicker.svelte';
   import { gifs, gifFile, type Gif } from '../lib/gifs.svelte.ts';
-  import { useAsProfileBackground } from '../lib/banner-actions.ts';
+  import { useAsProfileBackground, useAsUserCard } from '../lib/banner-actions.ts';
   import { session } from '../lib/session.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
   import { toMumbleHtml } from '../lib/html.ts';
@@ -26,6 +26,15 @@
     try { problem = await useAsProfileBackground(await gifFile(g)); }
     catch { problem = 'This GIF could not be downloaded.'; }
     if (problem) ui.prompt = { title: 'Profile background', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
+  }
+
+  // Right click on a GIF: the user card steps, with this GIF
+  async function gifAsUserCard(g: Gif) {
+    gifOpen = false;
+    let problem = '';
+    try { problem = await useAsUserCard(await gifFile(g)); }
+    catch { problem = 'This GIF could not be downloaded.'; }
+    if (problem) ui.prompt = { title: 'User card', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
   }
 
   // A GIF goes out as a link; the chat shows it as the picture
@@ -250,7 +259,7 @@
       {/each}
     </ul>
   {/if}
-  {#if gifOpen}<GifPicker onpick={sendGif} onbackground={gifAsBackground} onclose={() => (gifOpen = false)} />{/if}
+  {#if gifOpen}<GifPicker onpick={sendGif} onbackground={gifAsBackground} onusercard={gifAsUserCard} onclose={() => (gifOpen = false)} />{/if}
   <div class="frame">
     {#if formatting}
       <FormatToolbar {exec} onlink={link} onimage={() => imagePicker.click()} />

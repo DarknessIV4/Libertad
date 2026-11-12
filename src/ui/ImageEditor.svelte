@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import Modal from './Modal.svelte';
   import { imageEditor, type EditScope } from '../lib/image-editor.svelte.ts';
-  import { FULL, FILL, isUnchanged, renderCrop, renderFile, rotatedSize, type Crop, type EditParams } from '../lib/image-edit.ts';
+  import { FULL, FILL, CARD_WIDTH, isUnchanged, renderCrop, renderFile, rotatedSize, type Crop, type EditParams } from '../lib/image-edit.ts';
   import { canEditGif, renderGif } from '../lib/gif-edit.ts';
 
   // Step 1: crop (drag the frame), turn 0 to 360 degrees and, for a banner, darken and blur.
@@ -12,8 +12,11 @@
   const STAGE_H = 300;
   const MARGIN = 14;
   const MIN_PX = 28;
+  // The profile card as it really is: 320 wide, the banner 128 high
+  const CARD_H = 410, BANNER_H = 128;
 
-  let step = $state<'edit' | 'scope'>('edit');
+  // Where the picture goes on the profile card (asked in the editor when EditOptions.scopes is on); none until chosen
+  let scope = $state<EditScope | null>(null);
   let failed = $state(false);
   let busy = $state(false);
   // How far along a GIF is (0 to 1) while its frames are made, and what went wrong with one
@@ -30,8 +33,8 @@
   let proxy = $state<HTMLCanvasElement | null>(null);
   let stageW = $state(480);
   let canvas = $state<HTMLCanvasElement>();
-  let result = $state<File | null>(null);
-  let resultUrl = $state('');
+  // The profile card shown beside the crop (see EditOptions.preview): the picture is drawn on this
+  let pcanvas = $state<HTMLCanvasElement>();
 
   // A new request starts over
   $effect(() => {
@@ -40,14 +43,13 @@
       bmp?.close();
       bmp = null;
       proxy = null;
-      step = 'edit';
+      scope = r?.preview ?? null;
       failed = false;
       busy = false;
       progress = 0;
       gifError = '';
       rotation = 0; darkness = 0; blur = 0;
       crop = { ...FULL };
-      dropResult();
     });
     if (!r) return;
     let gone = false;
@@ -65,12 +67,6 @@
     }).catch(() => { if (!gone) failed = true; });
     return () => { gone = true; };
   });
-
-  function dropResult() {
-    if (resultUrl) URL.revokeObjectURL(resultUrl);
-    resultUrl = '';
-    result = null;
-  }
 
   // The biggest square in the middle of the turned picture (a profile picture keeps its frame square)
   function squareCrop(): Crop {
@@ -103,14 +99,14 @@
   let queued = 0;
   $effect(() => {
     void params.rotation; void params.darkness; void params.blur; void params.crop.x; void params.crop.y; void params.crop.w; void params.crop.h;
-    void proxy; void stageW; void step;
+    void proxy; void stageW; void pcanvas; void scope;
     if (!queued) queued = requestAnimationFrame(() => { queued = 0; draw(); });
   });
   $effect(() => () => { if (queued) cancelAnimationFrame(queued); });
 
   function draw() {
     const c = canvas, p = proxy;
-    if (!c || !p || step !== 'edit') return;
+    if (!c || !p) return;
     const dpr = window.devicePixelRatio || 1;
     c.width = Math.round(stageW * dpr);
     c.height = Math.round(STAGE_H * dpr);
@@ -137,6 +133,27 @@
     // Inside the frame: what will be made, with the darkness and blur
     const w = Math.max(1, Math.round(frame.w * dpr)), h = Math.max(1, Math.round(frame.h * dpr));
     ctx.drawImage(renderCrop({ source: p, width: p.width, height: p.height }, params, w, h), frame.x, frame.y, frame.w, frame.h);
+    drawPreview(p);
+  }
+
+  // The crop as the card would show it: it fills the banner, the space under it or the whole card, cut to fit
+  function drawPreview(p: HTMLCanvasElement) {
+    const pc = pcanvas, sc = scope;
+    if (!pc || !sc) return;
+    const h = sc === 'banner' ? BANNER_H : sc === 'under' ? CARD_H - BANNER_H : CARD_H;
+    const dpr = window.devicePixelRatio || 1;
+    pc.width = Math.round(CARD_WIDTH * dpr);
+    pc.height = Math.round(h * dpr);
+    const ctx = pc.getContext('2d')!;
+    const box = rotatedSize(p.width, p.height, rotation);
+    const cw = Math.max(1, crop.w * box.w), ch = Math.max(1, crop.h * box.h);
+    // The size it is shown at: as small as fills the area
+    const s = Math.max(CARD_WIDTH / cw, h / ch);
+    const dw = cw * s, dh = ch * s;
+    const k = Math.min(1, 2400 / Math.max(dw, dh));
+    const out = renderCrop({ source: p, width: p.width, height: p.height }, params, Math.max(1, Math.round(dw * dpr * k)), Math.max(1, Math.round(dh * dpr * k)));
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(out, (CARD_WIDTH - dw) / 2 * dpr, (h - dh) / 2 * dpr, dw * dpr, dh * dpr);
   }
 
   // ─── The frame: drag it or its edges ───
@@ -212,36 +229,31 @@
         }
       } else file = changed ? await renderFile(bmp, params, r.effects ? 1280 : 2560) : r.file;
       if (!file) { failed = true; return; }
-      if (!r.scopes) { imageEditor.close({ file }); return; }
-      dropResult();
-      result = file;
-      resultUrl = URL.createObjectURL(file);
-      step = 'scope';
+      imageEditor.close({ file, ...(scope && { scope }) });
     } finally {
       busy = false;
     }
   }
 
-  function choose(scope: EditScope) {
-    if (result) imageEditor.close({ file: result, scope });
-  }
   function close() { imageEditor.close(null); }
-  $effect(() => () => dropResult());
-
-  const SCOPES: { id: EditScope; label: string; note: string }[] = [
-    { id: 'banner', label: 'Banner only', note: 'Just the strip at the top of your card' },
-    { id: 'under', label: 'Under the banner', note: 'The whole space below the banner, behind your details' },
-    { id: 'whole', label: 'Whole profile card', note: 'Behind the banner and everything under it' }
+  // The places on the profile card the picture can go
+  const SCOPES: { id: EditScope; label: string }[] = [
+    { id: 'banner', label: 'Banner' },
+    { id: 'under', label: 'Lower half' },
+    { id: 'whole', label: 'Whole card' }
   ];
+  // Where to ask (in the editor) and where the card is shown
+  const asks = $derived(!!req?.scopes && !req?.cropOnly);
 </script>
 
 {#if req}
-  {#if step === 'edit'}
-    <Modal title={req.title ?? (req.effects ? 'Edit picture' : 'Crop picture')} onclose={close} width={540}>
+    <Modal title={req.title ?? (req.effects ? 'Edit picture' : 'Crop picture')} onclose={close} width={asks || req.preview ? 930 : 540}>
       {#if failed}
         <p class="err">This file could not be read as a picture.</p>
       {:else}
-        <p class="help">Drag the frame or its edges to crop. Leave the frame as it is to keep the whole picture.</p>
+        <div class="split">
+        <div class="main">
+        {#if !asks}<p class="help">Drag the frame or its edges to crop. Leave the frame as it is to keep the whole picture.</p>{/if}
         {#if req.note}<p class="help">{req.note}</p>{/if}
         {#if isGif}
           <p class="help">{req.cropOnly
@@ -249,6 +261,13 @@
             : canEditGif()
               ? 'This is a GIF: the crop, turning, darkness and blur are applied to every frame, and it keeps moving. The preview shows its first frame.'
               : 'This is a GIF, and this browser cannot edit one. Leave everything as it is to keep it moving.'}</p>
+        {/if}
+        {#if asks}
+          <div class="where" role="radiogroup" aria-label="Where to use the picture">
+            {#each SCOPES as sc (sc.id)}
+              <button class="btn" class:on={scope === sc.id} role="radio" aria-checked={scope === sc.id} onclick={() => (scope = sc.id)}>{sc.label}</button>
+            {/each}
+          </div>
         {/if}
         <div class="stage" bind:clientWidth={stageW} style:height="{STAGE_H}px">
           <canvas bind:this={canvas} style:width="{stageW}px" style:height="{STAGE_H}px"></canvas>
@@ -283,38 +302,55 @@
           {/if}
         </div>
         {#if gifError}<p class="err">{gifError}</p>{/if}
+        </div>
+        {#if asks || req.preview}
+          <div class="side">
+            <p class="help">{scope === 'banner' ? 'Banner' : scope === 'under' ? 'Lower half' : scope === 'whole' ? 'Whole profile card' : 'Choose where it goes'}{scope ? ': how it will look' : ' to see how it looks'}</p>
+            <div class="pcard" class:over={scope && scope !== 'banner'} aria-hidden="true" style:height="{CARD_H}px">
+              {#if scope}
+                <canvas bind:this={pcanvas} class="pfill" style:top="{scope === 'under' ? BANNER_H : 0}px" style:width="{CARD_WIDTH}px" style:height="{scope === 'banner' ? BANNER_H : scope === 'under' ? CARD_H - BANNER_H : CARD_H}px"></canvas>
+              {/if}
+              <div class="pbanner" style:height="{BANNER_H}px"></div>
+              <i class="ppic"></i>
+              <div class="pbody">
+                <i class="pl name"></i><i class="pl sub"></i>
+                <div class="pbox"><i class="pl"></i><i class="pl short"></i><i class="pl"></i></div>
+                <div class="pbtns"><i></i><i></i></div>
+              </div>
+            </div>
+          </div>
+        {/if}
+        </div>
       {/if}
       {#snippet footer()}
         {#if !failed}<button class="btn reset" disabled={!changed} onclick={reset}>Reset</button>{/if}
         <button class="btn" onclick={close}>Cancel</button>
-        {#if !failed}<button class="btn primary" disabled={!proxy || busy} onclick={done}>{busy ? (isGif && progress > 0 ? `Working... ${Math.round(progress * 100)}%` : 'Working...') : 'Done'}</button>{/if}
+        {#if !failed}<button class="btn primary" disabled={!proxy || busy || (asks && !scope)} onclick={done}>{busy ? (isGif && progress > 0 ? `Working... ${Math.round(progress * 100)}%` : 'Working...') : 'Done'}</button>{/if}
       {/snippet}
     </Modal>
-  {:else}
-    <Modal title="Use this picture as" onclose={close} width={540}>
-      <div class="scopes" role="group" aria-label="Where to use the picture">
-        {#each SCOPES as s (s.id)}
-          <button class="scope" onclick={() => choose(s.id)}>
-            <!-- A small card, with the picture where it will show -->
-            <span class="mini" aria-hidden="true" style:background-image={s.id === 'whole' ? `url("${resultUrl}")` : undefined}>
-              <span class="m-banner" class:clear={s.id === 'whole'} style:background-image={s.id === 'banner' ? `url("${resultUrl}")` : undefined}></span>
-              <span class="m-body" class:clear={s.id === 'whole'} style:background-image={s.id === 'under' ? `url("${resultUrl}")` : undefined}>
-                <i class="m-pic"></i><i class="m-line"></i><i class="m-line short"></i>
-              </span>
-            </span>
-            <span class="txt"><b>{s.label}</b><small>{s.note}</small></span>
-          </button>
-        {/each}
-      </div>
-      {#snippet footer()}
-        <button class="btn" onclick={() => (step = 'edit')}>Back</button>
-        <button class="btn" onclick={close}>Cancel</button>
-      {/snippet}
-    </Modal>
-  {/if}
 {/if}
 
 <style>
+  /* The crop on the left, the card it will be on to the right (below it when the window is narrow) */
+  .split { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+  .main { flex: 1 1 440px; min-width: 0; }
+  .side { flex: none; width: 320px; max-width: 100%; }
+  .pcard { position: relative; width: 320px; max-width: 100%; box-sizing: border-box; overflow: hidden; background: var(--bg-1); border: 1px solid var(--line-strong); }
+  .pfill { position: absolute; left: 0; max-width: none; }
+  .pbanner { position: relative; }
+  .ppic { position: absolute; left: 14px; top: 20px; width: 88px; height: 88px; box-sizing: border-box; background: var(--text-faint); border: 4px solid var(--bg-1); }
+  .pbody { position: relative; padding: 52px 16px 16px; }
+  .pl { display: block; height: 8px; margin-top: 8px; background: var(--text-faint); opacity: 0.7; }
+  .pl.name { width: 100px; height: 14px; margin-top: 0; opacity: 0.9; }
+  .pl.sub { width: 70px; }
+  .pl.short { width: 55%; }
+  .pbox { margin-top: 18px; padding: 10px 12px 14px; height: 110px; box-sizing: border-box; background: rgb(0 0 0 / 0.28); }
+  .pbtns { display: flex; gap: 8px; margin-top: 16px; }
+  .pbtns i { display: block; width: 90px; height: 28px; background: var(--bg-3); }
+  .pcard.over .pbtns i { background: rgb(0 0 0 / 0.35); }
+  .where { display: flex; gap: 8px; margin: 0 0 12px; }
+  .where .btn { flex: 1; }
+  .where .btn.on { border-color: var(--accent); color: var(--accent); }
   .help { margin: 0 0 10px; font-size: 13px; color: var(--text-dim); }
   .err { margin: 12px 0; color: var(--danger); }
   .stage { position: relative; width: 100%; background: #0d0e10; border: 1px solid var(--line); overflow: hidden; touch-action: none; user-select: none; }
@@ -342,19 +378,4 @@
   .sliders input[type=range] { width: 100%; min-width: 0; }
   .reset { margin-right: auto; }
 
-  .scopes { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-  .scope { display: flex; align-items: center; gap: 14px; width: 100%; padding: 10px; text-align: left; color: var(--text);
-    background: var(--bg-2, var(--bg-3)); border: 1px solid var(--line-strong); }
-  .scope:hover, .scope:focus-visible { border-color: var(--accent); outline: none; background: var(--bg-hover); }
-  .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .txt b { font-size: 14px; }
-  .txt small { font-size: 12px; color: var(--text-dim); }
-  /* A card in miniature: banner on top, body below, the picture where it applies */
-  .mini { position: relative; flex: none; display: flex; flex-direction: column; width: 72px; height: 92px; background: var(--bg-1) center / cover; border: 1px solid var(--line-strong); overflow: hidden; }
-  .m-banner { flex: none; height: 30px; background: var(--bg-3); background-size: cover; background-position: center; }
-  .m-body { position: relative; flex: 1; background: var(--bg-1); background-size: cover; background-position: center; padding: 18px 6px 0; }
-  .m-body.clear, .m-banner.clear { background: transparent; }
-  .m-pic { position: absolute; left: 6px; top: -9px; width: 18px; height: 18px; background: var(--bg-1); border: 2px solid var(--bg-1); box-shadow: inset 0 0 0 20px var(--text-faint); }
-  .m-line { display: block; height: 4px; margin-top: 4px; background: var(--text-faint); opacity: 0.8; }
-  .m-line.short { width: 60%; }
 </style>

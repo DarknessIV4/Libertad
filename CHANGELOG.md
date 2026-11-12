@@ -2,19 +2,39 @@
  
 All notable changes to Libertad.
 
-## 0.4.0 -2026-11-12
+## 0.4.1 - 2026-11-13
+
+### Added
+
+- **Right-click a GIF** (in the GIF menu or in chat): "Set as profile background", "Set as user card" and "Save". In chat they sit above Delete on your own messages, and "Set as user card" is also in the menu on other people's pictures.
+- **Profile card preview in the crop editor**: when you crop a picture for the banner, the lower half or the whole profile card, a card shown beside the crop displays how it will look, live, with darkness and blur applied.
+- **Where it goes, in the crop menu**: setting a picture or GIF as your profile background now asks Banner, Lower half or Whole card right in the crop menu (replacing the separate step after it), and shows the preview once you choose.
+
+### Changed
+
+- "Use as Profile background" is now "Set as profile background".
+- The profile card right-click menu has two options, **Add a background** (picture, GIF or video) and **Add a color** (Banner, Lower half or Whole profile card), instead of three separate change options. A video has no crop menu, so it asks where it goes in a small menu.
+- Profile cards with no banner are blank (the app theme color) instead of showing a color from the user's name.
+
+### Fixed
+
+- Edit no longer appears on images, GIFs (including GIF links), videos, audio and files in chat; only on text messages.
+- Removing your profile card clears the card picture, the card color and the banner together, in one update to everyone.
+- Other UI fixes.
+
+## 0.4.0 - 2026-11-12
 
 - Changed project name to Libertad, and changed icon.
-- Added an update button in system settings, and an auto-update toggle, Will ask you before updating.
-- Added custom background image, for the connect screen.
-- added a download button in torrent together, that saves a frame and downloads it for you.
-- Added playback speed for torrent together.
-- Added a memo for torrent together, shows last shows watched with their seasons and episodes.
-- fixes to UI and gif recents.
-- added the ability to edit or delete your sent messages.
-- added clear chat button on right click, for your client only.
-- Added the ability to quick send a message from outside the server, (will connect you for milliseconds to send and disconnect you after sending).
-- better right click menu for some panels.
+- Added an update button in system settings, and an auto-update toggle. It will ask you before updating.
+- Added a custom background image for the connect screen.
+- Added a download button in Torrent Together that saves a frame and downloads it for you.
+- Added playback speed for Torrent Together.
+- Added a memo for Torrent Together that shows the last shows watched, with their seasons and episodes.
+- Fixes to the UI and GIF recents.
+- Added the ability to edit or delete your sent messages.
+- Added a clear chat button on right click, for your client only.
+- Added the ability to quick send a message from outside the server (it connects you for a moment to send, then disconnects you).
+- Better right-click menus for some panels.
 
 ## 0.3.0 - 2026-11-11
 
@@ -33,18 +53,18 @@ All notable changes to Libertad.
   - Rounded edges across the interface.
 - **Keyboard shortcuts**.
 - **Hardware acceleration** support.
-- **Watching Multiple Screen Shares**: The ability to watch more than wane screen share at once, each with their respective controls, This doeasnt apply to watch together though, you can only open one watch together session as of now, but any number of screen shares.
-- **Dynaimc Fps on screen shareing**: Added dynamic fps that drops the share fps when idle for a while, to preserve resources.
-- **Per user screen share controls**: Any user can edit their own quality and fps for the screen share they are watching, Not exccedint the shared parameters by host.
-- **Hiding Member Cards**: You can hide a member card for yourself if you didnt want to see it, Like bots cards.
+- **Watching Multiple Screen Shares**: The ability to watch more than one screen share at once, each with its own controls. This doesn't apply to Watch Together, though: you can only open one Watch Together session for now, but any number of screen shares.
+- **Dynamic FPS on screen sharing**: Added dynamic FPS that drops the share FPS when idle for a while, to preserve resources.
+- **Per-user screen share controls**: Any user can edit their own quality and FPS for the screen share they are watching, not exceeding the parameters set by the host.
+- **Hiding Member Cards**: You can hide a member card for yourself if you don't want to see it, like bot cards.
 - **Keyboard Shortcuts**: Added keyboard shortcuts in settings.
 
 ### Changed
 
 - **Screen sharing**: Replaced vague bitrate settings with clearer, improved screen-sharing controls and quality options.
-- **Leaving Sessions**: For Host, The ability to leave a session (Screen Share, Watch together) without ending the session.
-- **UI & layout**: Multiple visual and layout overhauls, Removed classic and stacked layouts, didn't edit Group interface for mobiles.
-- **Avatar & Banner Sync**: The app saves your friend's avatars and banners for you locally (so the app doeasn't repeatedly download them), and only compares their Hash to see if an update is needed.
+- **Leaving Sessions**: For the host, the ability to leave a session (Screen Share, Watch Together) without ending the session.
+- **UI & layout**: Multiple visual and layout overhauls, Removed classic and stacked layouts, didn't edit the Group interface for mobiles.
+- **Avatar & Banner Sync**: The app saves your friend's avatars and banners for you locally (so the app doesn't repeatedly download them), and only compares their hash to see if an update is needed.
 
 ### Fixed
 

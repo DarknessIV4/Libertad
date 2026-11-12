@@ -36,22 +36,47 @@ export async function useAsProfileBackground(file: File): Promise<string> {
     : setBannerFromFile('profile', r.file, { keepShape, scope });
 }
 
+// The picture or GIF behind an address from the chat as a file. GIPHY pictures are fetched by the app itself
+// (the window cannot read other sites); data: and blob: pictures are read directly.
+async function fileFromUrl(src: string): Promise<File> {
+  let blob: Blob;
+  if (desktop && /^https:\/\/media\d*\.giphy\.com\/media\//.test(src)) blob = new Blob([await desktop.gifFetch(src) as BlobPart]);
+  else blob = await (await fetch(src)).blob();
+  // The type the file says it is, else a GIF by its first bytes
+  const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+  const isGif = head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38;
+  return new File([blob], isGif ? 'picture.gif' : 'picture', { type: isGif ? 'image/gif' : blob.type });
+}
+
 // A picture or GIF from the chat (the address of the <img> that was right-clicked) as the profile background,
-// by the same steps. GIPHY pictures are fetched by the app itself (the window cannot read other sites);
-// data: and blob: pictures are read directly. A problem is shown in a dialog.
+// by the same steps. A problem is shown in a dialog.
 export async function useUrlAsProfileBackground(src: string): Promise<void> {
   let problem = '';
-  try {
-    let blob: Blob;
-    if (desktop && /^https:\/\/media\d*\.giphy\.com\/media\//.test(src)) blob = new Blob([await desktop.gifFetch(src) as BlobPart]);
-    else blob = await (await fetch(src)).blob();
-    // The type the file says it is, else a GIF by its first bytes
-    const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
-    const isGif = head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38;
-    const type = isGif ? 'image/gif' : blob.type;
-    problem = await useAsProfileBackground(new File([blob], isGif ? 'picture.gif' : 'picture', { type }));
-  } catch {
-    problem = 'This picture could not be loaded.';
-  }
+  try { problem = await useAsProfileBackground(await fileFromUrl(src)); }
+  catch { problem = 'This picture could not be loaded.'; }
   if (problem) ui.prompt = { title: 'Profile background', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
+}
+
+// A picture or GIF as the user card (the picture behind your tile), by the same steps as "Add user card...":
+// the editor (crop, turn, darken, blur), then applied. Returns what went wrong, or ''.
+export async function useAsUserCard(file: File): Promise<string> {
+  const r = await imageEditor.open(file, { effects: true, scopes: false, title: 'Crop card background' });
+  if (!r) return '';
+  // A picture the person did not change keeps the usual cut; a cropped one keeps its shape
+  return setBannerFromFile('card', r.file, { keepShape: r.file !== file });
+}
+
+export async function useUrlAsUserCard(src: string): Promise<void> {
+  let problem = '';
+  try { problem = await useAsUserCard(await fileFromUrl(src)); }
+  catch { problem = 'This picture could not be loaded.'; }
+  if (problem) ui.prompt = { title: 'User card', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
+}
+
+// Save a picture or GIF from the chat or the GIF menu to the computer
+export function saveImage(src: string): void {
+  if (desktop) { desktop.editAction('saveImage', src); return; }
+  const a = document.createElement('a');
+  a.href = src; a.download = ''; a.rel = 'noopener noreferrer';
+  a.click();
 }

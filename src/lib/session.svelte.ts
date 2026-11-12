@@ -907,10 +907,10 @@ export class Session {
     return e.channel !== undefined ? textChannels.canModify(this, e.channel, e.msgId) : !!e.key;
   }
 
-  // The text of a message that holds nothing but text, for the edit box; null when it holds a picture or a file
+  // The text of a message that holds nothing but text, for the edit box; null when it holds a picture, GIF, video, audio or a file
   editableText(e: ChatEntry): string | null {
     const html = e.channel !== undefined && e.msgId ? textChannels.html(this, e.channel, e.msgId) : e.html;
-    if (html === null || /<img/i.test(html) || e.embeds.some(x => x.kind === 'file')) return null;
+    if (html === null || /<img/i.test(html) || e.embeds.some(x => x.kind === 'file' || x.kind === 'image' || x.kind === 'video' || x.kind === 'audio')) return null;
     const doc = new DOMParser().parseFromString(html.replace(/<br\s*\/?>/gi, '\n'), 'text/html');
     return (doc.body.textContent ?? '').trim();
   }
@@ -1187,6 +1187,14 @@ class Sessions {
     // A background of its own for the tile replaces "same as ..."
     if (slot === 'card' && b) cardSource.set('banner');
     await OWN[slot].set(b);
+    for (const s of this.list) if (s.status === 'connected') s.syncBanner();
+  }
+
+  // Removes the whole profile card (the card picture or color and the banner picture or color) in one step:
+  // everybody gets one update with all of it gone, never one that still has the banner color
+  async clearProfileCard(): Promise<void> {
+    await OWN.profile.set(null);
+    await OWN.banner.set(null);
     for (const s of this.list) if (s.status === 'connected') s.syncBanner();
   }
 

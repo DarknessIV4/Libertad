@@ -80,7 +80,7 @@ export function channelMenu(c: Channel): MenuItem[] {
 // card: the menu of the profile card itself, which is not the user's menu in the lists. There is no "View profile"
 // (it is the profile), nothing about the user card (its background, hiding it), and your own mute and deafen stay
 // out; the choices for your avatar, banner and profile card take their place.
-export interface CardChoices { avatar: () => void; banner: () => void; lower: () => void; whole: () => void; remove?: () => void }
+export interface CardChoices { avatar: () => void; background: () => void; color: () => void; remove?: () => void }
 export function userMenu(u: User, card?: CardChoices): MenuItem[] {
   const self = session.self;
   const isSelf = u.session === self?.session;
@@ -101,9 +101,8 @@ export function userMenu(u: User, card?: CardChoices): MenuItem[] {
     if (card) {
       items.push(
         { label: 'Change avatar...', action: card.avatar },
-        { label: 'Change banner...', action: card.banner },
-        { label: 'Change profile card, lower half...', action: card.lower },
-        { label: 'Change whole profile card...', action: card.whole }
+        { label: 'Add a background', action: card.background },
+        { label: 'Add a color', action: card.color }
       );
       if (card.remove) items.push({ label: 'Remove profile card', danger: true, action: card.remove });
     }

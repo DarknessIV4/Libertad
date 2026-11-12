@@ -14,6 +14,8 @@ export interface EditOptions {
   title?: string;
   // A line of advice shown above the picture
   note?: string;
+  // Show a profile card beside the crop, with the picture where it would go: the banner, the space under it or the whole card
+  preview?: EditScope;
   // The frame stays square (a profile picture)
   square?: boolean;
   // Only the crop is asked for: the picture comes back as it was, with the part to show. For a GIF or a

@@ -10,7 +10,7 @@
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { share } from '../lib/share.svelte.ts';
   import { renderIncoming, textToHtml } from '../lib/html.ts';
-  import { setBannerFromFile } from '../lib/banner-actions.ts';
+  import { setBannerFromFile, useAsProfileBackground } from '../lib/banner-actions.ts';
   import { colorPicker } from '../lib/colorpicker.svelte.ts';
   import { stripBanner, type BannerView } from '../core/banner.ts';
   import { ownBanner, ownProfile, ownAvatar } from '../lib/banner.svelte.ts';
@@ -43,8 +43,8 @@
   // The banner behind the picture: theirs, or a color of their name until it arrives
   let previewColor = $state<string | null>(null);
   const banner = $derived<BannerView | null>(previewColor && isSelf ? { kind: 'color', color: previewColor } : user ? session.banner(user.session, 'banner') : null);
-  // Without a banner of one's own the color of the name is used, and it follows the window transparency like the rest of the card
-  const bannerStyle = $derived(banner?.kind === 'image' ? undefined : `background-color: ${banner?.kind === 'color' ? banner.color : `color-mix(in srgb, hsl(${hue} 38% 30%) var(--win-solid, 100%), transparent)`}`);
+  // Without a banner of one's own the banner area is left plain: the card's own background shows, as after removing the profile card
+  const bannerStyle = $derived(banner?.kind === 'image' ? undefined : `background-color: ${banner?.kind === 'color' ? banner.color : 'transparent'}`);
   const still = $derived(!!user && bgPause.paused(user));
 
   // A card background picture that covers the card too: under the banner, or all of it (banner included)
@@ -163,7 +163,8 @@
   let bannerMenu = $state(false);
   let bannerPicker = $state<HTMLInputElement>();
   let bannerBusy = $state(false);
-  let target: 'banner' | 'under' | 'whole' = 'banner';
+  // 'choose': the person picks where it goes in the editor (or in a menu, for a video)
+  let target: 'banner' | 'under' | 'whole' | 'choose' = 'banner';
 
   async function chooseColor() {
     bannerMenu = false;
@@ -196,10 +197,16 @@
     if (!file) return;
     error = '';
     try {
+      if (target === 'choose') {
+        // A picture or GIF: the editor, where banner, lower half or whole card is chosen. A video: a menu asks.
+        if (EDITABLE_OR_GIF.test(file.type)) error = await useAsProfileBackground(file);
+        else askVideoPlace(file);
+        return;
+      }
       // A picture or GIF can be cropped, turned, darkened and blurred first. A video is used as it is.
       let use: File = file, keepShape = target !== 'banner';
       if (EDITABLE_OR_GIF.test(file.type)) {
-        const r = await imageEditor.open(file, { effects: true, scopes: false });
+        const r = await imageEditor.open(file, { effects: true, scopes: false, preview: target as 'banner' | 'under' | 'whole' });
         if (!r) return;
         use = r.file;
         // A picture the person did not change keeps the usual banner cut; a cropped one keeps its shape
@@ -220,30 +227,38 @@
     const c = await colorPicker.open(start);
     if (c) await sessions.setBanner('profile', { kind: 'color', color: c.toLowerCase(), scope: where });
   }
-  function askKind(where: 'under' | 'whole') {
+  // A video has no editor: a menu says where it goes
+  function askVideoPlace(file: File) {
+    const use = async (scope: 'banner' | 'under' | 'whole') => {
+      error = scope === 'banner' ? await setBannerFromFile('banner', file, {}) : await setBannerFromFile('profile', file, { keepShape: true, scope });
+    };
     menu.showAt(menu.last.x, menu.last.y, [
-      { header: true, label: where === 'under' ? 'Profile card, lower half' : 'Whole profile card' },
-      { label: 'Choose a color...', action: () => chooseCardColor(where) },
-      { label: 'Choose a file...', action: () => chooseFile(where) }
+      { header: true, label: 'Use this video as' },
+      { label: 'Banner', action: () => use('banner') },
+      { label: 'Lower half', action: () => use('under') },
+      { label: 'Whole profile card', action: () => use('whole') }
+    ]);
+  }
+  // A color: for the banner, the lower half or the whole card
+  function askColorPlace() {
+    menu.showAt(menu.last.x, menu.last.y, [
+      { header: true, label: 'Add a color' },
+      { label: 'Banner', action: chooseColor },
+      { label: 'Lower half', action: () => chooseCardColor('under') },
+      { label: 'Whole profile card', action: () => chooseCardColor('whole') }
     ]);
   }
 
-  // Right-click on this card: the choices for your own profile card (avatar, banner, lower half, whole card)
+  // Right-click on this card: the choices for your own profile card (avatar, a background, a color)
   const cardChoices = {
     avatar: () => picker?.click(),
-    banner: () => menu.showAt(menu.last.x, menu.last.y, [
-      { header: true, label: 'Banner' },
-      { label: 'Choose a color...', action: chooseColor },
-      { label: 'Add banner...', action: () => chooseFile('banner') },
-      ...(ownBanner.value ? [{ label: 'Remove banner', danger: true, action: removeBanner }] : [])
-    ]),
-    // The lower half and the whole card each ask first: a color or a file
-    lower: () => askKind('under'),
-    whole: () => askKind('whole'),
+    // A picture, GIF or video: the editor (or a menu for a video) asks where it goes
+    background: () => { bannerMenu = false; target = 'choose'; bannerPicker?.click(); },
+    color: askColorPlace,
     // Read when the menu opens: only offered while there is a profile card to remove
     // It takes the banner (also its color) and the card picture away, so the card is plain again
     get remove() {
-      return ownProfile.value || ownBanner.value ? async () => { await sessions.setBanner('profile', null); await sessions.setBanner('banner', null); } : undefined;
+      return ownProfile.value || ownBanner.value ? () => sessions.clearProfileCard() : undefined;
     }
   };
 

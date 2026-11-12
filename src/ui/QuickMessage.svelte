@@ -4,7 +4,7 @@
   import FormatToolbar from './FormatToolbar.svelte';
   import GifPicker from './GifPicker.svelte';
   import { gifs, gifFile, type Gif } from '../lib/gifs.svelte.ts';
-  import { useAsProfileBackground } from '../lib/banner-actions.ts';
+  import { useAsProfileBackground, useAsUserCard } from '../lib/banner-actions.ts';
   import { quickMessage } from '../lib/quick-message.ts';
   import { makeInlineImage } from '../lib/images.ts';
   import { toMumbleHtml, textToHtml } from '../lib/html.ts';
@@ -70,6 +70,15 @@
     try { problem = await useAsProfileBackground(await gifFile(g)); }
     catch { problem = 'This GIF could not be downloaded.'; }
     if (problem) ui.prompt = { title: 'Profile background', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
+  }
+
+  // Right click on a GIF: the user card steps, with this GIF
+  async function gifAsUserCard(g: Gif) {
+    gifOpen = false;
+    let problem = '';
+    try { problem = await useAsUserCard(await gifFile(g)); }
+    catch { problem = 'This GIF could not be downloaded.'; }
+    if (problem) ui.prompt = { title: 'User card', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
   }
 
   // A picture goes into the message as it is typed, scaled to fit the usual server limit
@@ -141,7 +150,7 @@
     </div>
   </div>
   {#if gifOpen}
-    <div class="gifs"><GifPicker onpick={sendGif} onbackground={gifAsBackground} onclose={() => (gifOpen = false)} /></div>
+    <div class="gifs"><GifPicker onpick={sendGif} onbackground={gifAsBackground} onusercard={gifAsUserCard} onclose={() => (gifOpen = false)} /></div>
   {/if}
   {#if error}<p class="error">{error}</p>{/if}
   {#snippet footer()}
