@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import CustomBg from './CustomBg.svelte';
   import { customBg, PANELS, type Panel } from '../lib/custom-bg.svelte.ts';
+  import { titlebar } from '../lib/titlebar.svelte.ts';
 
   // The backgrounds, behind the panels (which turn see-through where one shows). The whole background is
   // one picture over the box that the left panel, the middle and the right panel make together, so each
@@ -38,7 +39,10 @@
         const left = Math.min(r.left, q.left), top = Math.min(r.top, q.top);
         r = new DOMRect(left, top, Math.max(r.right, q.right) - left, Math.max(r.bottom, q.bottom) - top);
       }
-      next[p] = { left: r.left - base.left, top: r.top - base.top, width: r.width, height: r.height };
+      // The title bar sits above the panels: each panel's picture (and so the whole background) reaches up under the
+      // part of the bar over it
+      const gap = titlebar.height > 0 ? Math.max(0, r.top - base.top) : 0;
+      next[p] = { left: r.left - base.left, top: r.top - base.top - gap, width: r.width, height: r.height + gap };
     }
     for (const el of watched) if (!now.has(el)) { ro.unobserve(el); watched.delete(el); }
     for (const el of now) if (!watched.has(el)) { ro.observe(el); watched.add(el); }
@@ -46,7 +50,7 @@
   }
 
   $effect(() => {
-    void watch; void present.left; void present.middle; void present.right;
+    void watch; void present.left; void present.middle; void present.right; void titlebar.height;
     // After the layout has settled
     tick().then(() => requestAnimationFrame(measure));
   });

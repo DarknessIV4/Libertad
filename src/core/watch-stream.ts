@@ -6,6 +6,7 @@ import type { Session } from '../lib/session.svelte.ts';
 import { rtcConfig, gathered } from '../lib/ice.ts';
 import { shareSettings } from '../lib/share.svelte.ts';
 import { parseCap, capFps, capScale, type ViewerCap } from '../lib/stream-quality.ts';
+import { store } from '../lib/settings.svelte.ts';
 import { watchFileStreamState } from '../lib/watch-file-stream.svelte.ts';
 
 // Opus is negotiated as mono speech by default; a film's sound is stereo
@@ -70,6 +71,21 @@ class WatchFileStream {
     return !!u && u.channelId === s.client.self.channelId;
   }
 
+  // The stream goes between a host and the members of its party, who may sit in other rooms. Each
+  // signal is only heard from the side it belongs to; people of our own room are heard as before.
+  private accepts(s: Session, sender: number, type: number): boolean {
+    if (this.inMyChannel(s, sender)) return true;
+    const streamer = this.streamerOf(s);
+    switch (type) {
+      case WATCH.fileRequest: return !!streamer && store.settings.shareCrossRoom !== false;                                  // a viewer asks the host for the picture
+      case WATCH.leave:
+      case WATCH.quality: return !!streamer?.peers.has(sender);                   // a viewer we are sending to
+      case WATCH.fileChunk:
+      case WATCH.end: return !!this.watchOf(s, sender);                           // the host we are watching
+      default: return false;
+    }
+  }
+
   private others(s: Session): number[] {
     const users = Array.from(s.client!.users.values());
     return users
@@ -100,10 +116,12 @@ class WatchFileStream {
   async stopStream(s: Session): Promise<void> {
     const streamer = watchFileStreamState.streamerOf(s);
     if (!streamer) return;
+    // Those who watch from other rooms are told too
+    const viewers = [...streamer.peers.keys()];
     for (const [, peer] of streamer.peers) peer.pc.close();
     streamer.peers.clear();
     streamer.stream?.getTracks().forEach(t => t.stop());
-    await this.send(s, this.others(s), WATCH.end, {});
+    await this.send(s, [...new Set([...this.others(s), ...viewers])], WATCH.end, {});
     watchFileStreamState.setStreamer(s, undefined);
   }
 
@@ -194,6 +212,12 @@ class WatchFileStream {
       console.error('[WatchStream] Error in handleFileAnswer:', e);
       this.setWatchState(s, sender, 'failed');
     }
+  }
+
+  // A viewer the host sent out of the session (cross-room watching was turned off)
+  dropViewer(s: Session, viewer: number): void {
+    this.streamerOf(s)?.caps.delete(viewer);
+    this.dropPeer(s, viewer);
   }
 
   private dropPeer(s: Session, viewer: number): void {
@@ -313,7 +337,7 @@ class WatchFileStream {
     let assembler = this.assemblers.get(s);
     if (!assembler) this.assemblers.set(s, assembler = new WatchAssembler());
     const msg = await assembler.push(sender, data);
-    if (!msg || !s.client || !this.inMyChannel(s, sender)) return;
+    if (!msg || !s.client || !this.accepts(s, sender, msg.type)) return;
 
     console.log('[WatchStream] receive - type:', msg.type, 'from:', sender, 'hasText:', !!msg.text);
     // Check if this is a file streaming signal (using fileRequest/fileChunk for WebRTC setup)
@@ -358,11 +382,12 @@ class WatchFileStream {
     return this.streamerOf(s);
   }
 
-  entered(s: Session): void {
+  // moved: we changed rooms while connected. A stream we send does not depend on rooms, so it carries on.
+  entered(s: Session, moved = false): void {
     if (!s.client) return;
     const self = s.client.session!;
     this.enteredAt.set(s, Date.now());
-    if (this.streamerOf(s)) {
+    if (this.streamerOf(s) && !moved) {
       this.dropPeers(s);
       this.send(s, this.others(s), WATCH.start, { mode: 2 }); // re-announce
     }
@@ -372,7 +397,9 @@ class WatchFileStream {
 
   userMoved(s: Session, user: { session: number }, gone = false): void {
     if (!s.client?.self || user.session === s.client.session) return;
-    if (!gone && this.inMyChannel(s, user.session)) return;
+    // Viewers and the host are not tied to a room (a viewer can watch from another one), so only
+    // someone who disconnected ends a stream. A host who moved takes the party, and the stream, along.
+    if (!gone) return;
     // Viewer left
     if (this.streamerOf(s)?.peers.has(user.session)) { this.streamerOf(s)?.caps.delete(user.session); this.dropPeer(s, user.session); }
     // Host left

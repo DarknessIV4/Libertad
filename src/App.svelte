@@ -9,6 +9,9 @@
   import CertDialog from './ui/CertDialog.svelte';
   import CertViewer from './ui/CertViewer.svelte';
   import PromptDialog from './ui/PromptDialog.svelte';
+  import UpdateDialog from './ui/UpdateDialog.svelte';
+  import TitleBar from './ui/TitleBar.svelte';
+  import { titlebar } from './lib/titlebar.svelte.ts';
   import ContextMenu from './ui/ContextMenu.svelte';
   import ColorPicker from './ui/ColorPicker.svelte';
   import ImageEditor from './ui/ImageEditor.svelte';
@@ -73,6 +76,9 @@
     if (t === 'custom') applyCustom(root, cleanColors($state.snapshot(store.settings.customColors)));
     else clearCustom(root);
   });
+
+  // Room for the window's own title bar at the top (0 without it); the layout, the backgrounds and the dialogs read it
+  $effect(() => { document.documentElement.style.setProperty('--titlebar-h', `${titlebar.height}px`); });
 
   // Rounded edges: a flag and a 0 to 1 factor on the root element, which themes.css turns into radii
   $effect(() => {
@@ -164,8 +170,9 @@
   <Chat showMenu={layout === 'narrow'} onmenu={() => (navOpen = true)} onpanel={togglePanel} docked={chatRight && !home} />
 {/snippet}
 
+<TitleBar />
 {#if store.settings.interface === 'rooms'}
-<Shell onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} />
+<div class="framed"><Shell onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} /></div>
 {:else}
 <div class="app {layout}" class:home data-wb={seeThrough} data-hb={home && (customBg.has('home') || customBg.homeColor) ? '' : undefined}>
   {#if home && (customBg.has('home') || customBg.homeColor)}
@@ -217,6 +224,7 @@
 {/if}
 {#if share.dialog}<ShareDialog onclose={() => (share.dialog = null)} />{/if}
 {#if ui.prompt}<PromptDialog {...ui.prompt} onclose={() => { const p = ui.prompt; ui.prompt = null; p?.oncancel?.(); }} />{/if}
+<UpdateDialog />
 <ProfileCard />
 <ChatDragOverlay />
 <ImageViewer />
@@ -226,7 +234,9 @@
 
 <style>
   /* clip, not only hidden: a hidden box can still be scrolled by the browser (to show a focused message box), which left the panels shifted up */
-  .app { position: relative; height: 100%; display: flex; overflow: hidden; overflow: clip; isolation: isolate; }
+  .app { position: relative; height: 100%; display: flex; overflow: hidden; overflow: clip; isolation: isolate; padding-top: var(--titlebar-h, 0px); }
+  /* The Rooms interface: the same room at the top for the title bar */
+  .framed { height: 100%; padding-top: var(--titlebar-h, 0px); background: var(--bg-1); }
   /* Where a picture shows behind a panel, the panel lets it through */
   .app[data-wb~='left'] :global(.sidebar), .app[data-wb~='middle'] :global(section.chat),
   .app[data-wb~='right'] :global(aside.panel), .app[data-wb~='right'] :global(aside.cpanel) { background: transparent; }
@@ -234,8 +244,8 @@
   .homebg { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
   .app[data-hb] :global(.home) { background: transparent; }
   .nav { display: flex; flex: none; min-height: 0; }
-  .nav.drawer { position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; max-width: calc(100% - 48px); box-shadow: 8px 0 32px rgb(0 0 0 / 0.4); }
+  .nav.drawer { position: absolute; z-index: 20; top: var(--titlebar-h, 0px); bottom: 0; left: 0; max-width: calc(100% - 48px); box-shadow: 8px 0 32px rgb(0 0 0 / 0.4); }
   .nav.drawer :global(.sidebar) { width: min(260px, calc(100vw - 68px - 48px)); }
   .scrim { position: absolute; inset: 0; z-index: 15; background: rgb(0 0 0 / 0.5); }
-  .panel-drawer { position: absolute; z-index: 20; top: 0; right: 0; bottom: 0; max-width: calc(100% - 48px); display: flex; box-shadow: -8px 0 32px rgb(0 0 0 / 0.4); }
+  .panel-drawer { position: absolute; z-index: 20; top: var(--titlebar-h, 0px); right: 0; bottom: 0; max-width: calc(100% - 48px); display: flex; box-shadow: -8px 0 32px rgb(0 0 0 / 0.4); }
 </style>

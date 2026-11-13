@@ -108,6 +108,17 @@ interface NativeApi extends PlatformApi {
     check(): Promise<{ available: boolean; current: string; latest: string; kind: 'appimage' | 'windows' | 'manual'; page: string; size: number }>;
     install(): Promise<void>;
     onProgress(fn: (done: number, total: number) => void): () => void;
+    // The start-up check found an update (the same info as check)
+    onAvailable(fn: (info: { available: boolean; current: string; latest: string; kind: 'appimage' | 'windows' | 'manual'; page: string; size: number }) => void): () => void;
+  };
+  // The title bar the page draws itself where `custom` is true (Linux and Windows); the buttons act on the window
+  titleBar: {
+    custom: boolean;
+    minimize(): Promise<void>;
+    toggleMaximize(): Promise<void>;
+    close(): Promise<void>;
+    state(): Promise<{ maximized: boolean; fullscreen: boolean }>;
+    onState(fn: (s: { maximized: boolean; fullscreen: boolean }) => void): () => void;
   };
   // Keyboard shortcuts that work while the app is in the background; resolves to the ids the system refused
   shortcuts: {

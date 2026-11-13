@@ -69,6 +69,25 @@ contextBridge.exposeInMainWorld('libertadNative', {
       const on = (_e: unknown, done: number, total: number) => fn(done, total);
       ipcRenderer.on('update:progress', on);
       return () => { ipcRenderer.removeListener('update:progress', on); };
+    },
+    // The start-up check found an update: the window asks the person
+    onAvailable: (fn: (info: unknown) => void) => {
+      const on = (_e: unknown, info: unknown) => fn(info);
+      ipcRenderer.on('update:available', on);
+      return () => { ipcRenderer.removeListener('update:available', on); };
+    }
+  },
+  // The title bar the page draws itself on Linux and Windows (macOS keeps the system one); see src/ui/TitleBar.svelte
+  titleBar: {
+    custom: process.platform !== 'darwin',
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    state: () => ipcRenderer.invoke('window:state'),
+    onState: (fn: (s: { maximized: boolean; fullscreen: boolean }) => void) => {
+      const on = (_e: unknown, s: { maximized: boolean; fullscreen: boolean }) => fn(s);
+      ipcRenderer.on('window:state', on);
+      return () => { ipcRenderer.removeListener('window:state', on); };
     }
   },
   shortcuts: {

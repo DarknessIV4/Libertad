@@ -177,7 +177,7 @@
     if (!meta) return;
     tEnded = false;
     // The memo is this person's own: it is set when they start watching, as host or as a joiner
-    watchMemo.record(meta.fileName || meta.name);
+    untrack(() => watchMemo.record(meta.fileName || meta.name));
     const onEnded = () => { tEnded = true; };
     const onAgain = () => { tEnded = false; };
     video.addEventListener('ended', onEnded);

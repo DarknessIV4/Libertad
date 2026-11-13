@@ -133,10 +133,14 @@ const self = $derived(session.self);
     for (const w of watches) if (w.kind === 'screen') ids.push(w.session);
     return ids;
   });
+  // A camera we watch from another room has no tile here (the tiles are the people of this room), so
+  // it is shown large like a screen
+  const awayCams = $derived(watches.filter(w => w.kind === 'camera' && !inChannel.some(u => u.session === w.session)).map(w => w.session));
   const stack = $derived.by(() => {
     const ids: number[] = [];
     if (isWatchingTogether && !hidden[WT]) ids.push(WT);
     for (const id of screenIds) if (!hidden[id]) ids.push(id);
+    for (const id of awayCams) if (!hidden[id] && !ids.includes(id)) ids.push(id);
     if (focus != null && focus !== WT && !ids.includes(focus) && session.sharing[focus] === 'camera' && streamOf(focus)) ids.push(focus);
     return ids;
   });
@@ -157,6 +161,28 @@ const self = $derived(session.self);
   const barIds = $derived(stack.length > 1 ? allIds.filter(id => !stack.includes(id)) : allIds);
   // How many are watching: the people in a watch together session, the people connected to our
   // stream. Of someone else's stream we only know ourselves.
+  // A picture that comes from another room says whose it is and where they are
+  function awayOf(id: number): string {
+    const hostId = id === WT ? watchTogether.party?.hostSession : id;
+    if (hostId == null || !self || hostId === self.session) return '';
+    const u = session.user(hostId);
+    return u && u.channelId !== self.channelId ? `${store.displayName(u)} in ${session.channel(u.channelId)?.name || 'Root'}` : '';
+  }
+  // What we host (a screen, a camera, a watch together) knows who watches: the people in our room, and
+  // those who watch from other rooms (counted apart, and listed with a picture and a name on hover)
+  const hostedBySelf = (id: number) => id === WT ? watchTogether.isHost : !!self && id === self.session;
+  function viewersOf(id: number): { inside: number[]; outside: number[] } {
+    // A watch together counts its host too (while they are in it: they can leave without ending it)
+    const all = id === WT ? watchTogether.participants : share.viewerSessions;
+    const inside = all.filter(v => session.user(v)?.channelId === self?.channelId);
+    return { inside, outside: all.filter(v => !inside.includes(v)) };
+  }
+  // Of someone else's session: everybody in it, one indicator (a watch together lists its members, a stream
+  // what its sharer told us)
+  function othersOf(id: number): number[] {
+    if (id === WT) return watchTogether.participants;
+    return watchOf(id)?.viewers ?? [];
+  }
   function watching(id: number): number {
     if (id === WT) return watchTogether.participants.length;
     if (self && id === self.session) return share.viewers;
@@ -178,7 +204,7 @@ const self = $derived(session.self);
   // A stream or session that starts is shown, even if an earlier one of the same person was closed
   let knownScreens = new Set<number>();
   $effect(() => {
-    const now = new Set(screenIds);
+    const now = new Set([...screenIds, ...awayCams]);
     untrack(() => { for (const id of now) if (!knownScreens.has(id)) delete hidden[id]; });
     knownScreens = now;
   });
@@ -753,14 +779,48 @@ const self = $derived(session.self);
 {#if voice.error && session.status === 'connected'}<div class="bar bad" role="alert"><span>Voice is not working: {voice.error}</span></div>{/if}
 {#if share.error}<div class="bar bad" role="alert"><span>{share.error}</span><button class="btn" onclick={() => (share.error = '')}>Dismiss</button></div>{/if}
 
+{#snippet viewerList(ids: number[])}
+  <span class="pop" role="list">
+    {#each ids as v (v)}
+      {@const u = session.user(v)}
+      {#if u}
+        <span class="vrow" role="listitem">
+          <Avatar name={u.name} size={22} src={session.avatar(v)} />
+          <span class="vname">{store.displayName(u)}{#if u.channelId !== self?.channelId}<em>{session.channel(u.channelId)?.name || 'Root'}</em>{/if}</span>
+        </span>
+      {/if}
+    {/each}
+  </span>
+{/snippet}
+
 {#snippet controls(id: number)}
   {@const isWT = id === WT}
   {@const isMine = !!self && id === self.session}
   {@const kind = kindOf(id)}
   {@const open = inStack(id)}
   {@const n = watching(id)}
+  {@const away = awayOf(id)}
   <span class="ctl" role="group" aria-label={isWT ? 'Watch together' : kind === 'camera' ? 'Camera' : 'Screen share'}>
-    <span use:tip class="status" role="status" title="{n} watching"><Icon name={kind === 'watch' ? 'tv' : kind} size={14} />{n} watching</span>
+    {#if hostedBySelf(id)}
+      {@const v = viewersOf(id)}
+      <span class="viewers" role="status" tabindex="0" aria-label="{v.inside.length} watching in your room">
+        <span class="status"><Icon name={kind} size={14} />{v.inside.length}</span>
+        {#if v.inside.length}{@render viewerList(v.inside)}{/if}
+      </span>
+      {#if v.outside.length}
+        <span class="vsep" aria-hidden="true"></span>
+        <span class="viewers" role="status" tabindex="0" aria-label="{v.outside.length} watching from other rooms">
+          <span class="status"><Icon name="globe" size={14} />{v.outside.length}</span>
+          {@render viewerList(v.outside)}
+        </span>
+      {/if}
+    {:else}
+    {@const all = othersOf(id)}
+    <span class="viewers" role="status" tabindex="0" aria-label="{all.length || n} watching{away ? `, from ${away}` : ''}">
+      <span class="status"><Icon name={kind} size={14} />{all.length || n}{#if away} · {away}{/if}</span>
+      {#if all.length}{@render viewerList(all)}{/if}
+    </span>
+    {/if}
     {#if open}
       <button use:tip class="icon-btn" title="Toggle picture-in-picture" aria-label="Toggle picture-in-picture" onclick={() => togglePip(id)}><Icon name="popout" size={16} /></button>
       <button use:tip class="icon-btn" title="Full screen" aria-label="Full screen" onclick={() => fullscreen(id)}><Icon name="expand" size={16} /></button>
@@ -862,7 +922,7 @@ const self = $derived(session.self);
               <span class="note">{w.state === 'connecting' ? 'Connecting...' : 'Could not connect'}</span>
             {/if}
             {#if sharing}<span class="badge live"><Icon name={sharing} size={13} /></span>
-            {:else if effectiveWatchTogether}<span class="badge live"><Icon name="screen" size={13} /></span>
+            {:else if effectiveWatchTogether}<span class="badge live"><Icon name="watch" size={13} /></span>
             {:else if u.deaf || u.selfDeaf}
               <span class="badge" class:admin={u.deaf}><Icon name="headphones-off" size={13} /></span>
             {:else if u.mute || u.selfMute || u.suppress}
@@ -989,6 +1049,14 @@ const self = $derived(session.self);
   .bar span { flex: 1; min-width: 0; }
   .bar.bad { color: var(--danger); }
   .bar .btn { padding: 4px 10px; font-size: 12px; flex: none; }
+  .viewers { position: relative; display: inline-flex; align-items: center; outline: none; }
+  .viewers .status { cursor: default; }
+  .vsep { width: 1px; height: 14px; margin: 0 6px 0 2px; background: var(--line); flex: none; }
+  .pop { display: none; position: absolute; left: 100%; top: 50%; transform: translateY(-50%); margin-left: 8px; z-index: 30; flex-direction: column; gap: 6px; padding: 8px 10px; min-width: 140px; max-height: 260px; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.4); }
+  .viewers:hover .pop, .viewers:focus-visible .pop, .viewers:focus-within .pop { display: flex; }
+  .vrow { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--text); font-size: 13px; }
+  .vname { display: flex; flex-direction: column; line-height: 1.15; }
+  .vname em { font-style: normal; font-size: 11px; color: var(--text-dim); }
   .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--speaking); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-right: 4px; }
 
   /* Meeting view: the chosen picture large, everyone in one row below */

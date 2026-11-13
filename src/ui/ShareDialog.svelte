@@ -19,6 +19,7 @@
     if (memoOpen) memoMax = Math.floor((memoEl?.closest('[aria-modal="true"]')?.clientHeight ?? 480) / 2);
   }
   import { ui } from '../lib/ui.svelte.ts';
+  import { sessions } from '../lib/session.svelte.ts';
   import { native } from '../lib/native.ts';
   import { systemAudioTrack } from '../lib/audio/system-feed.ts';
 
@@ -33,7 +34,8 @@
   // Phones have no screen capture in the browser; there the camera is the only choice
   const canScreen = !!navigator.mediaDevices?.getDisplayMedia;
   type DialogKind = ShareKind | 'watch';
-  let kind = $state<DialogKind>('screen');
+  // Each kind has its own menu (the buttons next to the microphone open them); there are no tabs
+  let kind = $state<DialogKind>(share.dialogKind === 'screen' && !canScreen ? 'camera' : share.dialogKind);
   let cameras = $state<MediaDeviceInfo[]>([]);
   let camera = $state('');
   // The system (Windows privacy setting, macOS permission) blocks the camera: offer to open its settings
@@ -432,16 +434,7 @@
   navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
   onDestroy(() => navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange));
 
-  if (!canScreen) showCamera();
-
-  function setKind(next: DialogKind) {
-    if (kind === next) return;
-    kind = next;
-    selected = '';
-    dropPreview();
-    error = '';
-    if (next === 'camera') showCamera();
-  }
+  if (kind === 'camera') showCamera();
 
   // The system's or the browser's picker
   async function chooseElsewhere() {
@@ -615,6 +608,8 @@
       busy = false;
       return;
     }
+    // One session at a time: a Watch Together we host ends when a screen or camera starts
+    if (watchTogether.isHostWithParty) await watchTogether.end();
     handedOver = true;
     share.go(target, preview, usesVirtualMic, kind);
     onclose();
@@ -680,6 +675,10 @@
 
       console.log('[ShareDialog] Calling watchTogether.start');
 
+      // One session at a time: what we share or host makes way for this one
+      if (share.stream) share.stop();
+      if (watchTogether.isHostWithParty) await watchTogether.end();
+
       // Start the watch party
       await watchTogether.start(watchMode, {
         videoId: watchMode === 1 ? youtubeVideoId : undefined,
@@ -703,17 +702,17 @@
   onDestroy(() => { if (!handedOver) dropPreview(); });
 </script>
 
-<Modal title="Share your screen" {onclose} width={760}>
-  <p class="help">Libertad users in your channel can watch. Nothing is sent until you press Start sharing.</p>
+<Modal title={kind === 'camera' ? 'Share your camera' : kind === 'watch' ? 'Watch together' : 'Share your screen'} {onclose} width={760}>
+  <p class="help">Libertad users in your channel can watch (and, with Cross-Room Watching on, other rooms too). Nothing is sent until you press Start sharing.</p>
 
-  <div class="kinds" role="tablist" aria-label="What to share">
-    <button role="tab" aria-selected={kind === 'screen'} class:active={kind === 'screen'} disabled={!canScreen}
-      title={canScreen ? undefined : 'This browser cannot capture the screen'} onclick={() => setKind('screen')}>Screen or window</button>
-    <button role="tab" aria-selected={kind === 'camera'} class:active={kind === 'camera'} onclick={() => setKind('camera')}>Camera</button>
-    <button role="tab" aria-selected={kind === 'watch'} class:active={kind === 'watch'} onclick={() => setKind('watch')}>Watch together</button>
+  <div class="kinds">
+    <label class="cross" title="On: people in other rooms can watch what you share and join your session. Off: only people in your own room can.">
+      <input type="checkbox" bind:checked={store.settings.shareCrossRoom} onchange={() => { set(); share.applyCrossRoom(); for (const x of sessions.list) watchTogether.applyCrossRoom(x); }} />
+      Enable Cross-Room Watching
+    </label>
   </div>
 
-  {#if !canScreen}<p class="help">This browser cannot capture the screen (no browser on Android or iOS can), so only a camera can be shared from here. Watching other people's screens works.</p>{/if}
+  {#if !canScreen && kind === 'screen'}<p class="help">This browser cannot capture the screen (no browser on Android or iOS can). Watching other people's screens works.</p>{/if}
   {#if kind === 'camera'}
     <label for="sh-cam">Camera</label>
     <select id="sh-cam" value={camera} onchange={e => showCamera(e.currentTarget.value)} disabled={!cameras.length}>
@@ -1132,7 +1131,8 @@
   .torrent-files .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .torrent-files .fsize { font-size: 12px; opacity: 0.7; font-variant-numeric: tabular-nums; }
   .help { margin: 8px 0 0; font-size: 13px; color: var(--text-dim); }
-  .kinds { display: flex; gap: 2px; margin-top: 12px; border-bottom: 1px solid var(--line); }
+  .kinds { display: flex; margin-top: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .kinds .cross {  align-self: center; display: flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--text-dim); white-space: nowrap; cursor: pointer; }
   .kinds button { padding: 6px 14px; color: var(--text-dim); font-weight: 600; }
   .kinds button.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
   .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }

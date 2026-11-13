@@ -35,11 +35,14 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
     const win = getWindow();
     const s = state;
     const menu = Menu.buildFromTemplate([
-      { label: win?.isVisible() ? 'Hide Libertad' : 'Show Libertad', click: () => (win?.isVisible() ? win.hide() : show()) },
-      { type: 'separator' },
+      // Clicking the icon shows and hides the window. Some Linux desktops never deliver that click, so there the
+      // menu offers Show while the window is hidden (it is not in the menu otherwise)
+      ...(process.platform === 'linux' && !win?.isVisible()
+        ? [{ label: 'Show Libertad', click: show }, { type: 'separator' as const }]
+        : []),
       { label: s.connected ? `Connected: ${s.server}` : 'Not connected', enabled: false },
-      { label: 'Mute', type: 'checkbox', checked: s.muted, enabled: s.connected, click: () => send('toggle-mute') },
-      { label: 'Deafen', type: 'checkbox', checked: s.deafened, enabled: s.connected, click: () => send('toggle-deafen') },
+      { label: 'Disconnect', enabled: s.connected, click: () => send('disconnect') },
+      { type: 'separator' },
       {
         label: 'Transmit', submenu: [
           { label: 'Voice activity', type: 'radio', checked: s.mode === 'vad', click: () => send('mode:vad') },
@@ -47,8 +50,9 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
           { label: 'Always on', type: 'radio', checked: s.mode === 'continuous', click: () => send('mode:continuous') }
         ]
       },
-      { label: 'Voice settings...', click: () => { show(); send('settings'); } },
-      { label: 'Disconnect', enabled: s.connected, click: () => send('disconnect') },
+      { label: 'Settings', click: () => { show(); send('settings'); } },
+      { label: 'Mute', type: 'checkbox', checked: s.muted, enabled: s.connected, click: () => send('toggle-mute') },
+      { label: 'Deafen', type: 'checkbox', checked: s.deafened, enabled: s.connected, click: () => send('toggle-deafen') },
       { type: 'separator' },
       {
         label: 'Close to tray', type: 'checkbox', checked: closeToTray, click: item => {
@@ -76,7 +80,11 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
     const image = nativeImage.createFromDataURL(next.icon);
     if (!tray) {
       tray = new Tray(image);
-      tray.on('click', show);
+      // Click on the icon: hide the window if it is showing, else bring it back
+      tray.on('click', () => {
+        const win = getWindow();
+        if (win && win.isVisible() && !win.isMinimized()) win.hide(); else show();
+      });
     } else {
       tray.setImage(image);
     }
@@ -84,7 +92,7 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
     rebuild();
   };
 
-  // Keep the Show/Hide label right
+  // Keep the menu right (the Linux Show item follows the window)
   onWindowVisibility = rebuild;
 }
 

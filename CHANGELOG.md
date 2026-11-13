@@ -2,6 +2,26 @@
  
 All notable changes to Libertad.
 
+## 0.4.3 - 2026-11-14
+
+### Fixed:
+
+- Torrent together crashing the app in v0.4.2 (due to memo looping itself).
+
+### Added:
+
+- Cross-room watching, people from other rooms can enter a session in another room, (can be toggled off by host).
+
+### Changed:
+
+- How memo saves stuff.
+- Sessions indicators, Each session has their respective indicator now.
+- Sharing menu, now 3 icons for each type, instead of one big menu.
+- App title bar, added a custom one that follows app appearance instead of system bars.
+- App tray, better arrangement, and toggle tray now actually works.
+- Watching counter, Calculates correctly now, and seperates outside watchers for inside ones (in terms of rooms).
+- Updater Pop-up, now a custom pop-up that follows app appearance instead of system default, and added a progress bar.
+
 ## 0.4.2 - 2026-11-13
 
 ### Fixed:

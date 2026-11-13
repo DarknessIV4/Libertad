@@ -19,22 +19,16 @@
   const muted = $derived(self ? self.selfMute : sessions.mute);
   const deafened = $derived(self ? self.selfDeaf : sessions.deaf);
 
-  function editDescription() {
-    if (!self) return;
-    session.showUser(self.session);
-    ui.editDescription = true;
-    ui.panelOpen = true;
-  }
-
-  // Sharing runs on one server at a time; the button stops it from anywhere
-  // Hosting a watch together session (also while you have left it, until it is ended) counts as sharing: the button ends it
+  // One session at a time (a screen, a camera or a watch together, on one server): its button stops it from
+  // anywhere, and opening another of the three ends the first when the new one starts.
   const hostingWatch = $derived(watchTogether.isHostWithParty);
-  const sharingHere = $derived(!!share.stream || hostingWatch);
+  const screenOn = $derived(!!share.stream && share.kind === 'screen');
+  const cameraOn = $derived(!!share.stream && share.kind === 'camera');
   const canShare = $derived(session.status === 'connected' && share.supported(sessions.active));
-  function toggleShare() {
-    if (hostingWatch) watchTogether.end();
-    else if (share.stream) share.stop();
-    else share.start(sessions.active);
+  function toggle(kind: 'screen' | 'camera' | 'watch') {
+    if (kind === 'watch' ? hostingWatch : kind === 'screen' ? screenOn : cameraOn) {
+      if (kind === 'watch') void watchTogether.end(); else share.stop();
+    } else share.start(sessions.active, kind);
   }
 
   function openQuick(e: MouseEvent, kind: 'input' | 'output') {
@@ -42,6 +36,7 @@
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     ui.quickAudio = { kind, x: r.left + r.width / 2, y: r.top };
   }
+  import CrossRoomToggle from './CrossRoomToggle.svelte';
 </script>
 
 <footer class="me" class:inline>
@@ -75,18 +70,21 @@
       onclick={() => session.setSelfDeaf(!deafened)} oncontextmenu={e => openQuick(e, 'output')}>
       <Icon name={deafened ? 'headphones-off' : 'headphones'} size={18} />
     </button>
-    <button use:tip class="icon-btn" class:live={sharingHere} title={hostingWatch ? 'End watch together' : sharingHere ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
-      aria-label={hostingWatch ? 'End watch together' : sharingHere ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'} disabled={!sharingHere && !canShare} onclick={toggleShare}>
-      <Icon name={sharingHere && !hostingWatch ? share.kind : 'screen'} size={18} />
+    <button use:tip class="icon-btn" class:live={screenOn} disabled={!screenOn && !canShare}
+      title={screenOn ? 'Stop sharing your screen' : 'Share your screen or a window'} aria-label={screenOn ? 'Stop sharing your screen' : 'Share your screen or a window'} onclick={() => toggle('screen')}>
+      <Icon name="screen" size={18} />
     </button>
-    <span class="sep"></span>
-    <button class="icon-btn" title="Change your description" aria-label="Change your description" disabled={!self} onclick={editDescription}>
-      <Icon name="message" size={18} />
+    {#if screenOn}<CrossRoomToggle />{/if}
+    <button use:tip class="icon-btn" class:live={cameraOn} disabled={!cameraOn && !canShare}
+      title={cameraOn ? 'Stop sharing your camera' : 'Share your camera'} aria-label={cameraOn ? 'Stop sharing your camera' : 'Share your camera'} onclick={() => toggle('camera')}>
+      <Icon name="camera" size={18} />
     </button>
-    <span class="sep"></span>
-    <button class="icon-btn" title="Configure" aria-label="Configure" onclick={() => (ui.settingsOpen = true)}>
-      <Icon name="settings" size={18} />
+    {#if cameraOn}<CrossRoomToggle />{/if}
+    <button use:tip class="icon-btn" class:live={hostingWatch} disabled={!hostingWatch && !canShare}
+      title={hostingWatch ? 'End watch together' : 'Start a watch together'} aria-label={hostingWatch ? 'End watch together' : 'Start a watch together'} onclick={() => toggle('watch')}>
+      <Icon name="watch" size={18} />
     </button>
+    {#if hostingWatch}<CrossRoomToggle />{/if}
   </div>
 </footer>
 

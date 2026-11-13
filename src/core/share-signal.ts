@@ -11,7 +11,8 @@ export const SHARE = {
   leave: 5,   // I stopped watching
   offer: 6,   // session description from the sharer
   answer: 7,  // session description from the viewer
-  quality: 8  // viewer to sharer: the most I want to receive, { fps, height } (0 = no cap)
+  quality: 8, // viewer to sharer: the most I want to receive, { fps, height } (0 = no cap)
+  viewers: 9  // sharer to its viewers: who is watching, a JSON list of session ids
 } as const;
 export type ShareType = typeof SHARE[keyof typeof SHARE];
 

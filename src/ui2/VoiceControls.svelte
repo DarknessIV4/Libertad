@@ -5,6 +5,7 @@
   import { ui } from '../lib/ui.svelte.ts';
   import { share } from '../lib/share.svelte.ts';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
+  import CrossRoomToggle from '../ui/CrossRoomToggle.svelte';
 
   // Mute, deafen and share. large: the voice screen's row of big buttons with labels.
   let { large = false }: { large?: boolean } = $props();
@@ -15,7 +16,8 @@
   const deafened = $derived(self ? self.selfDeaf : sessions.deaf);
   // Hosting a watch together session (also while you have left it, until it is ended) counts as sharing: the button ends it
   const hostingWatch = $derived(watchTogether.isHostWithParty);
-  const sharing = $derived(!!share.stream || hostingWatch);
+  const screenOn = $derived(!!share.stream && share.kind === 'screen');
+  const cameraOn = $derived(!!share.stream && share.kind === 'camera');
   const canShare = $derived(session.status === 'connected' && share.supported(sessions.active));
 
   function quick(e: MouseEvent, kind: 'input' | 'output') {
@@ -37,12 +39,24 @@
     {#if large}<span>{deafened ? 'Deafened' : 'Deafen'}</span>{/if}
   </button>
   {#if large}
-    <button use:tip class:live={sharing} disabled={!sharing && !canShare} aria-label={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera'}
-      title={hostingWatch ? 'End watch together' : sharing ? `Stop sharing your ${share.kind}` : 'Share your screen or camera with your channel'}
-      onclick={() => (hostingWatch ? watchTogether.end() : sharing ? share.stop() : share.start(sessions.active))}>
-      <Icon name={sharing && !hostingWatch ? share.kind : 'screen'} size={24} />
-      <span>{hostingWatch ? 'End watch' : sharing ? 'Stop sharing' : 'Share'}</span>
+    <button use:tip class:live={screenOn} disabled={!screenOn && !canShare} aria-label={screenOn ? 'Stop sharing your screen' : 'Share your screen'}
+      title={screenOn ? 'Stop sharing your screen' : 'Share your screen or a window'}
+      onclick={() => (screenOn ? share.stop() : share.start(sessions.active, 'screen'))}>
+      <Icon name="screen" size={24} /><span>{screenOn ? 'Stop screen' : 'Screen'}</span>
     </button>
+    {#if screenOn}<CrossRoomToggle large />{/if}
+    <button use:tip class:live={cameraOn} disabled={!cameraOn && !canShare} aria-label={cameraOn ? 'Stop sharing your camera' : 'Share your camera'}
+      title={cameraOn ? 'Stop sharing your camera' : 'Share your camera'}
+      onclick={() => (cameraOn ? share.stop() : share.start(sessions.active, 'camera'))}>
+      <Icon name="camera" size={24} /><span>{cameraOn ? 'Stop camera' : 'Camera'}</span>
+    </button>
+    {#if cameraOn}<CrossRoomToggle large />{/if}
+    <button use:tip class:live={hostingWatch} disabled={!hostingWatch && !canShare} aria-label={hostingWatch ? 'End watch together' : 'Start a watch together'}
+      title={hostingWatch ? 'End watch together' : 'Start a watch together'}
+      onclick={() => (hostingWatch ? watchTogether.end() : share.start(sessions.active, 'watch'))}>
+      <Icon name="watch" size={24} /><span>{hostingWatch ? 'End watch' : 'Watch'}</span>
+    </button>
+    {#if hostingWatch}<CrossRoomToggle large />{/if}
   {/if}
 </div>
 

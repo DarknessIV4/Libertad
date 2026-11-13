@@ -362,6 +362,20 @@ ipcMain.on('tray:update', (_e, state: tray.TrayState) => tray.update(state));
 
 ipcMain.handle('platform:info', () => ({ os: process.platform, osVersion: os.release() }));
 
+// The title bar the page draws on Linux and Windows (see createWindow); its buttons act on the window that asked
+const customFrame = process.platform !== 'darwin';
+ipcMain.handle('window:minimize', e => { BrowserWindow.fromWebContents(e.sender)?.minimize(); });
+ipcMain.handle('window:toggleMaximize', e => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w) { if (w.isMaximized()) w.unmaximize(); else w.maximize(); }
+});
+// Closing goes through the window's close handler, so closing to the tray still works
+ipcMain.handle('window:close', e => { BrowserWindow.fromWebContents(e.sender)?.close(); });
+ipcMain.handle('window:state', e => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  return { maximized: !!w?.isMaximized(), fullscreen: !!w?.isFullScreen() };
+});
+
 ipcMain.handle('window:setFullScreen', (_e, fullscreen: boolean) => {
   if (mainWindow) mainWindow.setFullScreen(fullscreen);
 });
@@ -396,6 +410,8 @@ function createWindow() {
     title: 'Libertad',
     // Window and taskbar icon on Linux (Windows and macOS take it from the package)
     icon: path.join(__dirname, '../dist/icon.png'),
+    // Linux and Windows: no system title bar, the page draws its own (src/ui/TitleBar.svelte); macOS keeps its own
+    frame: !customFrame,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -415,11 +431,11 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url, frameName }) => {
     // The stream window: an empty page the app fills with the video itself
     if (frameName === 'libertad-stream' && (url === 'about:blank' || url === '')) {
-      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', autoHideMenuBar: true, title: 'Libertad' } };
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', frame: true, autoHideMenuBar: true, title: 'Libertad' } };
     }
     // The pop-out windows: YouTube, and one for each screen, camera or watch together picture
     if ((frameName === 'libertad-watch' || frameName.startsWith('libertad-pop-')) && (url === 'about:blank' || url === '')) {
-      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', autoHideMenuBar: true, title: 'Libertad Watch Together' } };
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', frame: true, autoHideMenuBar: true, title: 'Libertad Watch Together' } };
     }
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -437,10 +453,19 @@ function createWindow() {
   });
 
   mainWindow = win;
+  // The page draws the title bar, so it is told when the window is maximized or full screen
+  const sendState = () => { if (!win.isDestroyed()) win.webContents.send('window:state', { maximized: win.isMaximized(), fullscreen: win.isFullScreen() }); };
+  win.on('maximize', sendState);
+  win.on('unmaximize', sendState);
+  win.on('enter-full-screen', sendState);
+  win.on('leave-full-screen', sendState);
   win.on('close', e => {
     if (tray.shouldHideOnClose()) {
       e.preventDefault();
       win.hide();
+    } else if (process.platform !== 'darwin') {
+      // Close to tray is off: closing the window quits the whole app, pop-out windows included
+      tray.quitApp();
     }
   });
   // No default menu in Electron: report what was right-clicked, the renderer shows its own menu

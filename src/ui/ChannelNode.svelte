@@ -287,12 +287,12 @@
                 <span class="state watch-together host" role="button" tabindex="0" title="Hosting watch together: {wt.title}. Click to open controls, double-click to rejoin" aria-label="Hosting watch together: {wt.title}"
                   onclick={e => { e.stopPropagation(); watchTogether.focus(); }}
                   ondblclick={e => { e.stopPropagation(); if (watchTogether.isHostWithParty) watchTogether.join(u.session); }}
-                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="screen" size={14} /></span>
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="watch" size={14} /></span>
               {:else}
                 <span class="state watch-together" role="button" tabindex="0" title="Watching together: {wt.title}. Click to join, double-click to open" aria-label="Join watch together: {wt.title}"
                   onclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
                   ondblclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
-                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="screen" size={14} /></span>
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="watch" size={14} /></span>
               {/if}
             {/if}
             {#if u.comment ? stripBanner(u.comment).trim() : u.commentHash}<span class="state" title="Has a description"><Icon name="message" size={12} /></span>{/if}

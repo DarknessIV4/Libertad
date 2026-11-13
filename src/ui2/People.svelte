@@ -1,7 +1,8 @@
 <script lang="ts">
   import Icon from '../ui/Icon.svelte';
   import Avatar from '../ui/Avatar.svelte';
-  import { session } from '../lib/session.svelte.ts';
+  import { session, sessions } from '../lib/session.svelte.ts';
+  import { share } from '../lib/share.svelte.ts';
   import { store } from '../lib/settings.svelte.ts';
   import { menu } from '../lib/menu.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
@@ -59,15 +60,23 @@
                   <span class="state watch-together host" role="button" tabindex="0" title="Hosting watch together: {wt.title}. Click to open controls, double-click to rejoin" aria-label="Hosting watch together: {wt.title}"
                     onclick={e => { e.stopPropagation(); watchTogether.focus(); }}
                     ondblclick={e => { e.stopPropagation(); if (watchTogether.isHostWithParty) watchTogether.join(u.session); }}
-                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="screen" size={14} /></span>
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.focus(); } }}><Icon name="watch" size={14} /></span>
                 {:else}
                   <span class="state watch-together" role="button" tabindex="0" title="Watching together: {wt.title}. Click to join, double-click to open" aria-label="Join watch together: {wt.title}"
                     onclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
                     ondblclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
-                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="screen" size={14} /></span>
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="watch" size={14} /></span>
                 {/if}
               {:else if session.sharing[u.session]}
-                <span class="state sharing" title="Sharing their {session.sharing[u.session]}"><Icon name={session.sharing[u.session]} size={14} /></span>
+                {@const kind = session.sharing[u.session]}
+                {#if me}
+                  <span class="state sharing" title="You are sharing your {kind}"><Icon name={kind} size={14} /></span>
+                {:else}
+                  <!-- From any room: the stream comes to wherever you are -->
+                  <span class="state sharing" role="button" tabindex="0" title="Sharing their {kind}. Click to watch" aria-label="Watch the {kind} of {store.displayName(u)}"
+                    onclick={e => { e.stopPropagation(); share.watch(sessions.active, u.session); }}
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); share.watch(sessions.active, u.session); } }}><Icon name={kind} size={14} /></span>
+                {/if}
               {:else if u.deaf || u.selfDeaf}
                 <span class="state" title="Deafened"><Icon name="headphones-off" size={14} /></span>
               {:else if u.mute || u.selfMute || u.suppress}
@@ -109,6 +118,8 @@
   .sub { font-size: 13px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .icon-btn { flex: none; width: 40px; height: 40px; }
   .none { padding: 12px 8px; color: var(--text-dim); }
+  .state.sharing { color: var(--speaking); }
+  .state.sharing[role=button]:hover { background: var(--bg-active); }
   .state.watch-together { color: var(--speaking); }
   .state.watch-together.host { color: var(--success); }
   .state.watch-together:hover { background: var(--bg-active); }

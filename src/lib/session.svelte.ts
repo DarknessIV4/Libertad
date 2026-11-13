@@ -421,7 +421,7 @@ export class Session {
       this.lastChannel.set(user.session, user.channelId);
       if (client.synced && self && (isNew || changed.includes('channelId'))) {
         if (user.session === self.session) {
-          share.entered(this); watchTogether.selfMoved(this); watchTogether.entered(this);
+          share.moved(this); watchTogether.selfMoved(this); watchTogether.entered(this, true);
           // Not while a channel is still being entered on start: that would overwrite where we are going
           if (this.server && !this.autoJoin) store.rememberChannel(this.server.id, user.channelId, client.channels.get(user.channelId)?.name ?? '');
         }

@@ -4,7 +4,7 @@
 //  - Windows: the release's installer (.exe) is downloaded and opened, so the user can reinstall.
 //  - Anything else (deb, tar.gz, macOS, a development run): only reports the new version and opens the release page.
 // No electron-updater: it needs latest.yml files that a hand-made release does not have.
-import { app, dialog, shell, type BrowserWindow } from 'electron';
+import { app, shell, type BrowserWindow } from 'electron';
 import { promises as fs, createWriteStream, createReadStream, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -142,20 +142,17 @@ export async function installUpdate(progress: (done: number, total: number) => v
   } finally { busy = false; }
 }
 
-// At start-up: check, and ask before fetching anything
-export async function checkOnStartup(win: () => BrowserWindow | null, progress: (done: number, total: number) => void): Promise<void> {
+// At start-up: check, and tell the window, which asks (UpdateDialog.svelte, in the app's own look) before
+// anything is fetched. The window answers through update:install, and shows the progress it is sent.
+export async function checkOnStartup(win: () => BrowserWindow | null, _progress: (done: number, total: number) => void): Promise<void> {
   if (!app.isPackaged) return;
   let info: UpdateInfo;
   try { info = await checkForUpdate(); } catch { return; }
   if (!info.available) return;
   const w = win();
-  const opts = {
-    type: 'question' as const, buttons: ['Yes', 'No'], defaultId: 0, cancelId: 1, title: 'Update available',
-    message: `Libertad ${info.latest} is available (you have ${info.current}).`,
-    detail: info.kind === 'manual' ? 'Open the download page?' : 'Download and update now?'
-  };
-  const r = w ? await dialog.showMessageBox(w, opts) : await dialog.showMessageBox(opts);
-  if (r.response !== 0) return;
-  try { await installUpdate(progress); }
-  catch (e) { await dialog.showErrorBox('Update failed', (e as Error).message); }
+  if (!w || w.isDestroyed()) return;
+  // The old popup showed even with the window hidden in the tray, so the window is shown for the question
+  if (!w.isVisible()) w.show();
+  const send = () => { if (!w.isDestroyed()) w.webContents.send('update:available', info); };
+  if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send); else send();
 }

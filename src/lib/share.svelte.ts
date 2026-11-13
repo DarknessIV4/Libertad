@@ -113,6 +113,11 @@ export interface Watching {
   kind: ShareKind;
   stream: MediaStream | null;
   state: 'connecting' | 'live' | 'failed';
+  // A camera that came on by itself because its owner is in our room. It goes when one of us leaves
+  // the room; a stream the person asked for (a click on the indicator) stays until they stop it.
+  auto?: boolean;
+  // Who watches this stream, as the sharer tells us (session ids, ourselves among them)
+  viewers?: number[];
 }
 
 class ScreenShare {
@@ -188,6 +193,27 @@ class ScreenShare {
     return !!self && s.client!.users.get(session)?.channelId === self.channelId;
   }
 
+  // Cross-room watching: with it off, what we share is for our own room only
+  private crossRoom(): boolean { return store.settings.shareCrossRoom !== false; }
+  private allowed(s: Session, session: number): boolean { return this.crossRoom() || this.inMyChannel(s, session); }
+
+  // Tell the server who may see our stream: everybody, or only our room (the others are told it is off,
+  // and any of them already watching is cut off)
+  private announce(s: Session): void {
+    if (this.host !== s) return;
+    const all = this.everyone(s);
+    const yes = all.filter(id => this.allowed(s, id));
+    const no = all.filter(id => !yes.includes(id));
+    this.send(s, yes, SHARE.on, this.kind);
+    this.send(s, no, SHARE.off);
+    for (const id of no) { this.caps.delete(id); this.dropPeer(id); }
+  }
+
+  // The switch in the sharing dialog was changed
+  applyCrossRoom(): void {
+    if (this.host?.client) this.announce(this.host);
+  }
+
   private async send(s: Session, to: number[], type: ShareType, text?: string): Promise<void> {
     if (!to.length) return;
     // The setup messages skip the queue that paces plugin data: they are a handful of packets, and
@@ -203,7 +229,7 @@ class ScreenShare {
       let answered = false;
       ui.prompt = {
         title: 'Screen sharing', label: '', confirm: 'Continue', input: 'none',
-        text: 'Screen sharing connects you directly to other participants in this channel. You see each other\'s IP address. Only Libertad users in your channel can watch.',
+        text: 'Screen sharing connects you directly to the people watching. You see each other\'s IP address. Any Libertad user on this server can watch a stream from another room by clicking its indicator.',
         onsubmit: () => { answered = true; store.settings.shareNoticeSeen = true; store.saveSettings(); resolve(true); },
         oncancel: () => { if (!answered) resolve(false); }
       };
@@ -211,9 +237,13 @@ class ScreenShare {
   }
 
   // Opens the dialog where the source, the sound and the quality are chosen
-  async start(s: Session): Promise<void> {
-    if (this.stream || this.dialog || !this.supported(s) || !(await this.notice())) return;
+  // kind: which menu it is. The screen, the camera and Watch Together each have their own. Opening one
+  // while another runs is fine: the running one ends when the new one starts.
+  dialogKind = $state<'screen' | 'camera' | 'watch'>('screen');
+  async start(s: Session, kind: 'screen' | 'camera' | 'watch' = 'screen'): Promise<void> {
+    if (this.dialog || !this.supported(s) || !(await this.notice())) return;
     this.error = '';
+    this.dialogKind = kind;
     this.dialog = s;
   }
 
@@ -221,11 +251,13 @@ class ScreenShare {
   go(s: Session, stream: MediaStream, usesVirtualMic: boolean, kind: ShareKind = 'screen'): void {
     this.dialog = null;
     // Disconnected while the dialog was open
-    if (!s.client || this.stream) {
+    if (!s.client) {
       stream.getTracks().forEach(t => t.stop());
       if (usesVirtualMic) desktop?.shareAudioStop();
       return;
     }
+    // One session at a time: the screen or camera that was on makes way
+    if (this.stream) this.stop();
     // What was chosen when sharing started holds for the whole stream
     this.cfg = shareSettings();
     for (const t of stream.getVideoTracks()) {
@@ -249,7 +281,7 @@ class ScreenShare {
       this.preview = this.makePreview(stream);
       if (store.settings.shareDynamicFps) this.watchMotion(stream);
     }
-    this.send(s, this.everyone(s), SHARE.on, kind);
+    this.announce(s);
     s.setSharing(s.client.session!, kind);
     sounds.play('shareStarted');
   }
@@ -441,8 +473,15 @@ class ScreenShare {
     this.peers.get(session)?.close();
     this.peers.delete(session);
     if (this.live.delete(session)) sounds.play('viewerLeft');
+    this.setViewers();
+  }
+
+  // Who watches us: kept here and told to the viewers, who show it on their indicator
+  private setViewers(): void {
     this.viewers = this.peers.size;
     this.viewerSessions = [...this.peers.keys()];
+    const s = this.host;
+    if (s?.client && this.viewerSessions.length) void this.send(s, this.viewerSessions, SHARE.viewers, JSON.stringify(this.viewerSessions));
   }
 
   // The first screen being watched, if any
@@ -472,13 +511,28 @@ class ScreenShare {
     else { delete this.hidden[key]; this.watch(s, session); }
   }
   private autoWatch(s: Session, session: number): void {
-    if (this.cams && store.settings.shareNoticeSeen && this.inMyChannel(s, session) && s.sharing[session] === 'camera' && !this.isHidden(s, session)) this.watch(s, session);
+    if (this.cams && store.settings.shareNoticeSeen && this.inMyChannel(s, session) && s.sharing[session] === 'camera' && !this.isHidden(s, session)) void this.watch(s, session, true);
   }
 
-  async watch(s: Session, session: number): Promise<void> {
+  // Whether the room somebody is in lets us in. Watching from another room is allowed, but not
+  // into a room the server keeps us out of (the server cannot enforce it for a stream, this is
+  // the client being polite).
+  private roomOpen(s: Session, session: number): boolean {
+    const u = s.client?.users.get(session);
+    const ch = u && s.client?.channels.get(u.channelId);
+    return !ch || ch.canEnter;
+  }
+
+  // From any room of the server: click the indicator of someone who shares and the stream comes to
+  // wherever we are. auto: started by the app (cameras of our own room), not by the person.
+  async watch(s: Session, session: number, auto = false): Promise<void> {
     const kind = s.sharing[session];
-    // Only somebody in our own room can be watched; in another room the indicator just shows who shares
-    if (!this.supported(s) || !kind || !this.inMyChannel(s, session) || this.watchOf(session) || !(await this.notice())) return;
+    if (!this.supported(s) || !kind || this.watchOf(session)) return;
+    if (!auto && !this.roomOpen(s, session)) {
+      this.error = 'You are not allowed in that room, so you cannot watch from it.';
+      return;
+    }
+    if (!(await this.notice())) return;
     // Streams from another server make way; screens and cameras of this one add up
     for (const w of this.watches) if (w.host !== s) this.unwatch(w.session);
     if (kind === 'camera' && this.watches.filter(w => w.kind === 'camera').length >= MAX_CAMERAS) return;
@@ -489,7 +543,7 @@ class ScreenShare {
     if (!s.sharing[session] || this.watchOf(session)) return;
     // Asking for it shows it again
     delete this.hidden[this.who(s, session)];
-    this.watches = [...this.watches, { host: s, session, kind, stream: null, state: 'connecting' }];
+    this.watches = [...this.watches, { host: s, session, kind, stream: null, state: 'connecting', ...(auto ? { auto: true } : {}) }];
     if (kind === 'screen' && this.stream && this.kind === 'screen' && this.host === s) this.asideRequest++;
     this.send(s, [session], SHARE.watch);
     this.watchTimers.set(session, setTimeout(() => this.setWatchState(session, 'failed'), 20000));
@@ -554,8 +608,7 @@ class ScreenShare {
     if (this.peers.size >= MAX_VIEWERS) return;
     const pc = new RTCPeerConnection(config);
     this.peers.set(viewer, pc);
-    this.viewers = this.peers.size;
-    this.viewerSessions = [...this.peers.keys()];
+    this.setViewers();
     pc.addEventListener('connectionstatechange', () => {
       if (this.peers.get(viewer) !== pc) return;
       if (pc.connectionState === 'connected' && !this.live.has(viewer)) {
@@ -641,10 +694,10 @@ class ScreenShare {
     let assembler = this.assemblers.get(s);
     if (!assembler) this.assemblers.set(s, assembler = new ShareAssembler());
     const msg = await assembler.push(sender, data);
-    // Only people in our channel take part
-    // Who shares is announced to the whole server; everything else (watching) is for the channel
-    const open = msg?.type === SHARE.on || msg?.type === SHARE.off || msg?.type === SHARE.who;
-    if (!msg || !s.client || (!open && !this.inMyChannel(s, sender))) return;
+    // Anyone on the server may take part: a viewer can be in another room than the sharer. What each
+    // signal may do is checked where it is used (an offer only counts from someone we asked to
+    // watch, an answer only from a viewer we sent an offer to, a request only reaches a sharer).
+    if (!msg || !s.client) return;
     switch (msg.type) {
       case SHARE.on:
         if (!s.sharing[sender] && this.inMyChannel(s, sender) && Date.now() - (this.enteredAt.get(s) ?? 0) > 3000) sounds.play('shareStarted');
@@ -656,12 +709,22 @@ class ScreenShare {
         s.setSharing(sender, false);
         if (this.watchOf(sender)?.host === s) this.endWatch(sender);
         break;
-      case SHARE.who: if (this.host === s) this.send(s, [sender], SHARE.on, this.kind); break;
-      case SHARE.watch: if (this.host === s) this.offerTo(s, sender).catch(() => this.dropPeer(sender)); break;
+      case SHARE.who: if (this.host === s && this.allowed(s, sender)) this.send(s, [sender], SHARE.on, this.kind); break;
+      case SHARE.watch: if (this.host === s && this.allowed(s, sender)) this.offerTo(s, sender).catch(() => this.dropPeer(sender)); break;
       case SHARE.leave: if (this.host === s) { this.caps.delete(sender); this.dropPeer(sender); } break;
       case SHARE.quality:
         if (this.host === s) { this.caps.set(sender, parseCap(msg.text)); this.reshape(sender); }
         break;
+      case SHARE.viewers: {
+        // Only from the sharer we watch
+        const w = this.watchOf(sender);
+        if (!w || w.host !== s || !msg.text) break;
+        try {
+          const ids = JSON.parse(msg.text);
+          if (Array.isArray(ids)) this.watches = this.watches.map(x => x.session === sender ? { ...x, viewers: ids.filter((i: unknown): i is number => typeof i === 'number').slice(0, 64) } : x);
+        } catch { /* not a list: ignored */ }
+        break;
+      }
       case SHARE.offer: if (msg.text) this.answerTo(s, sender, msg.text); break;
       case SHARE.answer:
         if (this.host === s && msg.text) this.peers.get(sender)?.setRemoteDescription({ type: 'answer', sdp: msg.text }).catch(() => this.dropPeer(sender));
@@ -669,7 +732,7 @@ class ScreenShare {
     }
   }
 
-  // We connected or moved: ask who is sharing here, and tell the new channel about our stream
+  // We connected: ask who is sharing, and tell the server about our stream
   entered(s: Session): void {
     if (!this.supported(s)) return;
     const self = s.client!.session!;
@@ -679,26 +742,48 @@ class ScreenShare {
     if (this.host === s) {
       this.dropPeers();
       s.setSharing(self, this.kind);
-      this.send(s, this.everyone(s), SHARE.on, this.kind);
+      this.announce(s);
     }
     this.send(s, this.everyone(s), SHARE.who);
+  }
+
+  // We moved to another room. Who shares is known server-wide and streams do not depend on rooms,
+  // so what we watch and what we send carry on. Only cameras that came on by themselves belong to
+  // a room: those of the old room go, those of the new one come on.
+  moved(s: Session): void {
+    if (!this.supported(s)) return;
+    this.enteredAt.set(s, Date.now());
+    for (const w of this.watches) if (w.host === s && w.auto && !this.inMyChannel(s, w.session)) this.unwatch(w.session);
+    if (this.host === s) this.announce(s);
+    for (const session of Object.keys(s.sharing)) if (Number(session) !== s.client?.session) this.autoWatch(s, Number(session));
   }
 
   // Someone else connected, moved or left
   userMoved(s: Session, user: User, gone = false): void {
     if (!s.client?.self || user.session === s.client.session) return;
-    if (!gone && this.inMyChannel(s, user.session)) {
-      if (this.host === s) this.send(s, [user.session], SHARE.on, this.kind);
-      return;
-    }
-    // A sharer who disconnected is gone. One who only moved to another room goes on sharing and
-    // says so again from there, so their indicator stays; our stream of them is over, though
     if (gone) {
+      // A sharer who disconnected is gone, and so is whoever watched us from the same connection
       if (s.sharing[user.session]) sounds.play('shareStopped');
       s.setSharing(user.session, false);
+      if (this.host === s) { this.caps.delete(user.session); this.dropPeer(user.session); }
+      if (this.watchOf(user.session)?.host === s) this.endWatch(user.session);
+      return;
     }
-    if (this.host === s) { this.caps.delete(user.session); this.dropPeer(user.session); }
-    if (this.watchOf(user.session)?.host === s) this.endWatch(user.session);
+    if (this.inMyChannel(s, user.session)) {
+      // Somebody came into our room: tell them what we share, and turn on their camera if it is on
+      if (this.host === s) this.send(s, [user.session], SHARE.on, this.kind);
+      this.autoWatch(s, user.session);
+      return;
+    }
+    // They went to another room: with cross-room watching off, what we share is not for them any more
+    if (this.host === s && !this.allowed(s, user.session)) {
+      this.send(s, [user.session], SHARE.off);
+      this.caps.delete(user.session); this.dropPeer(user.session);
+    }
+    // Whoever shares there goes on sharing, and whoever watches us goes
+    // on watching, except a camera that only came on because we were together.
+    const w = this.watchOf(user.session);
+    if (w?.host === s && w.auto) this.unwatch(user.session);
   }
 
   closed(s: Session): void {

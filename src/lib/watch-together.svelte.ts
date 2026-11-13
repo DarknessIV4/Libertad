@@ -10,6 +10,7 @@ import { files } from './files.svelte.ts';
 import { validMeta, type FileMeta as SharedFile } from '../core/file-transfer.ts';
 import { validTorrentMeta, validTorrentQueue, type TorrentMeta } from '../core/torrent-meta.ts';
 import { desktop } from './native.ts';
+import { store } from './settings.svelte.ts';
 
 export type { WatchMode };
 
@@ -262,15 +263,16 @@ class WatchTogether {
     return !!s.client && s.client.serverVersionNum >= 0x010400;
   }
 
-  // Add people to the session's list (only those here in the channel, and always ourselves)
-  private addParticipants(s: Session, ids: unknown): void {
+  // Add people to the session's list: ourselves, those here in the room and, when the host said
+  // so (vouched), anyone on the server (the members of a session can be in other rooms)
+  private addParticipants(s: Session, ids: unknown, vouched = false): void {
     const party = this.getParty(s);
     if (!party || !Array.isArray(ids)) return;
     const me = s.self?.session;
     const next = [...party.participants];
     for (const id of ids) {
       if (typeof id !== 'number' || next.includes(id)) continue;
-      if (id === me || this.inMyChannel(s, id)) next.push(id);
+      if (id === me || (vouched ? s.client?.users.has(id) : this.inMyChannel(s, id))) next.push(id);
     }
     if (next.length === party.participants.length) return;
     party.participants = next;
@@ -295,6 +297,27 @@ class WatchTogether {
     return s.client ? [...s.client.users.values()].filter(u => u.session !== me).map(u => u.session) : [];
   }
 
+  // Cross-room watching: with it off, a session is for the host's own room only
+  private crossRoom(): boolean { return store.settings.shareCrossRoom !== false; }
+
+  // The switch in the sharing dialog was changed: off sends everybody outside the host's room out of the
+  // session (and takes the indicator from their lists); on shows the indicator to the other rooms again
+  applyCrossRoom(s: Session): void {
+    const party = this.getParty(s);
+    if (!party || !this.isHostFor(s) || this.getState(s) === 'idle') return;
+    if (this.crossRoom()) { this.announceOutside(s, party, this.outsiders(s)); return; }
+    this.expelOutsiders(s, party);
+  }
+
+  private expelOutsiders(s: Session, party: WatchParty): void {
+    const out = this.outsiders(s);
+    if (!out.length) return;
+    party.participants = party.participants.filter(id => !out.includes(id));
+    this.setParty(s, party);
+    void this.sendWatchSignal(WATCH.end, {}, s, out, true);
+    if (party.meta.mode === 2) for (const id of out) void watchFileStream.dropViewer(s, id);
+  }
+
   private outsiders(s: Session): number[] {
     const me = s.self?.session;
     const ch = s.self?.channelId;
@@ -312,6 +335,54 @@ class WatchTogether {
     const senderUser = s.client?.users.get(sender);
     const result = !!self && senderUser?.channelId === self.channelId;
     return result;
+  }
+
+  // Somebody who is in the session with us: its host, or one the session lists
+  private inParty(s: Session, sender: number): boolean {
+    const party = this.getParty(s);
+    return !!party && (party.hostSession === sender || party.participants.includes(sender));
+  }
+
+  // We are in a session whose host sits in another room. Then only the session's own members are
+  // heard, not the people of the room we happen to be in (they may run a session of their own).
+  private remoteViewing(s: Session): boolean {
+    const party = this.getParty(s);
+    return !!party && this.getState(s) !== 'idle' && party.hostSession !== s.self?.session && !this.inMyChannel(s, party.hostSession);
+  }
+
+  // Whether the room somebody is in lets us in. A session can be joined from another room, but not
+  // one of a room the server keeps us out of (the server cannot enforce this for a session: it is
+  // the client being polite).
+  private roomOpen(s: Session, session: number): boolean {
+    const u = s.client?.users.get(session);
+    const ch = u && s.client?.channels.get(u.channelId);
+    return !ch || ch.canEnter;
+  }
+
+  // May this sender's signal be acted on? The start, the end and the question who hosts are for
+  // everybody. Otherwise the session's members are heard wherever they are, and so is our own room
+  // (unless we watch a session from another room).
+  private accepts(s: Session, sender: number, type: number): boolean {
+    if (type === WATCH.start || type === WATCH.end || type === WATCH.who) return true;
+    if (this.inParty(s, sender)) return true;
+    if (this.inMyChannel(s, sender) && !this.remoteViewing(s)) return true;
+    // Joining comes from any room: to the host, and between the members of the session
+    if (type === WATCH.join) return (!!this.getParty(s) && this.isHostFor(s)) || this.getState(s) !== 'idle';
+    return false;
+  }
+
+  // Who a signal of the session goes to: our room (the session's people sit there, whoever has not
+  // joined ignores it) and the session's members in other rooms. Watching a session from another
+  // room, our room is not part of it: only its members get anything.
+  private targets(s: Session): number[] {
+    const set = new Set<number>();
+    if (!this.remoteViewing(s) && s.self) for (const u of s.usersIn(s.self.channelId)) set.add(u.session);
+    const party = this.getParty(s);
+    const me = s.self?.session;
+    if (party && this.getState(s) !== 'idle') {
+      for (const id of [party.hostSession, ...party.participants]) if (id !== me && s.client?.users.has(id)) set.add(id);
+    }
+    return [...set];
   }
 
   // Get per-session state
@@ -726,7 +797,7 @@ class WatchTogether {
 
     // Announce watch together session to others in the channel, and on the host's name in the other rooms
     s.setWatchTogether(self.session, { mode, title: options.title });
-    this.announceOutside(s, party, this.outsiders(s));
+    if (this.crossRoom()) this.announceOutside(s, party, this.outsiders(s));
   }
 
   async join(hostSession: number) {
@@ -739,8 +810,14 @@ class WatchTogether {
       return;
     }
     if (this.getState(s) !== 'idle') return;
-    // A host in another room shows the indicator only; the party is for the room
-    if (!this.inMyChannel(s, hostSession)) return;
+    // The host may be in another room: the indicator on their name is the invitation. Without one
+    // there is nothing to join.
+    const announced = s.watchTogether[hostSession];
+    if (!this.inMyChannel(s, hostSession) && !announced) return;
+    if (!this.roomOpen(s, hostSession)) {
+      ui.prompt = { title: 'Watch Together', label: 'You are not allowed in that room, so you cannot join from it.', confirm: 'OK', input: 'none', onsubmit: () => {} };
+      return;
+    }
 
     // Don't join our own session
     if (hostSession === s.self?.session) {
@@ -748,15 +825,20 @@ class WatchTogether {
       return;
     }
 
+    // The host of a party we left cannot join another one before ending their own
+    if (existingParty && this.isHostFor(s)) return;
+    // An offer of another host (made when we came into the room) is not the one we join now
+    if (existingParty && existingParty.hostSession !== hostSession) this.setParty(s, null);
+
     // Use existing party if available (created by handleStart), otherwise create new
-    let party = existingParty;
+    let party = this.getParty(s);
     let isNewParty = false;
     if (!party) {
       isNewParty = true;
       party = {
         host: s,
         hostSession,
-        meta: { mode: 1, title: 'Watch Together' }, // will be updated from state response
+        meta: { mode: announced?.mode ?? 1, title: announced?.title ?? 'Watch Together' }, // will be updated from state response
         positionMs: 0,
         playing: false,
         participants: [hostSession],
@@ -1164,7 +1246,7 @@ class WatchTogether {
         this.handleStart(s, body as any, fromSession);
         break;
       case WATCH.join:
-        this.handleJoin(s, fromSession);
+        this.handleJoin(s, fromSession, body as { note?: boolean });
         break;
       case WATCH.leave:
         // Don't handle our own leave signals
@@ -1227,7 +1309,7 @@ class WatchTogether {
       const decoded = decodeFileChunk(data);
       if (decoded) {
         // Handle raw binary chunk directly, bypassing assembler
-        if (s.client && this.inMyChannel(s, sender)) {
+        if (s.client && this.accepts(s, sender, WATCH.fileChunk)) {
           console.log('[WatchTogether] Raw binary chunk received - offset:', decoded.offset, 'length:', decoded.data.length);
           this.handleSignal(s, WATCH.fileChunk, { offset: decoded.offset, _raw: true, data: decoded.data }, sender);
         }
@@ -1239,10 +1321,9 @@ class WatchTogether {
     if (!assembler) this.assemblers.set(s, assembler = new WatchAssembler());
     const signal = await assembler.push(sender, data);
 
-    // Only people in our channel take part; the start, the end and the question who hosts are
-    // also for the other rooms, where they only show the indicator
-    const open = signal?.type === WATCH.start || signal?.type === WATCH.end || signal?.type === WATCH.who;
-    if (!signal || !s.client || (!open && !this.inMyChannel(s, sender))) return;
+    // The start, the end and the question who hosts are for every room (where they only show the
+    // indicator); the rest is for the session's members and our own room (see accepts)
+    if (!signal || !s.client || !this.accepts(s, sender, signal.type)) return;
 
     console.log('[WatchTogether] Signal received - type:', signal.type, 'from:', sender, 'current state:', this.getState(s));
 
@@ -1275,7 +1356,7 @@ class WatchTogether {
     const client = s.client;
     if (!client) return;
     const chunks = await encodeWatchSignal(type as any, body);
-    const targets = receivers ?? (s.self ? s.usersIn(s.self.channelId).map(u => u.session) : []);
+    const targets = receivers ?? this.targets(s);
     for (const chunk of chunks) {
       // @ts-ignore - priority is an optional parameter
       client.sendPluginData(targets, WATCH_DATA_ID, chunk, { priority });
@@ -1391,7 +1472,7 @@ class WatchTogether {
   }
 
   // Called when entering a channel - query existing watch parties
-  entered(s: Session): void {
+  entered(s: Session, moved = false): void {
     if (!this.supported(s)) return;
     // Send a 'who' query to find existing hosts
     const client = s.client;
@@ -1404,7 +1485,7 @@ class WatchTogether {
       }
     });
     // Also notify watchFileStream for WebRTC file streaming
-    watchFileStream.entered(s);
+    watchFileStream.entered(s, moved);
   }
 
   private cleanup(s: Session) {
@@ -1647,6 +1728,13 @@ class WatchTogether {
     const currentState = this.getState(s);
     const party = this.getParty(s);
 
+    // We are in a session already (watched from another room, say): one that starts here only
+    // shows its indicator, it does not replace ours
+    if (currentState !== 'idle' && party && party.hostSession !== fromSession) {
+      if (body?.mode === 1 || body?.mode === 2 || body?.mode === 3) s.setWatchTogether(fromSession, { mode: body.mode, title: String(body.title ?? '').slice(0, 300) });
+      return;
+    }
+
     // If we're already in a party with the same host, ignore duplicate start
     if (party && party.hostSession === fromSession && currentState === 'watching') {
       console.log('[WatchTogether] handleStart - already in party with this host, ignoring');
@@ -1687,9 +1775,15 @@ class WatchTogether {
     // State stays 'idle' until user manually joins
   }
 
-  private handleJoin(s: Session, fromSession: number) {
+  private handleJoin(s: Session, fromSession: number, body?: { note?: boolean }) {
     const party = this.getParty(s);
     if (!party) return;
+
+    // Cross-room watching off: the host lets nobody from another room in; they are told it is over
+    if (this.isHostFor(s) && !this.crossRoom() && !this.inMyChannel(s, fromSession)) {
+      void this.sendWatchSignal(WATCH.end, {}, s, [fromSession], true);
+      return;
+    }
 
     // Any member (host or viewer) with a party responds to join
     // Add joiner to participants if not already there
@@ -1700,6 +1794,9 @@ class WatchTogether {
 
     // The host is back: tell them we are in, so their list has the viewers who stayed
     this.announceToHost(s, party, fromSession);
+
+    // A note only tells the members that somebody came (the one who joined asks the host for the state)
+    if (body?.note === true) return;
 
     // EVERY member (host or viewer) replies with their current sync state
     // This allows a rejoining host to adopt the viewer's live state
@@ -1750,15 +1847,29 @@ class WatchTogether {
     const party = this.getParty(s);
     // Only the host can end the party we are in
     if (!party || party.hostSession !== hostSession) return;
+    // The picture the host streamed (mode 2) goes with it, wherever the host is
+    if (party.meta.mode === 2 && this.getState(s) !== 'idle') void watchFileStream.stopWatching(s, hostSession);
     this.cleanup(s);
   }
 
   // Handle user moving channels or leaving
   userMoved(s: Session, user: { session: number }, gone = false): void {
     if (!s.client?.self || user.session === s.client.session) return;
-    if (!gone && this.inMyChannel(s, user.session)) return;
+    // Moving rooms ends nothing: a host takes the party along (their indicator stays, it is
+    // server-wide) and a member stays in it. Only somebody who disconnected is gone. Except with
+    // cross-room watching off: a member who left the host's room is out of the session.
+    if (!gone) {
+      const mine = this.getParty(s);
+      if (mine && this.isHostFor(s) && !this.crossRoom() && !this.inMyChannel(s, user.session) && mine.participants.includes(user.session)) {
+        mine.participants = mine.participants.filter(id => id !== user.session);
+        this.setParty(s, mine);
+        void this.sendWatchSignal(WATCH.end, {}, s, [user.session], true);
+        if (mine.meta.mode === 2) void watchFileStream.dropViewer(s, user.session);
+      }
+      return;
+    }
 
-    // They are no longer here, so whatever they hosted is over for us, party or not
+    // Whatever they hosted is over for us, party or not
     s.setWatchTogether(user.session, false);
 
     const party = this.getParty(s);
@@ -1770,28 +1881,49 @@ class WatchTogether {
       return;
     }
 
-    // If a participant left, remove them from participants
     party.participants = party.participants.filter(ses => ses !== user.session);
     this.setParty(s, party);
   }
 
-  // We moved to another channel: a party we host does not follow us, and the indicators of the
-  // old channel are no longer ours (the viewers there end the party when they see us go)
-  // A party we only watch stays behind too: it belongs to the old channel, and keeping it would
-  // make us ignore the state of a party in the new one (entered() asks again afterwards).
+  // We moved to another room. A party we host moves with us, like a screen share does: it carries on
+  // for everybody in it, wherever they are, and the room we came into is invited. A party we only
+  // watch also carries on. A party we were only offered (not joined) stays behind: it belongs to the
+  // old room, and keeping it would make us ignore the state of a party in the new one (entered()
+  // asks again afterwards).
   selfMoved(s: Session): void {
     const party = this.getParty(s);
-    if (party) {
+    if (party && this.getState(s) !== 'idle') {
       if (this.isHostFor(s)) {
-        // The party ends with the move: everybody, in any room, drops the indicator on our name
-        void this.sendWatchSignal(WATCH.end, {}, s, this.everyone(s), true);
-        if (party.meta.mode === 2) void watchFileStream.stopStream(s);
-      } else if (party.meta.mode === 2 && this.getState(s) !== 'idle') {
-        void watchFileStream.stopWatching(s, party.hostSession);
+        this.inviteRoom(s, party);
+        // Cross-room watching off: those who are not in the room we came into are out of the session
+        if (!this.crossRoom()) this.expelOutsiders(s, party);
       }
-      this.cleanup(s);
+      // The indicators stay: they are server-wide, and the party is not tied to a room
+      return;
     }
+    if (party) this.cleanup(s);
     s.clearWatchTogether();
+  }
+
+  // The host came into a room: the people there who are not in the party get the start, as if it
+  // had started there, and can join from it
+  private inviteRoom(s: Session, party: WatchParty): void {
+    const ch = s.self?.channelId;
+    const me = s.self?.session;
+    if (!s.client || ch === undefined) return;
+    const to = [...s.client.users.values()]
+      .filter(u => u.session !== me && u.channelId === ch && !party.participants.includes(u.session))
+      .map(u => u.session);
+    if (!to.length) return;
+    const m = party.meta;
+    void this.sendWatchSignal(WATCH.start, {
+      mode: m.mode,
+      videoId: m.videoId,
+      fileMeta: m.fileMeta,
+      torrent: m.torrent,
+      queue: m.queue && m.queue.length > 1 ? m.queue : undefined,
+      title: m.title,
+    }, s, to, true);
   }
 
   // The connection is gone: nothing keeps playing or streaming for it
@@ -1804,9 +1936,10 @@ class WatchTogether {
   private handleWho(s: Session, fromSession: number) {
     const party = this.getParty(s);
     if (!party) return;
-    // Asked from another room: only the host answers, with what the indicator needs
-    if (!this.inMyChannel(s, fromSession)) {
-      if (this.isHostFor(s)) this.announceOutside(s, party, [fromSession]);
+    // Asked from another room: only the host answers, with what the indicator needs (a member of
+    // the session is answered in full, wherever they are)
+    if (!this.inMyChannel(s, fromSession) && !this.inParty(s, fromSession)) {
+      if (this.isHostFor(s) && this.crossRoom()) this.announceOutside(s, party, [fromSession]);
       return;
     }
     console.log('[WatchTogether] handleWho - responding to', fromSession);
@@ -1993,8 +2126,10 @@ class WatchTogether {
     const currentState = this.getState(s);
     if (currentState !== 'joining' && currentState !== 'idle') return;
     const party = this.getParty(s);
+    // What the host lists is taken as it is (the members can be in other rooms); from anyone else only the people of our room
+    const vouched = !!party && party.hostSession === fromSession;
     // A member that is in the session tells who else is (a host coming back learns who stayed)
-    if (party && Array.isArray(body.participants)) this.addParticipants(s, [fromSession, ...body.participants]);
+    if (party && Array.isArray(body.participants)) this.addParticipants(s, [fromSession, ...body.participants], vouched);
     // If we're joining, we should have a party with matching hostSession
     // If we're idle (late joiner), we might not have a party yet
     if (party && party.hostSession !== fromSession) return;
@@ -2034,7 +2169,7 @@ class WatchTogether {
       },
       positionMs: body.positionMs,
       playing: body.playing,
-      participants: [...new Set([fromSession, ...(s.self ? [s.self.session] : []), ...(Array.isArray(body.participants) ? body.participants.filter((p): p is number => typeof p === 'number' && this.inMyChannel(s, p)) : [])])],
+      participants: [...new Set([fromSession, ...(s.self ? [s.self.session] : []), ...(Array.isArray(body.participants) ? body.participants.filter((p): p is number => typeof p === 'number' && (vouched ? !!s.client?.users.has(p) : this.inMyChannel(s, p))) : [])])],
       playlist: body.playlist ?? (body.videoId ? [{ id: body.videoId, title: body.title }] : []),
       currentIndex: got ? queueIndex : (body.currentIndex ?? 0),
       at: getServerTime(),
@@ -2061,6 +2196,14 @@ class WatchTogether {
     if (currentState === 'idle') {
       const others = newParty.participants.filter(p => p !== fromSession && p !== s.self?.session && this.inMyChannel(s, p));
       void this.sendWatchSignal(WATCH.join, {}, s, [fromSession, ...others]);
+      // Members in other rooms only need to hear that we came
+      const away = newParty.participants.filter(p => p !== fromSession && p !== s.self?.session && !others.includes(p) && !!s.client?.users.has(p));
+      if (away.length) void this.sendWatchSignal(WATCH.join, { note: true }, s, away);
+    } else {
+      // We asked to join and the host answered: the other members (some in other rooms) only need
+      // to hear that we came, so that they listen to us and send to us
+      const others = newParty.participants.filter(p => p !== fromSession && p !== s.self?.session && !!s.client?.users.has(p));
+      if (others.length) void this.sendWatchSignal(WATCH.join, { note: true }, s, others);
     }
 
     // Apply the playback state to the local player (uses reconcile which handles readiness)

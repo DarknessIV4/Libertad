@@ -334,6 +334,8 @@
         <p class="where"><Icon name="channel" size={14} /><span>{channelName}</span></p>
         {#if sharing}
           <p class="where live"><Icon name={sharing} size={14} /><span>{isSelf ? `Sharing your ${sharing}` : `Sharing their ${sharing}`}</span></p>
+        {:else if user && session.watchTogether[user.session]}
+          <p class="where live"><Icon name="watch" size={14} /><span>Hosting watch together: {session.watchTogether[user.session].title}</span></p>
         {/if}
         <div class="desc-area">
           <div class="dhead">

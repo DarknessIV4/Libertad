@@ -21,12 +21,12 @@
 
 <style>
   .backdrop {
-    position: fixed; inset: 0; z-index: 100; background: rgb(0 0 0 / 0.6);
+    position: fixed; inset: var(--titlebar-h, 0px) 0 0 0; z-index: 100; background: rgb(0 0 0 / 0.6);
     display: flex; align-items: center; justify-content: center; padding: 16px;
     animation: fade 140ms var(--ease);
   }
   .modal {
-    width: 100%; max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+    width: 100%; max-height: calc(100vh - 32px - var(--titlebar-h, 0px)); display: flex; flex-direction: column;
     background: var(--bg-1); border: 1px solid var(--line-strong); box-shadow: var(--shadow-modal);
     animation: rise 160ms var(--ease);
   }

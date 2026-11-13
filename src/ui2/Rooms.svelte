@@ -7,6 +7,8 @@
   import { ui } from '../lib/ui.svelte.ts';
   import { channelMenu, userMenu, openProfile } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
+  import { share } from '../lib/share.svelte.ts';
+  import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { desktop } from '../lib/native.ts';
   import { makeServerIcon } from '../lib/images.ts';
   import { peopleOn } from '../lib/server-status.svelte.ts';
@@ -222,7 +224,25 @@
                         <button class="person" onclick={e => openProfile(u.session, e.currentTarget)} oncontextmenu={e => menu.show(e, userMenu(u))}>
                           <Avatar name={u.name} size={32} speaking={talking(u.session)} src={session.avatar(u.session)} />
                           <span class="pname" class:talking={talking(u.session)}>{store.displayName(u)}{#if me} <em>you</em>{/if}</span>
-                          {#if session.sharing[u.session]}<span class="mark live" title="Sharing their {session.sharing[u.session]}"><Icon name={session.sharing[u.session]} size={14} /></span>{/if}
+                          {#if session.sharing[u.session]}
+                            {@const kind = session.sharing[u.session]}
+                            {#if me}<span class="mark live" title="You are sharing your {kind}"><Icon name={kind} size={14} /></span>
+                            {:else}
+                              <!-- A button cannot sit inside the person's button. From any room: the stream comes to wherever you are -->
+                              <span class="mark live act" role="button" tabindex="0" title="Sharing their {kind}. Click to watch" aria-label="Watch the {kind} of {store.displayName(u)}"
+                                onclick={e => { e.stopPropagation(); share.watch(sessions.active, u.session); }}
+                                onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); share.watch(sessions.active, u.session); } }}><Icon name={kind} size={14} /></span>
+                            {/if}
+                          {/if}
+                          {#if session.watchTogether[u.session]}
+                            {@const wt = session.watchTogether[u.session]}
+                            {#if me}<span class="mark live" title="Hosting watch together: {wt.title}"><Icon name="watch" size={14} /></span>
+                            {:else}
+                              <span class="mark live act" role="button" tabindex="0" title="Watching together: {wt.title}. Click to join" aria-label="Join watch together: {wt.title}"
+                                onclick={e => { e.stopPropagation(); watchTogether.join(u.session); }}
+                                onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); watchTogether.join(u.session); } }}><Icon name="watch" size={14} /></span>
+                            {/if}
+                          {/if}
                           {#if u.recording}<span class="rec">REC</span>{/if}
                           {#if u.deaf || u.selfDeaf}<span class="mark" class:bad={u.deaf} title={u.deaf ? 'Deafened by server' : 'Deafened'}><Icon name="headphones-off" size={14} /></span>
                           {:else if u.mute || u.selfMute || u.suppress}<span class="mark" class:bad={u.mute || u.suppress} title={u.mute ? 'Muted by server' : u.suppress ? 'Suppressed' : 'Muted'}><Icon name="mic-off" size={14} /></span>{/if}
@@ -357,6 +377,8 @@
   .mark { flex: none; display: inline-flex; color: var(--text-faint); }
   .mark.bad { color: var(--danger); }
   .mark.live { color: var(--speaking); }
+  .mark.act { padding: 4px; cursor: pointer; }
+  .mark.act:hover { background: var(--bg-active); }
   .rec { flex: none; font-size: 10px; font-weight: 700; color: var(--danger); border: 1px solid var(--danger); padding: 0 3px; }
   .acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 8px 0; }
   .none { padding: 12px 8px; color: var(--text-dim); }

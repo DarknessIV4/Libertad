@@ -1,4 +1,5 @@
 // Torrent Together memo: the last show this person started watching, kept on this computer only.
+import { untrack } from 'svelte';
 import { load, save } from './storage.ts';
 
 export interface Memo { show: string; season: number | null; episode: number | null }
@@ -50,8 +51,10 @@ class WatchMemo {
   record(fileName: string) {
     const m = parseMemo(fileName);
     if (!m) return;
-    this.records = [m, ...this.records.filter(r => !sameShow(r, m))].slice(0, MAX_RECORDS);
-    save(LIST_KEY, { memos: this.records });
+    // untrack: callers may be inside an $effect; reading records here must never make them depend on it
+    const next = [m, ...untrack(() => this.records).filter(r => !sameShow(r, m))].slice(0, MAX_RECORDS);
+    this.records = next;
+    save(LIST_KEY, { memos: next });
   }
 
   remove(m: Memo) {

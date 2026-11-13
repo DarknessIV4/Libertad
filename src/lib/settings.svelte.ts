@@ -57,6 +57,7 @@ export interface Settings {
   shareFps: number;       // frame rate of our stream
   shareMode: 'fps' | 'quality'; // when the connection is tight: keep the frame rate (smooth) or the sharpness
   autoCameras: boolean;   // show other people's cameras as they come on
+  shareCrossRoom: boolean; // what you host (a screen, a camera, a Watch Together) can be watched from other rooms; off: only from yours
   shareDynamicFps: boolean; // a screen share that shows nothing new is sent at 1 frame per second until something moves
   shareVolume: number;    // volume of streams we watch, 0 to 1
   relayServer: string;    // a Libertad web proxy whose STUN and relay to use for screen sharing
@@ -125,6 +126,7 @@ const defaults: Settings = {
   shareFps: 30,
   shareMode: 'quality',
   autoCameras: true,
+  shareCrossRoom: true,
   shareDynamicFps: true,
   shareVolume: 1,
   relayServer: '',
