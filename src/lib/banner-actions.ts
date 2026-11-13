@@ -3,6 +3,9 @@ import { makeBanner } from './images.ts';
 import { imageEditor } from './image-editor.svelte.ts';
 import { desktop } from './native.ts';
 import { ui } from './ui.svelte.ts';
+import type { MenuItem } from './menu.svelte.ts';
+import { cropBackground, applyCropped } from './custom-bg-actions.ts';
+import { EDITABLE_OR_GIF } from './image-editor.svelte.ts';
 import { type CardScope, type Slot } from '../core/banner.ts';
 
 // A picture, GIF or video for any element (banner, card, profile card, avatar): always shared as a file and
@@ -36,11 +39,25 @@ export async function useAsProfileBackground(file: File): Promise<string> {
     : setBannerFromFile('profile', r.file, { keepShape, scope });
 }
 
+// A downloaded picture in the chat is a blob: address. Read it with fetch, and if the page's rules block that,
+// draw it from an <img> (a GIF loses its movement on that path, the plain picture is kept).
+async function blobFromLocalUrl(src: string): Promise<Blob> {
+  try { return await (await fetch(src)).blob(); } catch { /* fall back below */ }
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  c.getContext('2d')!.drawImage(img, 0, 0);
+  return await new Promise<Blob>((ok, no) => c.toBlob(b => (b ? ok(b) : no(new Error('encode'))), 'image/png'));
+}
+
 // The picture or GIF behind an address from the chat as a file. GIPHY pictures are fetched by the app itself
 // (the window cannot read other sites); data: and blob: pictures are read directly.
 async function fileFromUrl(src: string): Promise<File> {
   let blob: Blob;
   if (desktop && /^https:\/\/media\d*\.giphy\.com\/media\//.test(src)) blob = new Blob([await desktop.gifFetch(src) as BlobPart]);
+  else if (src.startsWith('blob:') || src.startsWith('data:')) blob = await blobFromLocalUrl(src);
   else blob = await (await fetch(src)).blob();
   // The type the file says it is, else a GIF by its first bytes
   const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
@@ -72,6 +89,43 @@ export async function useUrlAsUserCard(src: string): Promise<void> {
   catch { problem = 'This picture could not be loaded.'; }
   if (problem) ui.prompt = { title: 'User card', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
 }
+
+
+// A picture or GIF as your avatar: cropped square in the editor, then applied. Returns what went wrong, or ''.
+export async function useAsAvatar(file: File): Promise<string> {
+  let picked = file;
+  if (EDITABLE_OR_GIF.test(file.type)) {
+    const r = await imageEditor.open(file, { effects: false, scopes: false, square: true, title: 'Crop picture' });
+    if (!r) return '';
+    picked = r.file;
+  }
+  return setBannerFromFile('avatar', picked, { keepShape: true });
+}
+
+// A picture, GIF or video as the app background (all three panels) or the login background (the screen before a
+// server is entered): the editor asks which one, with a preview of each beside the crop. Returns what went wrong, or ''.
+export async function useAsAppBackground(file: File): Promise<string> {
+  const f = await cropBackground(file, { target: true });
+  return f ? applyCropped(f) : '';
+}
+
+// The picture entries of a right-click menu, for any picture or GIF: `get` gives the file (a chat address,
+// a GIPHY GIF). A problem is shown in a dialog.
+export function pictureItems(get: () => Promise<File>): MenuItem[] {
+  const run = (title: string, use: (f: File) => Promise<string>) => async () => {
+    let problem = '';
+    try { problem = await use(await get()); }
+    catch { problem = 'This picture could not be loaded.'; }
+    if (problem) ui.prompt = { title, label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
+  };
+  return [
+    { label: 'Set as profile background', action: run('Profile background', useAsProfileBackground) },
+    { label: 'Set as user card', action: run('User card', useAsUserCard) },
+    { label: 'Set as avatar', action: run('Avatar', useAsAvatar) },
+    { label: 'Set as app background', action: run('App background', useAsAppBackground) }
+  ];
+}
+export const urlPictureItems = (src: string): MenuItem[] => pictureItems(() => fileFromUrl(src));
 
 // Save a picture or GIF from the chat or the GIF menu to the computer
 export function saveImage(src: string): void {

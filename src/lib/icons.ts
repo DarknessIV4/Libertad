@@ -6,6 +6,8 @@ export const ICON_PATHS: Record<string, string> = {
   'headphones-off': 'M3 14v-2a9 9 0 0 1 18 0v2M21 14v7h-4v-7zM3 14v7h4v-7zM3 3l18 18',
   settings: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
   plus: 'M12 5v14M5 12h14',
+  'flip-h': 'M12 3v18M8 7L3 17h5zM16 7l5 10h-5z',
+  'flip-v': 'M3 12h18M7 8h10l-5-5zM7 16h10l-5 5z',
   pen: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
   check: 'M5 12l5 5 9-10',
   captions: 'M3 5h18v14H3zM7 11h4M7 15h2M13 11h4M13 15h4',

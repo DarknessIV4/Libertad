@@ -4,7 +4,7 @@
   import { store } from '../lib/settings.svelte.ts';
 
   // The volume of the streams you watch (one setting for all of them), in the bottom right corner of a
-  // picture in full screen. Invisible until the mouse is over it, like the buttons in the top right
+  // picture, in the app as well as in full screen. Invisible until the mouse is over it, like the buttons in the top right
   // (the padding is part of what the mouse has to be over: a hit area a little larger than the controls).
   const volume = $derived(store.settings.shareVolume);
   let last = 1;

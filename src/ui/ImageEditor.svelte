@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Modal from './Modal.svelte';
-  import { imageEditor, type EditScope } from '../lib/image-editor.svelte.ts';
+  import Icon from './Icon.svelte';
+  import { imageEditor, type EditScope, type BgTarget, type AppScope } from '../lib/image-editor.svelte.ts';
   import { FULL, FILL, CARD_WIDTH, isUnchanged, renderCrop, renderFile, rotatedSize, type Crop, type EditParams } from '../lib/image-edit.ts';
   import { canEditGif, renderGif } from '../lib/gif-edit.ts';
 
@@ -17,6 +18,11 @@
 
   // Where the picture goes on the profile card (asked in the editor when EditOptions.scopes is on); none until chosen
   let scope = $state<EditScope | null>(null);
+  // App background or login background (EditOptions.target)
+  let bgTarget = $state<BgTarget | null>(null);
+  let appPanel = $state<AppScope>('whole');
+  // The canvases of the previews (one, or two for both)
+  let tc = $state<Record<number, HTMLCanvasElement | undefined>>({});
   let failed = $state(false);
   let busy = $state(false);
   // How far along a GIF is (0 to 1) while its frames are made, and what went wrong with one
@@ -24,6 +30,8 @@
   let gifError = $state('');
 
   let rotation = $state(0);
+  let flipH = $state(false);
+  let flipV = $state(false);
   let darkness = $state(0);
   let blur = $state(0);
   let crop = $state<Crop>({ ...FULL });
@@ -44,11 +52,13 @@
       bmp = null;
       proxy = null;
       scope = r?.preview ?? null;
+      bgTarget = r?.target ? 'app' : null;
+      appPanel = r?.appScope ?? 'whole';
       failed = false;
       busy = false;
       progress = 0;
       gifError = '';
-      rotation = 0; darkness = 0; blur = 0;
+      rotation = 0; flipH = false; flipV = false; darkness = 0; blur = 0;
       crop = { ...FULL };
     });
     if (!r) return;
@@ -83,7 +93,7 @@
     untrack(() => { crop = squareCrop(); });
   });
 
-  const params = $derived<EditParams>({ rotation, crop, darkness: req?.effects ? darkness : 0, blur: req?.effects ? blur : 0 });
+  const params = $derived<EditParams>({ rotation, flipH, flipV, crop, darkness: req?.effects ? darkness : 0, blur: req?.effects ? blur : 0 });
 
   // Where the turned picture sits on the stage
   const disp = $derived.by(() => {
@@ -98,8 +108,8 @@
   // Drawn again when anything changes, at most once a frame
   let queued = 0;
   $effect(() => {
-    void params.rotation; void params.darkness; void params.blur; void params.crop.x; void params.crop.y; void params.crop.w; void params.crop.h;
-    void proxy; void stageW; void pcanvas; void scope;
+    void params.rotation; void flipH; void flipV; void params.darkness; void params.blur; void params.crop.x; void params.crop.y; void params.crop.w; void params.crop.h;
+    void proxy; void stageW; void pcanvas; void scope; void tc[0]; void tc[1]; void bgTarget; void appPanel;
     if (!queued) queued = requestAnimationFrame(() => { queued = 0; draw(); });
   });
   $effect(() => () => { if (queued) cancelAnimationFrame(queued); });
@@ -119,6 +129,7 @@
     ctx.fillStyle = FILL;
     ctx.fillRect(disp.x, disp.y, disp.w, disp.h);
     ctx.translate(stageW / 2, STAGE_H / 2);
+    ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
     ctx.rotate(rotation * Math.PI / 180);
     ctx.imageSmoothingQuality = 'high';
     const f = disp.w / rotatedSize(p.width, p.height, rotation).w;
@@ -134,6 +145,7 @@
     const w = Math.max(1, Math.round(frame.w * dpr)), h = Math.max(1, Math.round(frame.h * dpr));
     ctx.drawImage(renderCrop({ source: p, width: p.width, height: p.height }, params, w, h), frame.x, frame.y, frame.w, frame.h);
     drawPreview(p);
+    drawTarget(p);
   }
 
   // The crop as the card would show it: it fills the banner, the space under it or the whole card, cut to fit
@@ -154,6 +166,40 @@
     const out = renderCrop({ source: p, width: p.width, height: p.height }, params, Math.max(1, Math.round(dw * dpr * k)), Math.max(1, Math.round(dh * dpr * k)));
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(out, (CARD_WIDTH - dw) / 2 * dpr, (h - dh) / 2 * dpr, dw * dpr, dh * dpr);
+  }
+
+  // The crop as the app or the login screen would show it: it fills the window (or the one panel), cut to fit
+  const TGT_W = 320, TGT_H = 180;
+  type Preview = { kind: 'app' | 'login'; scope: AppScope };
+  const previews = $derived.by((): Preview[] => bgTarget === 'both' ? [{ kind: 'app', scope: 'whole' }, { kind: 'login', scope: 'whole' }]
+    : bgTarget === 'login' ? [{ kind: 'login', scope: 'whole' }] : bgTarget === 'app' ? [{ kind: 'app', scope: appPanel }] : []);
+  // The panels of the mock-up, as fractions of the width (the same as in the markup below)
+  const REGION: Record<AppScope, [number, number]> = { whole: [0, 1], left: [0, 0.22], middle: [0.22, 0.76], right: [0.76, 1] };
+  function drawTarget(p: HTMLCanvasElement) {
+    previews.forEach((pv, i) => {
+      const bc = tc[i];
+      if (!bc) return;
+      const dpr = window.devicePixelRatio || 1;
+      bc.width = Math.round(TGT_W * dpr);
+      bc.height = Math.round(TGT_H * dpr);
+      const ctx = bc.getContext('2d')!;
+      ctx.fillStyle = '#16171a';
+      ctx.fillRect(0, 0, bc.width, bc.height);
+      const [a, b] = pv.kind === 'app' ? REGION[pv.scope] : REGION.whole;
+      const rx = a * TGT_W, rw = (b - a) * TGT_W;
+      const box = rotatedSize(p.width, p.height, rotation);
+      const cw = Math.max(1, crop.w * box.w), ch = Math.max(1, crop.h * box.h);
+      const s = Math.max(rw / cw, TGT_H / ch);
+      const dw = cw * s, dh = ch * s;
+      const out = renderCrop({ source: p, width: p.width, height: p.height }, params, Math.max(1, Math.round(dw * dpr)), Math.max(1, Math.round(dh * dpr)));
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rx * dpr, 0, rw * dpr, TGT_H * dpr);
+      ctx.clip();
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(out, (rx + (rw - dw) / 2) * dpr, (TGT_H - dh) / 2 * dpr, dw * dpr, dh * dpr);
+      ctx.restore();
+    });
   }
 
   // ─── The frame: drag it or its edges ───
@@ -202,18 +248,18 @@
 
   function reset() {
     gifError = '';
-    rotation = 0; darkness = 0; blur = 0;
+    rotation = 0; flipH = false; flipV = false; darkness = 0; blur = 0;
     crop = req?.square ? squareCrop() : { ...FULL };
   }
   const isGif = $derived(req?.file.type === 'image/gif');
-  const changed = $derived(!isUnchanged({ rotation, crop, darkness: req?.effects ? darkness : 0, blur: req?.effects ? blur : 0 }));
+  const changed = $derived(!isUnchanged({ rotation, flipH, flipV, crop, darkness: req?.effects ? darkness : 0, blur: req?.effects ? blur : 0 }));
 
   // ─── Done ───
   async function done() {
     const r = req;
     if (!r || !bmp || busy) return;
     // The picture is shown cropped later (a GIF or a video): nothing is made here
-    if (r.cropOnly) { imageEditor.close({ file: r.file, crop: { ...crop } }); return; }
+    if (r.cropOnly) { imageEditor.close({ file: r.file, crop: { ...crop }, ...(bgTarget && { target: bgTarget, appScope: appPanel }) }); return; }
     busy = true;
     gifError = '';
     progress = 0;
@@ -229,7 +275,7 @@
         }
       } else file = changed ? await renderFile(bmp, params, r.effects ? 1280 : 2560) : r.file;
       if (!file) { failed = true; return; }
-      imageEditor.close({ file, ...(scope && { scope }) });
+      imageEditor.close({ file, ...(scope && { scope }), ...(bgTarget && { target: bgTarget, appScope: appPanel }) });
     } finally {
       busy = false;
     }
@@ -247,7 +293,7 @@
 </script>
 
 {#if req}
-    <Modal title={req.title ?? (req.effects ? 'Edit picture' : 'Crop picture')} onclose={close} width={asks || req.preview ? 930 : 540}>
+    <Modal title={req.title ?? (req.effects ? 'Edit picture' : 'Crop picture')} onclose={close} width={asks || req.preview || req.target ? 930 : 540}>
       {#if failed}
         <p class="err">This file could not be read as a picture.</p>
       {:else}
@@ -269,6 +315,20 @@
             {/each}
           </div>
         {/if}
+        {#if req.target}
+          <div class="where" role="radiogroup" aria-label="Where to use the picture">
+            {#each [['app', 'App background'], ['login', 'Login background'], ['both', 'Both']] as [id, label] (id)}
+              <button class="btn" class:on={bgTarget === id} role="radio" aria-checked={bgTarget === id} onclick={() => (bgTarget = id as BgTarget)}>{label}</button>
+            {/each}
+          </div>
+          {#if bgTarget === 'app'}
+            <div class="where sub" role="radiogroup" aria-label="Which part of the app">
+              {#each [['left', 'Left'], ['middle', 'Middle'], ['right', 'Right'], ['whole', 'All']] as [id, label] (id)}
+                <button class="btn" class:on={appPanel === id} role="radio" aria-checked={appPanel === id} onclick={() => (appPanel = id as AppScope)}>{label}</button>
+              {/each}
+            </div>
+          {/if}
+        {/if}
         <div class="stage" bind:clientWidth={stageW} style:height="{STAGE_H}px">
           <canvas bind:this={canvas} style:width="{stageW}px" style:height="{STAGE_H}px"></canvas>
           {#if proxy}
@@ -285,6 +345,10 @@
 
         <div class="sliders">
           {#if !req.cropOnly}
+            <div class="flips">
+              <button class="btn icon" class:on={flipH} title="Mirror horizontally" aria-label="Mirror horizontally" aria-pressed={flipH} onclick={() => (flipH = !flipH)}><Icon name="flip-h" size={18} /></button>
+              <button class="btn icon" class:on={flipV} title="Mirror vertically" aria-label="Mirror vertically" aria-pressed={flipV} onclick={() => (flipV = !flipV)}><Icon name="flip-v" size={18} /></button>
+            </div>
             <label for="ie-rot">Rotation
               <input id="ie-rot" type="range" min="0" max="360" step="1" bind:value={rotation} ondblclick={() => (rotation = 0)} />
               <output>{rotation}°</output>
@@ -303,6 +367,31 @@
         </div>
         {#if gifError}<p class="err">{gifError}</p>{/if}
         </div>
+        {#if req.target && bgTarget}
+          <div class="side">
+            {#each previews as pv, i (pv.kind)}
+              <p class="help">{pv.kind === 'login' ? 'Login background' : pv.scope === 'whole' ? 'App background' : `App background, ${pv.scope} panel`}: how it will look</p>
+              <div class="tcard" aria-hidden="true" style:width="{TGT_W}px" style:height="{TGT_H}px">
+                <canvas bind:this={tc[i]} style:width="{TGT_W}px" style:height="{TGT_H}px"></canvas>
+                {#if pv.kind === 'app'}
+                  <div class="tapp">
+                    <div class="tpanel left"><i></i><i></i><i></i><i></i></div>
+                    <div class="tpanel mid"><i class="wide"></i><i></i><i class="wide"></i><i></i><span class="tbar"></span></div>
+                    <div class="tpanel right"><i></i><i></i><i></i></div>
+                  </div>
+                {:else}
+                  <div class="tlogin">
+                    <div class="lrail"><b></b><b class="plus"></b><b class="globe"></b><b class="end"></b></div>
+                    <div class="lhead"><i class="title"></i><i class="sub"></i></div>
+                    <div class="lpills"><i class="p1"></i><i class="p2"></i><i class="p3"></i></div>
+                    <div class="lcard"><b></b><span><i class="n"></i><i class="u"></i><i class="o"></i></span><em></em></div>
+                    <div class="lbar"><span><i class="n"></i><i class="u"></i></span><b></b><b></b><b></b><b></b></div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if asks || req.preview}
           <div class="side">
             <p class="help">{scope === 'banner' ? 'Banner' : scope === 'under' ? 'Lower half' : scope === 'whole' ? 'Whole profile card' : 'Choose where it goes'}{scope ? ': how it will look' : ' to see how it looks'}</p>
@@ -348,6 +437,34 @@
   .pbtns { display: flex; gap: 8px; margin-top: 16px; }
   .pbtns i { display: block; width: 90px; height: 28px; background: var(--bg-3); }
   .pcard.over .pbtns i { background: rgb(0 0 0 / 0.35); }
+  .tcard { position: relative; max-width: 100%; overflow: hidden; background: var(--bg-1); border: 1px solid var(--line-strong); box-sizing: content-box; }
+  .tcard canvas { position: absolute; inset: 0; }
+  .tapp { position: absolute; inset: 0; display: flex; }
+  .tpanel { position: relative; box-sizing: border-box; padding: 10px 8px; background: rgb(0 0 0 / 0.38); }
+  .tpanel.left { width: 22%; } .tpanel.right { width: 24%; } .tpanel.mid { flex: 1; background: rgb(0 0 0 / 0.22); margin: 0 1px; }
+  .tpanel i { display: block; height: 6px; margin-bottom: 8px; width: 70%; background: var(--text-faint); opacity: 0.7; }
+  .tpanel i.wide { width: 90%; }
+  .tbar { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 16px; background: rgb(0 0 0 / 0.4); }
+  .tlogin { position: absolute; inset: 0; }
+  .tlogin i, .tlogin b, .tlogin em { display: block; background: var(--text-faint); opacity: 0.75; }
+  .lrail { position: absolute; left: 2.5%; top: 4%; bottom: 4%; width: 5%; background: rgb(0 0 0 / 0.45); border-radius: 6px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 6px; box-sizing: border-box; }
+  .lrail b { width: 8px; height: 8px; border-radius: 50%; }
+  .lrail b.plus, .lrail b.globe { background: #3fbf6a; opacity: 0.8; }
+  .lrail b.end { margin-top: auto; margin-bottom: 6px; border-radius: 1px; height: 6px; }
+  .lhead { position: absolute; left: 11%; top: 8%; }
+  .lhead .title { width: 36px; height: 8px; margin-bottom: 5px; opacity: 0.95; }
+  .lhead .sub { width: 44px; height: 4px; }
+  .lpills { position: absolute; left: 11%; top: 24%; display: flex; gap: 5px; }
+  .lpills i { height: 11px; border-radius: 6px; background: rgb(0 0 0 / 0.45); opacity: 1; }
+  .lpills .p1 { width: 30px; border: 1px solid #e0463e; } .lpills .p2 { width: 44px; } .lpills .p3 { width: 36px; }
+  .lcard { position: absolute; left: 11%; top: 38%; width: 40%; height: 22%; background: rgb(0 0 0 / 0.5); border-radius: 8px; display: flex; align-items: center; gap: 6px; padding: 0 8px; box-sizing: border-box; }
+  .lcard b { width: 16px; height: 16px; border-radius: 50%; flex: none; background: rgb(0 0 0 / 0.55); opacity: 1; }
+  .lcard span { flex: 1; } .lcard span i { height: 4px; margin-bottom: 3px; } .lcard .n { width: 40px; opacity: 0.95; } .lcard .u { width: 50px; opacity: 0.4; } .lcard .o { width: 36px; background: #3fbf6a; }
+  .lcard em { width: 20px; height: 10px; border-radius: 5px; border: 1px solid #e0463e; background: transparent; opacity: 1; }
+  .lbar { position: absolute; left: 9%; right: 1.5%; bottom: 3%; height: 12%; background: rgb(0 0 0 / 0.5); border-radius: 8px; display: flex; align-items: center; gap: 8px; padding: 0 10px; box-sizing: border-box; }
+  .lbar span { margin-right: auto; } .lbar span i { height: 4px; margin: 2px 0; } .lbar .n { width: 36px; } .lbar .u { width: 28px; opacity: 0.45; }
+  .lbar b { width: 7px; height: 7px; border-radius: 50%; }
+  .where.sub { margin-top: -4px; }
   .where { display: flex; gap: 8px; margin: 0 0 12px; }
   .where .btn { flex: 1; }
   .where .btn.on { border-color: var(--accent); color: var(--accent); }
@@ -373,6 +490,9 @@
   .h.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
   .h.w { left: -6px; top: calc(50% - 6px); cursor: ew-resize; }
   .sliders { margin-top: 14px; }
+  .flips { display: flex; gap: 8px; }
+  .flips .btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 10px; }
+  .flips .btn.on { border-color: var(--accent); color: var(--accent); }
   .sliders label { display: grid; grid-template-columns: 92px 1fr 56px; align-items: center; gap: 12px; margin: 8px 0 0; font-size: 13px; font-weight: 600; color: var(--text-dim); }
   .sliders output { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; color: var(--text); }
   .sliders input[type=range] { width: 100%; min-width: 0; }

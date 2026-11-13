@@ -26,19 +26,42 @@ export function memoText(m: Memo): string {
   return parts.join(' - ');
 }
 
-class WatchMemo {
-  last = $state<Memo | null>(load<{ memo: Memo | null }>(KEY, { memo: null }).memo);
+const LIST_KEY = 'libertad.watchMemos';
+const MAX_RECORDS = 200;
+const sameShow = (a: Memo, b: Memo) => a.show.toLowerCase() === b.show.toLowerCase();
 
-  // Called when this person starts watching a torrent, whether they host or joined
+function loadRecords(): Memo[] {
+  const stored = load<{ memos: Memo[] }>(LIST_KEY, { memos: [] }).memos;
+  const list = Array.isArray(stored) ? stored.filter(m => m && typeof m.show === 'string') : [];
+  if (list.length) return list;
+  // The memo used to keep one record only: it becomes the first of the list
+  const old = load<{ memo: Memo | null }>(KEY, { memo: null }).memo;
+  return old ? [old] : [];
+}
+
+class WatchMemo {
+  // Every show this person started watching, the latest first, each with where they got to
+  records = $state<Memo[]>(loadRecords());
+
+  get last(): Memo | null { return this.records[0] ?? null; }
+
+  // Called when this person starts watching a torrent, whether they host or joined.
+  // A show that is already there moves to the top with its new season and episode.
   record(fileName: string) {
     const m = parseMemo(fileName);
     if (!m) return;
-    this.last = m;
-    save(KEY, { memo: m });
+    this.records = [m, ...this.records.filter(r => !sameShow(r, m))].slice(0, MAX_RECORDS);
+    save(LIST_KEY, { memos: this.records });
+  }
+
+  remove(m: Memo) {
+    this.records = this.records.filter(r => r !== m);
+    save(LIST_KEY, { memos: this.records });
   }
 
   clear() {
-    this.last = null;
+    this.records = [];
+    save(LIST_KEY, { memos: [] });
     save(KEY, { memo: null });
   }
 }

@@ -16,6 +16,8 @@
   import type { EmbeddedTrack } from '../core/mkv.ts';
   import { store } from '../lib/settings.svelte.ts';
   import { watchMemo } from '../lib/watch-memo.svelte.ts';
+  import { menuClosed, menuJustClosed, swallowClick } from '../lib/overlay.ts';
+  import { canSaveFrame, saveVideoFrame } from '../lib/save-frame.ts';
 
   console.log('[WatchPlayer] Component script running');
 
@@ -96,6 +98,21 @@
     const named = t.name && t.name.toLowerCase() !== base.toLowerCase() ? ` - ${t.name}` : '';
     const n = tp.embedded.slice(0, i).filter(o => o.lang === t.lang && !o.name).length + 1;
     return `${base}${named}${!t.name && n > 1 ? ` #${n}` : ''}${t.forced ? ' (forced)' : ''}`;
+  }
+  // The menus are overlays: nothing done on them reaches the picture below (a double click on an
+  // item does not go full screen), and a press anywhere else closes them
+  const stop = (e: Event) => e.stopPropagation();
+  const anyOpen = $derived(subsOpen || voiceOpen || speedOpen);
+  $effect(() => {
+    if (!anyOpen) return;
+    // Closing, by an item or from outside, is noted: the second click of a double click is not the picture's
+    return () => menuClosed();
+  });
+  function outside(e: PointerEvent) {
+    if (!anyOpen) return;
+    if ((e.target as Element | null)?.closest?.('.subs, button[aria-expanded]')) return;
+    subsOpen = voiceOpen = speedOpen = false;
+    swallowClick(e);
   }
   function pickSub(id: string) {
     // Picking the one that is already on opens and closes its menu
@@ -292,19 +309,9 @@
   // Saves the frame on screen as a PNG, where this person picks. Nothing is sent to the others.
   let frameBusy = $state(false);
   async function saveFrame() {
-    const v = tVideo;
-    if (!v || !v.videoWidth || frameBusy || !desktop) return;
+    if (frameBusy) return;
     frameBusy = true;
-    try {
-      const c = document.createElement('canvas');
-      c.width = v.videoWidth; c.height = v.videoHeight;
-      c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height);
-      const blob = await new Promise<Blob | null>(r => c.toBlob(r, 'image/png'));
-      if (!blob) return;
-      const s = Math.floor(v.currentTime), t = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map(n => String(n).padStart(2, '0')).join('-');
-      await desktop.files.saveFrame(`frame-${t}.png`, new Uint8Array(await blob.arrayBuffer()));
-    } catch { /* a frame the browser will not let us read: nothing to save */ }
-    finally { frameBusy = false; }
+    try { await saveVideoFrame(tVideo); } finally { frameBusy = false; }
   }
 
   // Viewer: show the stream as soon as the first track arrives
@@ -370,7 +377,8 @@
   });
 </script>
 
-<svelte:window onkeydown={e => { if (barShown) playerKey(e, { toggle, seekBy }); }} />
+<svelte:window onpointerdowncapture={outside}
+  onkeydown={e => { if (e.key === 'Escape' && anyOpen) { subsOpen = voiceOpen = speedOpen = false; return; } if (barShown) playerKey(e, { toggle, seekBy }); }} />
 
 {#snippet look()}
   <div class="look" role="group" aria-label="Subtitle size">
@@ -407,7 +415,7 @@
 
 {#snippet speedMenu()}
   {#if speedOpen}
-    <div class="subs speeds" role="dialog" aria-label="Playback speed">
+    <div class="subs speeds" role="dialog" aria-label="Playback speed" ondblclick={stop}>
       {#each RATES as r (r)}
         <button class="opt" class:sel={rate === r} aria-pressed={rate === r} onclick={() => pickRate(r)}>{r === 1 ? 'Normal' : rateLabel(r)}</button>
       {/each}
@@ -417,7 +425,7 @@
 {/snippet}
 
 {#snippet bar()}
-  <div class="controls">
+  <div class="controls" role="presentation" ondblclick={stop}>
     <button use:tip class="ctl" onclick={toggle} aria-label={playingNow ? 'Pause' : 'Play'} title={playingNow ? 'Pause' : 'Play'}>
       <Icon name={playingNow ? 'pause' : 'play'} size={20} />
     </button>
@@ -466,6 +474,12 @@
         <Icon name={dlBusy ? 'x' : 'download'} size={18} />
       </button>
     {/if}
+    <!-- Streamed from the host: the frame on screen, last, at the bottom right -->
+    {#if watchTogether.mode === 2 && canSaveFrame()}
+      <button use:tip class="ctl" onclick={() => saveVideoFrame(target, watchTogether.sharedPosition() / 1000)} aria-label="Save this frame" title="Save this frame as a picture">
+        <Icon name="download" size={18} />
+      </button>
+    {/if}
   </div>
 {/snippet}
 
@@ -480,7 +494,7 @@
         <div class="loading"><p>Torrent Together needs the Libertad desktop app. The others can watch; this browser can not download torrents.</p></div>
       {:else}
         <video bind:this={tVideo} class="local-video" crossorigin="anonymous" playsinline preload="auto"
-          onclick={() => { if (tp.status === 'ready') toggle(); }}></video>
+          onclick={() => { if (tp.status === 'ready' && !menuJustClosed()) toggle(); }}></video>
         {#if tp.status === 'failed'}
           <div class="loading"><p style="color: var(--danger);">{tp.error}</p></div>
         {:else if tp.status !== 'ready'}
@@ -512,7 +526,7 @@
               onpointerdown={subDown} onpointermove={subMove} onpointerup={subUp} onpointercancel={subUp}>{@html tp.shown}</div>
           {/if}
           {#if subsOpen}
-            <div class="subs" role="dialog" aria-label="Subtitles">
+            <div class="subs" role="dialog" aria-label="Subtitles" ondblclick={stop}>
               <button class="opt" class:sel={tp.chosen === 'off'} onclick={() => pickSub('off')}>Off</button>
               {#each tp.embedded as t, i (t.number)}
                 {@const id = `emb:${t.number}`}
@@ -549,7 +563,7 @@
             </div>
           {/if}
           {#if voiceOpen}
-            <div class="subs" role="dialog" aria-label="Voice">
+            <div class="subs" role="dialog" aria-label="Voice" ondblclick={stop}>
               {#each tp.audio as a (a.index)}
                 <button class="opt" class:sel={a.on} aria-pressed={a.on} onclick={() => tp.setAudio(a.index)}>
                   {a.label}{#if a.detail}<span class="src">({a.detail})</span>{/if}
@@ -565,7 +579,7 @@
     {:else if watchTogether.mode === 2}
       <!-- File streaming: the host sees their own player, viewers the live stream -->
       {#if watchTogether.isHost}
-        <div class="host-slot" role="presentation" use:adopt={watchTogether.hostVideo} onclick={toggle}></div>
+        <div class="host-slot" role="presentation" use:adopt={watchTogether.hostVideo} onclick={() => { if (!menuJustClosed()) toggle(); }}></div>
         {#if barShown}{@render speedMenu()}{@render bar()}{/if}
       {:else}
         <video
@@ -573,7 +587,7 @@
           class="local-video"
           playsinline
           preload="auto"
-          onclick={() => { if (viewing) toggle(); }}
+          onclick={() => { if (viewing && !menuJustClosed()) toggle(); }}
         >
           <track kind="captions" />
         </video>

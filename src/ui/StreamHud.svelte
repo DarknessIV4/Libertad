@@ -4,6 +4,8 @@
   import FsMuteDeafen from './FsMuteDeafen.svelte';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { RATES, rateLabel } from '../lib/yt-controls.ts';
+  import { menuClosed, swallowClick } from '../lib/overlay.ts';
+  import { canSaveFrame, saveVideoFrame } from '../lib/save-frame.ts';
   import { CAP_FPS, CAP_HEIGHTS, capFpsLabel, capHeightLabel, isCapped, type ViewerCap } from '../lib/stream-quality.ts';
 
   // Two small buttons in the top right corner of a picture, shown only while the mouse is over the
@@ -12,8 +14,8 @@
   // can change (a streamed file).
   // Full screen and pop out only while the picture is in full screen or in a window of its own (the bar
   // above the picture has them otherwise): to leave it again.
-  let { cap, speed = false, fullscreen = false, onfullscreen, popped = false, onpopout }:
-    { cap: { get: () => ViewerCap; set: (c: ViewerCap) => void } | null; speed?: boolean; fullscreen?: boolean; onfullscreen: () => void; popped?: boolean; onpopout: () => void } = $props();
+  let { cap, speed = false, fullscreen = false, onfullscreen, popped = false, onpopout, video = null }:
+    { video?: HTMLVideoElement | null; cap: { get: () => ViewerCap; set: (c: ViewerCap) => void } | null; speed?: boolean; fullscreen?: boolean; onfullscreen: () => void; popped?: boolean; onpopout: () => void } = $props();
 
   let open = $state<'quality' | 'speed' | null>(null);
   let root = $state<HTMLElement>();
@@ -23,16 +25,26 @@
   const toggle = (m: 'quality' | 'speed') => { open = open === m ? null : m; };
   // A click anywhere else closes the menu
   function outside(e: PointerEvent) {
-    if (open && root && !root.contains(e.target as Node)) open = null;
+    if (open && root && !root.contains(e.target as Node)) { open = null; swallowClick(e); }
   }
+  // A menu that closes (an item, the button, a press outside) is noted: the second click of a double
+  // click is not the picture's
+  $effect(() => {
+    if (!open) return;
+    return () => menuClosed();
+  });
 </script>
 
-<svelte:window onpointerdown={outside} onkeydown={e => { if (e.key === 'Escape') open = null; }} />
+<svelte:window onpointerdowncapture={outside} onkeydown={e => { if (e.key === 'Escape') open = null; }} />
 
-{#if cap || speed || fullscreen || popped}
+{#if cap || speed || fullscreen || popped || (video && canSaveFrame())}
 <div class="hud" class:open={!!open} bind:this={root} role="presentation" ondblclick={e => e.stopPropagation()} oncontextmenu={e => e.stopPropagation()}>
     <!-- Full screen: mute and deafen, left of everything else -->
     {#if fullscreen}<FsMuteDeafen />{/if}
+    <!-- A screen or a camera: save the frame on screen, beside the quality button (desktop app) -->
+    {#if video && canSaveFrame()}
+      <button use:tip class="ibtn" onclick={() => saveVideoFrame(video)} aria-label="Save this frame" title="Save this frame as a picture"><Icon name="download" size={20} /></button>
+    {/if}
     {#if cap}
       <div class="wrap">
         <button use:tip class="ibtn" class:on={open === 'quality' || isCapped(current)} onclick={() => toggle('quality')}

@@ -146,7 +146,8 @@ interface NativeApi extends PlatformApi {
   // The size of the picture the YouTube player plays (null while unknown)
   youtubeVideoSize(): Promise<{ width: number; height: number } | null>;
   // One frame of the YouTube picture as a small JPEG data address (null when there is none)
-  youtubeFrame(): Promise<string | null>;
+  // full: at the size it plays, as a PNG (for saving it)
+  youtubeFrame(full?: boolean): Promise<string | null>;
   // The video's preview picture from YouTube, as a small JPEG data address (null when there is none)
   youtubeThumbnail(id: string): Promise<string | null>;
   publicServers(url: string): Promise<PublicServer[]>;
@@ -158,11 +159,17 @@ interface NativeApi extends PlatformApi {
   screenSources(thumbnails: boolean): Promise<{ sources: ScreenSource[]; chosen: boolean }>;
   pickScreenSource(id: string): void;
   // portal: the system shows its own source picker (Wayland). audio: how other programs' sound can be captured.
-  shareInfo(): Promise<{ portal: boolean; audio: 'pipewire' | 'loopback' | 'none'; micLabel: string }>;
+  shareInfo(): Promise<{ portal: boolean; audio: 'pipewire' | 'system' | 'loopback' | 'none'; micLabel: string }>;
+  // Whether the system lets this app use the camera: 'granted', 'denied', 'restricted' or 'not-determined' (asks on macOS)
+  cameraAccess(): Promise<string>;
+  // Opens the system's camera privacy page (Windows Settings, macOS Privacy & Security)
+  openCameraSettings(): Promise<void>;
   shareAudioApps(): Promise<string[]>;
   // Linux: route one program, or everything but this app, into a virtual microphone named micLabel
   shareAudioStart(target: { kind: 'all' } | { kind: 'app'; name: string }): Promise<void>;
   shareAudioStop(): Promise<void>;
+  // Windows ('system'): shareAudioStart sends everything but this app as 16-bit stereo 48 kHz PCM; returns a function that stops listening
+  onSharePcm(fn: (chunk: Uint8Array) => void): () => void;
   open(connId: string, host: string, port: number, identityId?: string): Promise<void>;
   send(connId: string, bytes: Uint8Array): void;
   close(connId: string): void;

@@ -6,6 +6,7 @@
 import { watchTogether } from './watch-together.svelte.ts';
 import { ICON_PATHS } from './icons.ts';
 import { RATES, rateLabel, qualityLabel, IDLE_MS, DEFAULT_QUALITIES } from './yt-controls.ts';
+import { menuClosed, menuJustClosed, swallowClick } from './overlay.ts';
 import { CAP_FPS, CAP_HEIGHTS, capFpsLabel, capHeightLabel, isCapped, type ViewerCap } from './stream-quality.ts';
 
 export const POPOUT_BAR_CSS = `
@@ -159,6 +160,7 @@ export function mountPopoutBar(w: Window, stage: HTMLElement, fullscreen?: Popou
   let menu: 'quality' | 'speed' | null = null;
   let menuEl: HTMLElement | null = null;
   const closeMenu = () => {
+    if (menu) menuClosed();
     menuEl?.remove();
     menuEl = null;
     menu = null;
@@ -238,9 +240,11 @@ export function mountPopoutBar(w: Window, stage: HTMLElement, fullscreen?: Popou
     seek.style.setProperty('--pct', `${dur ? Math.min(100, (ms / dur) * 100) : 0}%`);
   };
 
-  shield.addEventListener('dblclick', fs.toggle);
+  // The menus are overlays: the picture ignores the clicks that belong to a menu that just closed
+  shield.addEventListener('dblclick', () => { if (!menuJustClosed()) fs.toggle(); });
   shield.addEventListener('click', () => {
     if (menu) { closeMenu(); return; }
+    if (menuJustClosed()) return;
     if (watchTogether.sharedPlaying()) watchTogether.pause(); else watchTogether.play();
   });
   seek.addEventListener('input', () => { dragging = true; paint(Number(seek.value), Number(seek.max)); });
@@ -272,6 +276,12 @@ export function mountPopoutBar(w: Window, stage: HTMLElement, fullscreen?: Popou
   // The whole window wakes it: the buttons are in its corner, which may be outside a narrower picture
   d.addEventListener('pointermove', wake);
   d.addEventListener('pointerdown', wake);
+  // A press anywhere but on the menu closes it, without playing or pausing
+  d.addEventListener('pointerdown', e => {
+    if (!menu || (e.target as Element | null)?.closest?.('.yt-wrap')) return;
+    closeMenu();
+    swallowClick(e, w);
+  }, true);
   d.documentElement.addEventListener('pointerleave', leave);
 
   const tick = () => {
@@ -329,7 +339,7 @@ export interface VideoPopout {
   // onpopin: bring the picture back into the main window (which closes this one)
   // Full screen of this window: native (the desktop app) or null for the browser's own full screen API
   fullscreen?: PopoutFullscreen | null;
-  hud?: { cap: { get: () => ViewerCap; set: (c: ViewerCap) => void } | null; speed: boolean; onpopin: () => void };
+  hud?: { cap: { get: () => ViewerCap; set: (c: ViewerCap) => void } | null; speed: boolean; frame?: () => void; onpopin: () => void };
 }
 export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopout): () => void {
   const d = w.document;
@@ -393,6 +403,7 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
     sBtn?.classList.toggle('on', menuEl?.dataset.kind === 'speed' || watchTogether.sharedRate() !== 1);
   };
   const closeMenu = () => {
+    if (menuEl) menuClosed();
     menuEl?.remove(); menuEl = null; menuOpen = false; refreshHud();
     // The mouse may have gone while the menu was open
     if (!stage.matches(':hover')) stage.classList.remove('active');
@@ -442,6 +453,8 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
       }
       refreshHud();
     };
+    // Save the frame on screen, beside the quality button
+    if (hud.frame) { const fr = button('Save this frame as a picture', 'download'); fr.btn.addEventListener('click', hud.frame); }
     if (hud.cap) { const q = button('Stream quality (for you only)', 'settings'); qBtn = q.btn; q.btn.addEventListener('click', () => open('quality', q.wrap)); }
     if (hud.speed) { const sp = button('Playback speed (for everyone)', 'speed'); sBtn = sp.btn; sp.btn.addEventListener('click', () => open('speed', sp.wrap)); }
     // Back into the main window, then full screen of this window (the pop-out button is left of full screen)
@@ -451,7 +464,9 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
     const fsb = button('Full screen', 'expand');
     fs.bind(fsb.btn);
     fsb.btn.addEventListener('click', fs.toggle);
-    d.addEventListener('pointerdown', e => { if (menuEl && !top!.contains(e.target as Node)) closeMenu(); });
+    d.addEventListener('pointerdown', e => {
+      if (menuEl && !top!.contains(e.target as Node)) { closeMenu(); swallowClick(e, w); }
+    }, true);
     refreshHud();
   }
 
@@ -467,10 +482,10 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
   };
 
   shield.addEventListener('click', () => {
-    if (!o.watch) return;
+    if (!o.watch || menuJustClosed()) return;
     if (watchTogether.sharedPlaying()) watchTogether.pause(); else watchTogether.play();
   });
-  shield.addEventListener('dblclick', fs.toggle);
+  shield.addEventListener('dblclick', () => { if (!menuJustClosed()) fs.toggle(); });
   seek.addEventListener('input', () => { dragging = true; paint(Number(seek.value), Number(seek.max)); });
   seek.addEventListener('change', () => { watchTogether.seek(Number(seek.value)); dragging = false; seek.blur(); });
   mute.addEventListener('click', () => { const v = o.volume!.get(); o.volume!.set(v === 0 ? (lastVol || 1) : 0); });

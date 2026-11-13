@@ -1,6 +1,6 @@
 import { desktop } from './native.ts';
 import { menu, type MenuItem } from './menu.svelte.ts';
-import { useUrlAsProfileBackground, useUrlAsUserCard } from './banner-actions.ts';
+import { urlPictureItems } from './banner-actions.ts';
 
 // Right-click menu for text fields, messages, links and images. Elements with their own menu
 // (users, channels, servers) call preventDefault, so Electron does not report those.
@@ -49,8 +49,7 @@ export function startTextMenu(): void {
       }
       if (p.mediaType === 'image' && p.srcURL) {
         add([
-          { label: 'Set as profile background', action: () => void useUrlAsProfileBackground(p.srcURL) },
-          { label: 'Set as user card', action: () => void useUrlAsUserCard(p.srcURL) },
+          ...urlPictureItems(p.srcURL),
           { label: 'Copy image', action: () => api.editAction('copyImageAt', { x: p.x, y: p.y }) },
           { label: 'Save image...', action: () => api.editAction('saveImage', p.srcURL) }
         ]);

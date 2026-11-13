@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { gifs, searchGifs, type Gif } from '../lib/gifs.svelte.ts';
+  import { gifs, searchGifs, gifFile, type Gif } from '../lib/gifs.svelte.ts';
   import { menu } from '../lib/menu.svelte.ts';
-  import { saveImage } from '../lib/banner-actions.ts';
+  import { saveImage, pictureItems } from '../lib/banner-actions.ts';
 
-  let { onpick, onbackground, onusercard, onclose }: { onpick: (g: Gif) => void; onbackground: (g: Gif) => void; onusercard: (g: Gif) => void; onclose: () => void } = $props();
+  let { onpick, onclose }: { onpick: (g: Gif) => void; onclose: () => void } = $props();
 
   type Tab = 'recent' | 'favs' | 'find';
   let tab = $state<Tab>(gifs.recent.length ? 'recent' : 'find');
@@ -82,8 +82,7 @@
   <div class="grid" {onscroll}>
     {#each shown as g (g.id)}
       <div class="tile" role="presentation" oncontextmenu={e => menu.show(e, [
-        { label: 'Set as profile background', action: () => onbackground(g) },
-        { label: 'Set as user card', action: () => onusercard(g) },
+        ...pictureItems(() => gifFile(g)),
         { label: 'Save', action: () => saveImage(g.url) },
         ...(tab === 'recent' ? [{ label: 'Remove', action: () => gifs.removeRecent(g) }] : []),
         { label: gifs.isFav(g) ? 'Remove from favourites' : 'Add to favourites', action: () => gifs.toggleFav(g) }

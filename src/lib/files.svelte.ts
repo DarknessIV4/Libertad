@@ -431,11 +431,17 @@ class Files {
     d.tail.then(() => sink.abort()).catch(() => {});
   }
 
+  // The sound of a file arriving or failing. Profile pictures, banners and cards travel as files too
+  // (direct between clients only): somebody changing their profile is not a file for you, so those are silent.
+  private fileSound(id: string, ev: 'uploadDone' | 'uploadFailed'): void {
+    if (!this.p2pOnly.has(id)) sounds.play(ev);
+  }
+
   private fail(d: Download, error: string): void {
     this.stop(d);
     this.discard(d);
     this.set(d.meta.i, { state: 'failed', error, rate: 0, sources: 0 });
-    sounds.play('uploadFailed');
+    this.fileSound(d.meta.i, 'uploadFailed');
   }
 
   private missing(d: Download): number[] {
@@ -531,7 +537,7 @@ class Files {
     const blob = new Blob(d.parts as Blob[], { type: safeType(d.meta.m) });
     this.ready(d.meta, blob);
     this.keep(d.meta, blob);
-    sounds.play('uploadDone');
+    this.fileSound(d.meta.i, 'uploadDone');
   }
 
   // ─── Requests between clients ───────────────────────────────────────────────
@@ -550,7 +556,7 @@ class Files {
       // Only a file that checked out is put in place; it is the only copy
       const where = await sink.finish();
       this.readyDisk(d.meta, where);
-      sounds.play('uploadDone');
+      this.fileSound(d.meta.i, 'uploadDone');
     } catch {
       await sink.abort().catch(() => {});
       this.fail(d, 'Could not write the file');

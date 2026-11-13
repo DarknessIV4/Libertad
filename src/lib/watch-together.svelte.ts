@@ -288,6 +288,25 @@ class WatchTogether {
     return this.getState(s) === 'watching' ? [...party.participants] : undefined;
   }
 
+  // Everybody else on the server. Who hosts is shown on their name in every room, so the start and
+  // the end of a party (and the question who hosts) reach everyone; the party itself is the channel's.
+  private everyone(s: Session): number[] {
+    const me = s.self?.session;
+    return s.client ? [...s.client.users.values()].filter(u => u.session !== me).map(u => u.session) : [];
+  }
+
+  private outsiders(s: Session): number[] {
+    const me = s.self?.session;
+    const ch = s.self?.channelId;
+    return s.client ? [...s.client.users.values()].filter(u => u.session !== me && u.channelId !== ch).map(u => u.session) : [];
+  }
+
+  // The indicator on the host's name for those in other rooms: what it needs, and nothing of the party
+  private announceOutside(s: Session, party: WatchParty, to: number[]): void {
+    if (!to.length) return;
+    void this.sendWatchSignal(WATCH.start, { mode: party.meta.mode, title: party.meta.title }, s, to, true);
+  }
+
   private inMyChannel(s: Session, sender: number): boolean {
     const self = s.client?.self;
     const senderUser = s.client?.users.get(sender);
@@ -705,8 +724,9 @@ class WatchTogether {
 
     console.log('[WatchTogether] start() complete');
 
-    // Announce watch together session to others in the channel
+    // Announce watch together session to others in the channel, and on the host's name in the other rooms
     s.setWatchTogether(self.session, { mode, title: options.title });
+    this.announceOutside(s, party, this.outsiders(s));
   }
 
   async join(hostSession: number) {
@@ -719,6 +739,8 @@ class WatchTogether {
       return;
     }
     if (this.getState(s) !== 'idle') return;
+    // A host in another room shows the indicator only; the party is for the room
+    if (!this.inMyChannel(s, hostSession)) return;
 
     // Don't join our own session
     if (hostSession === s.self?.session) {
@@ -919,7 +941,7 @@ class WatchTogether {
     }
 
     // Send end signal with priority to bypass the rate limit queue
-    await this.sendWatchSignal(WATCH.end, {}, s, undefined, true);
+    await this.sendWatchSignal(WATCH.end, {}, s, this.everyone(s), true);
 
     // Clear watch together announcement
     const self = s.self;
@@ -1142,11 +1164,11 @@ class WatchTogether {
         this.handleStart(s, body as any, fromSession);
         break;
       case WATCH.join:
-        this.handleJoin(fromSession);
+        this.handleJoin(s, fromSession);
         break;
       case WATCH.leave:
         // Don't handle our own leave signals
-        if (!isSelf) this.handleLeave(fromSession);
+        if (!isSelf) this.handleLeave(s, fromSession);
         break;
       case WATCH.end:
         // Don't handle our own end signals - we already called cleanup() directly
@@ -1217,8 +1239,10 @@ class WatchTogether {
     if (!assembler) this.assemblers.set(s, assembler = new WatchAssembler());
     const signal = await assembler.push(sender, data);
 
-    // Only people in our channel take part
-    if (!signal || !s.client || !this.inMyChannel(s, sender)) return;
+    // Only people in our channel take part; the start, the end and the question who hosts are
+    // also for the other rooms, where they only show the indicator
+    const open = signal?.type === WATCH.start || signal?.type === WATCH.end || signal?.type === WATCH.who;
+    if (!signal || !s.client || (!open && !this.inMyChannel(s, sender))) return;
 
     console.log('[WatchTogether] Signal received - type:', signal.type, 'from:', sender, 'current state:', this.getState(s));
 
@@ -1372,8 +1396,9 @@ class WatchTogether {
     // Send a 'who' query to find existing hosts
     const client = s.client;
     if (!client) return;
+    // Everybody on the server: hosts in other rooms answer with just the indicator
+    const targets = this.everyone(s);
     encodeWatchSignal(WATCH.who, {}).then(chunks => {
-      const targets = s.self ? s.usersIn(s.self.channelId).map(u => u.session) : [];
       for (const chunk of chunks) {
         client.sendPluginData(targets, WATCH_DATA_ID, chunk, { priority: true });
       }
@@ -1611,6 +1636,14 @@ class WatchTogether {
       return;
     }
 
+    // A host in another room: only their name shows that they host, there is no party for us
+    if (!this.inMyChannel(s, fromSession)) {
+      if (body?.mode === 1 || body?.mode === 2 || body?.mode === 3) {
+        s.setWatchTogether(fromSession, { mode: body.mode, title: String(body.title ?? '').slice(0, 300) });
+      }
+      return;
+    }
+
     const currentState = this.getState(s);
     const party = this.getParty(s);
 
@@ -1654,8 +1687,7 @@ class WatchTogether {
     // State stays 'idle' until user manually joins
   }
 
-  private handleJoin(fromSession: number) {
-    const s = sessions.active;
+  private handleJoin(s: Session, fromSession: number) {
     const party = this.getParty(s);
     if (!party) return;
 
@@ -1699,8 +1731,7 @@ class WatchTogether {
     }, s, [fromSession], true);
   }
 
-  private handleLeave(fromSession: number) {
-    const s = sessions.active;
+  private handleLeave(s: Session, fromSession: number) {
     const party = this.getParty(s);
     if (!party) return;
 
@@ -1746,9 +1777,18 @@ class WatchTogether {
 
   // We moved to another channel: a party we host does not follow us, and the indicators of the
   // old channel are no longer ours (the viewers there end the party when they see us go)
+  // A party we only watch stays behind too: it belongs to the old channel, and keeping it would
+  // make us ignore the state of a party in the new one (entered() asks again afterwards).
   selfMoved(s: Session): void {
-    if (this.getParty(s) && this.isHostFor(s)) {
-      if (this.getParty(s)?.meta.mode === 2) void watchFileStream.stopStream(s);
+    const party = this.getParty(s);
+    if (party) {
+      if (this.isHostFor(s)) {
+        // The party ends with the move: everybody, in any room, drops the indicator on our name
+        void this.sendWatchSignal(WATCH.end, {}, s, this.everyone(s), true);
+        if (party.meta.mode === 2) void watchFileStream.stopStream(s);
+      } else if (party.meta.mode === 2 && this.getState(s) !== 'idle') {
+        void watchFileStream.stopWatching(s, party.hostSession);
+      }
       this.cleanup(s);
     }
     s.clearWatchTogether();
@@ -1764,6 +1804,11 @@ class WatchTogether {
   private handleWho(s: Session, fromSession: number) {
     const party = this.getParty(s);
     if (!party) return;
+    // Asked from another room: only the host answers, with what the indicator needs
+    if (!this.inMyChannel(s, fromSession)) {
+      if (this.isHostFor(s)) this.announceOutside(s, party, [fromSession]);
+      return;
+    }
     console.log('[WatchTogether] handleWho - responding to', fromSession);
     this.announceToHost(s, party, fromSession);
     const syncState = this.getSyncState(s);

@@ -12,6 +12,8 @@ export const CARD_WIDTH = 320;
 export interface Crop { x: number; y: number; w: number; h: number }
 export interface EditParams {
   rotation: number;   // degrees, 0 to 360
+  flipH?: boolean;    // mirrored left to right, as it looks after turning
+  flipV?: boolean;    // mirrored top to bottom
   crop: Crop;         // 0 to 1, of the box around the turned picture
   darkness: number;   // 0 to 95 (percent)
   blur: number;       // 0 to 40 (px on a card)
@@ -29,7 +31,7 @@ export function rotatedSize(w: number, h: number, degrees: number): { w: number;
 
 // Whether these settings leave the picture exactly as it was
 export function isUnchanged(p: EditParams): boolean {
-  return p.rotation % 360 === 0 && p.darkness === 0 && p.blur === 0
+  return p.rotation % 360 === 0 && !p.flipH && !p.flipV && p.darkness === 0 && p.blur === 0
     && p.crop.x < 0.002 && p.crop.y < 0.002 && p.crop.w > 0.996 && p.crop.h > 0.996;
 }
 
@@ -53,6 +55,8 @@ export function renderCrop(src: Drawable, p: EditParams, outW: number, outH: num
   ctx.scale(k, k);
   ctx.translate(-p.crop.x * box.w, -p.crop.y * box.h);
   ctx.translate(box.w / 2, box.h / 2);
+  // The mirror comes after the turning, so it flips what is seen
+  ctx.scale(p.flipH ? -1 : 1, p.flipV ? -1 : 1);
   ctx.rotate(p.rotation * Math.PI / 180);
   ctx.drawImage(src.source, -src.width / 2, -src.height / 2);
   let out = canvas;

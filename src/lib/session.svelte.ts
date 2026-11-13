@@ -421,11 +421,11 @@ export class Session {
       this.lastChannel.set(user.session, user.channelId);
       if (client.synced && self && (isNew || changed.includes('channelId'))) {
         if (user.session === self.session) {
-          share.entered(this); watchTogether.selfMoved(this);
+          share.entered(this); watchTogether.selfMoved(this); watchTogether.entered(this);
           // Not while a channel is still being entered on start: that would overwrite where we are going
           if (this.server && !this.autoJoin) store.rememberChannel(this.server.id, user.channelId, client.channels.get(user.channelId)?.name ?? '');
         }
-        else { share.userMoved(this, user); thumbs.userMoved(this, user); }
+        else { share.userMoved(this, user); thumbs.userMoved(this, user); watchTogether.userMoved(this, user); }
       }
       let flips = { mute: false, deaf: false };
       if (self && user.session === self.session) {
@@ -1112,7 +1112,12 @@ export class Session {
     if (kind) this.sharing[session] = kind;
     else { delete this.sharing[session]; if (!this.watchTogether[session]) this.dropFrame(session); }
   }
-  clearSharing(): void { this.sharing = {}; }
+  // Moving rooms: the previews of the old room go with its indicators (a new one makes its own)
+  clearSharing(): void {
+    const old = Object.keys(this.sharing).map(Number);
+    this.sharing = {};
+    for (const id of old) if (!this.watchTogether[id]) this.dropFrame(id);
+  }
 
   setWatchTogether(session: number, info: { mode: WatchMode; title: string } | false): void {
     if (info) {
@@ -1123,7 +1128,11 @@ export class Session {
       if (!this.sharing[session]) this.dropFrame(session);
     }
   }
-  clearWatchTogether(): void { this.watchTogether = {}; }
+  clearWatchTogether(): void {
+    const old = Object.keys(this.watchTogether).map(Number);
+    this.watchTogether = {};
+    for (const id of old) if (!this.sharing[id]) this.dropFrame(id);
+  }
 
   // The choice is remembered, so it also works while disconnected and carries to the next connect
   setSelfMute(v: boolean) {

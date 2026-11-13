@@ -10,6 +10,8 @@
   import FsMuteDeafen from './FsMuteDeafen.svelte';
   import { youtubeHost } from '../lib/youtube-account.svelte.ts';
   import { RATES, rateLabel, qualityLabel, IDLE_MS, DEFAULT_QUALITIES } from '../lib/yt-controls.ts';
+  import { menuClosed, menuJustClosed, swallowClick } from '../lib/overlay.ts';
+  import { canSaveYoutubeFrame, saveYoutubeFrame } from '../lib/save-frame.ts';
 
   // YouTube iframe player for watch together (mode 1).
   // The embed is driven through the same postMessage protocol YouTube's own iframe API uses, because
@@ -231,7 +233,19 @@
   }
   const toggleMenu = (m: 'quality' | 'speed') => { menu = menu === m ? null : m; };
   // A click on the picture closes an open menu first, otherwise it plays or pauses
-  const clickPicture = () => { if (menu) menu = null; else toggle(); };
+  const clickPicture = () => { if (menu) menu = null; else if (!menuJustClosed()) toggle(); };
+  // The menus are overlays: a double click on them or on the bars is not the picture's (full screen),
+  // and a press anywhere else closes a menu without playing or pausing
+  const stop = (e: Event) => e.stopPropagation();
+  $effect(() => {
+    if (!menu) return;
+    return () => menuClosed();
+  });
+  function outside(e: PointerEvent) {
+    if (!menu || (e.target as Element | null)?.closest?.('.menu-wrap')) return;
+    menu = null;
+    swallowClick(e);
+  }
 
   function buildSrc(id: string, startMs: number, playing: boolean, nonce = 0): string {
     // controls=0 removes YouTube's own chrome (title, volume, captions, settings, fullscreen, the
@@ -491,7 +505,8 @@
   });
 </script>
 
-<svelte:window onkeydown={e => { if (src) playerKey(e, { toggle, seekBy }); }} />
+<svelte:window onpointerdowncapture={outside}
+  onkeydown={e => { if (e.key === 'Escape' && menu) { menu = null; return; } if (src) playerKey(e, { toggle, seekBy }); }} />
 
 {#if src}
   <div class="youtube-container" class:active role="presentation"
@@ -512,9 +527,13 @@
     <button class="shield" onclick={clickPicture} aria-label={playingNow ? 'Pause' : 'Play'}>
       <span class="big"><Icon name={playingNow ? 'pause' : 'play'} size={36} /></span>
     </button>
-    <div class="top">
+    <div class="top" role="presentation" ondblclick={stop}>
       <!-- Full screen: mute and deafen, left of everything else -->
       {#if spotState.fullscreen}<FsMuteDeafen dark={false} />{/if}
+      <!-- Save the frame on screen (desktop app), left of the other buttons -->
+      {#if canSaveYoutubeFrame()}
+        <button use:tip class="ibtn" onclick={() => saveYoutubeFrame(watchTogether.sharedPosition())} aria-label="Save this frame" title="Save this frame as a picture"><Icon name="download" size={20} /></button>
+      {/if}
       <div class="menu-wrap">
         <button use:tip class="ibtn" class:on={menu === 'quality'} onclick={() => toggleMenu('quality')} aria-label="Quality" title="Quality"><Icon name="settings" size={20} /></button>
         {#if menu === 'quality'}
@@ -542,7 +561,7 @@
         <button use:tip class="ibtn" onclick={() => spotAction('fullscreen')} aria-label="Exit full screen" title="Exit full screen"><Icon name="expand" size={20} /></button>
       {/if}
     </div>
-    <div class="bar">
+    <div class="bar" role="presentation" ondblclick={stop}>
       <span class="time">{clock(shown)}{#if duration}<span class="sep">/</span><span class="total">{clock(duration)}</span>{/if}</span>
       <div class="row">
         <input class="seek" type="range" min="0" max={duration || 1} step="1000" disabled={!duration}

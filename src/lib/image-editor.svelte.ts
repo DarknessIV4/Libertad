@@ -6,6 +6,11 @@ import type { GifOptions } from './gif-edit.ts';
 // Where an edited picture goes on a profile card: the banner, the space under it, or all of it
 export type EditScope = 'banner' | 'under' | 'whole';
 
+// Where an app background goes: all three panels, or the screen before a server is entered
+export type BgTarget = 'app' | 'login' | 'both';
+// With the app background: one panel, or all three as one picture
+export type AppScope = 'left' | 'middle' | 'right' | 'whole';
+
 export interface EditOptions {
   // Darkness and blur sliders (a background has its own, set after it is chosen)
   effects: boolean;
@@ -16,6 +21,10 @@ export interface EditOptions {
   note?: string;
   // Show a profile card beside the crop, with the picture where it would go: the banner, the space under it or the whole card
   preview?: EditScope;
+  // Ask whether it is the app background or the login background, with a preview of each beside the crop
+  target?: boolean;
+  // With target: the app scope selected when the editor opens
+  appScope?: AppScope;
   // The frame stays square (a profile picture)
   square?: boolean;
   // Only the crop is asked for: the picture comes back as it was, with the part to show. For a GIF or a
@@ -28,6 +37,8 @@ export interface EditResult {
   // The picture as it was when nothing was changed, else the edited one
   file: File;
   scope?: EditScope;
+  target?: BgTarget;
+  appScope?: AppScope;
   // With cropOnly: the part to show (0 to 1 of the picture)
   crop?: Crop;
 }

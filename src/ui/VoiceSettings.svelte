@@ -42,6 +42,7 @@
 
 <div class="voice">
   {#if voice.error}<p class="error">{voice.error}</p>{/if}
+  {#if voice.notice}<p class="help">{voice.notice}</p>{/if}
 
   <h3>Devices</h3>
   <div class="grid">

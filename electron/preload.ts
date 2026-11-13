@@ -98,7 +98,7 @@ contextBridge.exposeInMainWorld('libertadNative', {
   youtubeQuality: (level: string) => ipcRenderer.invoke('yt:quality', level),
   youtubeRate: (rate: number) => ipcRenderer.invoke('yt:rate', rate),
   youtubeVideoSize: () => ipcRenderer.invoke('yt:size'),
-  youtubeFrame: () => ipcRenderer.invoke('yt:frame'),
+  youtubeFrame: (full?: boolean) => ipcRenderer.invoke('yt:frame', !!full),
   youtubeThumbnail: (id: string) => ipcRenderer.invoke('yt:thumbnail', id),
   publicServers: (url: string) => ipcRenderer.invoke('publist:fetch', url),
   pingServer: (host: string, port: number) => ipcRenderer.invoke('publist:ping', host, port),
@@ -108,9 +108,16 @@ contextBridge.exposeInMainWorld('libertadNative', {
   screenSources: (thumbnails: boolean) => ipcRenderer.invoke('share:sources', !!thumbnails),
   pickScreenSource: (id: string) => ipcRenderer.send('share:pick', id),
   shareInfo: () => ipcRenderer.invoke('share:info'),
+  cameraAccess: () => ipcRenderer.invoke('share:cameraAccess'),
+  openCameraSettings: () => ipcRenderer.invoke('share:openCameraSettings'),
   shareAudioApps: () => ipcRenderer.invoke('share:audioApps'),
   shareAudioStart: (target: unknown) => ipcRenderer.invoke('share:audioStart', target),
   shareAudioStop: () => ipcRenderer.invoke('share:audioStop'),
+  onSharePcm: (fn: (chunk: Uint8Array) => void) => {
+    const listener = (_e: unknown, chunk: Uint8Array) => fn(chunk);
+    ipcRenderer.on('share:pcm', listener);
+    return () => { ipcRenderer.removeListener('share:pcm', listener); };
+  },
   describeCerts: (ders: Uint8Array[]) => ipcRenderer.invoke('certs:describe', ders),
   identities: {
     list: () => ipcRenderer.invoke('identities:list'),

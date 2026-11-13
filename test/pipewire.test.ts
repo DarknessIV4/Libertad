@@ -45,3 +45,15 @@ test('existing links are kept, stale ones removed', () => {
 test('nothing without the virtual microphone', () => {
   assert.deepEqual(planLinks(graph.slice(5), { kind: 'all' }, []), { add: [], remove: [] });
 });
+
+test('this app is left out even when its stream has no matching process id', () => {
+  // A helper process (800) that is not in the app's process list, and a stream with no pid at all
+  const g = [...graph,
+    node(70, { 'media.class': 'Stream/Output/Audio', 'application.name': 'Chromium', 'application.process.id': 800 }), port(71, 70, 'output', 'FL'), port(72, 70, 'output', 'FR'),
+    node(80, { 'media.class': 'Stream/Output/Audio', 'application.name': 'Libertad' }), port(81, 80, 'output', 'FL'), port(82, 80, 'output', 'FR'),
+    node(90, { 'media.class': 'Stream/Output/Audio', 'application.name': 'AudioStream', 'application.process.binary': '/opt/Libertad/libertad' }), port(91, 90, 'output', 'FL'), port(92, 90, 'output', 'FR')];
+  const own = { pids: [500], names: ['libertad'], isOwnPid: (pid: number) => pid === 800 };
+  const { add } = planLinks(g, { kind: 'all' }, own);
+  assert.deepEqual(add.sort(), [[31, 11], [32, 12], [41, 11], [41, 12], [51, 11], [52, 12]].sort());
+  assert.deepEqual(audioApps(g, own), ['Firefox', 'Game', 'Spotify']);
+});

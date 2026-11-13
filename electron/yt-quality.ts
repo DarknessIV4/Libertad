@@ -127,15 +127,16 @@ const rateScript = (rate: number) => `(async () => {
 })()`;
 
 // One frame of the picture, as a small JPEG data address (null while there is none, or it cannot be read)
-const frameScript = `(async () => {
+const frameScript = (full: boolean) => `(async () => {
   try {
     const v = document.querySelector('video');
     if (!v || !v.videoWidth || !v.videoHeight) return null;
-    const w = 320, h = Math.max(1, Math.round(w * v.videoHeight / v.videoWidth));
+    const full = ${full};
+    const w = full ? v.videoWidth : 320, h = full ? v.videoHeight : Math.max(1, Math.round(w * v.videoHeight / v.videoWidth));
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     c.getContext('2d').drawImage(v, 0, 0, w, h);
-    return c.toDataURL('image/jpeg', 0.7);
+    return full ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.7);
   } catch (e) { return null; }
 })()`;
 
@@ -161,12 +162,12 @@ const describeFrames = () => allFrames().map(f => `${f.url || '(no address)'} [$
 
 export interface RateResult { method: 'api' | 'menu' | 'none'; rate?: number; error?: string }
 
-export async function getYoutubeFrame(): Promise<string | null> {
+export async function getYoutubeFrame(full = false): Promise<string | null> {
   const frames = embedFrames();
   if (!frames.length) return null;
   try {
-    const url = await frames[0].executeJavaScript(frameScript) as string | null;
-    return typeof url === 'string' && url.startsWith('data:image/jpeg') ? url : null;
+    const url = await frames[0].executeJavaScript(frameScript(full)) as string | null;
+    return typeof url === 'string' && url.startsWith(full ? 'data:image/png' : 'data:image/jpeg') ? url : null;
   } catch {
     return null;
   }

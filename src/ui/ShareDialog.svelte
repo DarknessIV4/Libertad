@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import Modal from './Modal.svelte';
+  import Icon from './Icon.svelte';
   import { share, cameraConstraints, shareSettings, SHARE_BITRATES, SHARE_HEIGHTS, SHARE_FPS, SHARE_MODES, type ShareMode, type ShareKind } from '../lib/share.svelte.ts';
   import { watchTogether, type WatchMode } from '../lib/watch-together.svelte.ts';
   import { desktop, torrentError, type ScreenSource } from '../lib/native.ts';
@@ -11,8 +12,15 @@
   import { watchMemo, memoText } from '../lib/watch-memo.svelte.ts';
   let memoOpen = $state(false);
   let memoEl = $state<HTMLElement>();
+  // The memo's menu grows with its records, up to half the height of this window; longer lists scroll
+  let memoMax = $state(240);
+  function toggleMemo() {
+    memoOpen = !memoOpen;
+    if (memoOpen) memoMax = Math.floor((memoEl?.closest('[aria-modal="true"]')?.clientHeight ?? 480) / 2);
+  }
   import { ui } from '../lib/ui.svelte.ts';
   import { native } from '../lib/native.ts';
+  import { systemAudioTrack } from '../lib/audio/system-feed.ts';
 
   // Everything is chosen here, with a preview, before anything is sent: what to show, which
   // sound goes with it and the quality. In a browser, and on Wayland, the system's own dialog
@@ -20,7 +28,7 @@
   let { onclose }: { onclose: () => void } = $props();
   const target = share.dialog!;
 
-  let info = $state<{ portal: boolean; audio: 'pipewire' | 'loopback' | 'browser' | 'none'; micLabel: string }>({ portal: true, audio: desktop ? 'none' : 'browser', micLabel: '' });
+  let info = $state<{ portal: boolean; audio: 'pipewire' | 'system' | 'loopback' | 'browser' | 'none'; micLabel: string }>({ portal: true, audio: desktop ? 'none' : 'browser', micLabel: '' });
   // What to show: the screen (or a window), or a camera, or watch together
   // Phones have no screen capture in the browser; there the camera is the only choice
   const canScreen = !!navigator.mediaDevices?.getDisplayMedia;
@@ -28,6 +36,8 @@
   let kind = $state<DialogKind>('screen');
   let cameras = $state<MediaDeviceInfo[]>([]);
   let camera = $state('');
+  // The system (Windows privacy setting, macOS permission) blocks the camera: offer to open its settings
+  let cameraBlocked = $state(false);
   let sources = $state<ScreenSource[]>([]);
   let selected = $state('');
   let preview = $state.raw<MediaStream | null>(null);
@@ -340,32 +350,87 @@
     }
   }
 
-  async function showCamera(deviceId = camera) {
-    error = '';
-    dropPreview();
+  // Tries from the most wished-for to the plainest request, so a camera that cannot do the chosen
+  // size or frame rate (common with Windows webcams and virtual cameras) still opens. Only a refusal
+  // ends it early; "not found" and "overconstrained" can come from a stale device id or from the wishes.
+  async function openCamera(deviceId: string): Promise<MediaStream> {
     const wanted: MediaTrackConstraints = cameraConstraints();
     if (deviceId) wanted.deviceId = { exact: deviceId };
     else wanted.facingMode = 'user';
-    try {
+    const attempts: MediaStreamConstraints[] = [
+      { video: wanted },
+      { video: deviceId ? { deviceId: { exact: deviceId } } : true }
+    ];
+    if (deviceId) attempts.push({ video: true });
+    let first: Error | null = null;
+    let last: Error | null = null;
+    for (const constraints of attempts) {
       try {
-        preview = await navigator.mediaDevices.getUserMedia({ video: wanted });
+        return await navigator.mediaDevices.getUserMedia(constraints);
       } catch (e) {
-        // A refusal or a missing camera is final; anything else may be a phone camera that
-        // dislikes the wishes above, so ask once more for whatever it has
-        if (['NotAllowedError', 'SecurityError', 'NotFoundError'].includes((e as Error).name)) throw e;
-        preview = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true });
+        last = e as Error;
+        first ??= last;
+        if (['NotAllowedError', 'SecurityError'].includes(last.name)) throw last;
       }
+    }
+    // The first error is the one about what was asked for; the last only says the plainest ask failed too
+    throw (first && first.name === 'NotReadableError' ? first : last) as Error;
+  }
+
+  const listCameras = async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && d.deviceId);
+
+  async function cameraError(e: Error): Promise<string> {
+    const { name, message } = e;
+    // Windows (and macOS) can block cameras for all desktop programs in the system settings
+    const status = desktop?.cameraAccess ? await desktop.cameraAccess().catch(() => 'granted') : 'granted';
+    const blocked = status === 'denied' || status === 'restricted' || (!!desktop && (name === 'NotAllowedError' || name === 'SecurityError'));
+    cameraBlocked = blocked;
+    const winHelp = 'Open Windows Settings > Privacy & security > Camera and turn on "Let desktop apps access your camera".';
+    if (desktop && blocked) return `The system blocks the camera for apps like this one. ${navigator.userAgent.includes('Windows') ? winHelp : 'Allow it in the system privacy settings for Libertad.'}`;
+    if (name === 'NotFoundError') return desktop ? `No camera was found. Check that it is plugged in and not switched off, then press "Try the camera again".${navigator.userAgent.includes('Windows') ? ' ' + winHelp : ''}` : 'No camera was found.';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      return desktop ? `The camera was refused. ${navigator.userAgent.includes('Windows') ? winHelp : 'Allow it in the system privacy settings for Libertad.'}`
+        : 'The camera was refused. If no question appeared, access is blocked: allow the camera for this site (the icon next to the address), and for the browser app in the phone\'s settings, then try again.';
+    }
+    if (name === 'NotReadableError' || name === 'AbortError') return 'The camera could not be started. Another program (a video call, OBS, a camera app) may be using it: close it and try again.';
+    return `Could not open the camera (${name}): ${message}`;
+  }
+
+  async function showCamera(deviceId = camera) {
+    error = '';
+    cameraBlocked = false;
+    dropPreview();
+    try {
+      // macOS asks for the camera here, once; elsewhere this only reads the system's switch
+      await desktop?.cameraAccess?.().catch(() => {});
+      preview = await openCamera(deviceId);
       // Names are only given out once a camera was allowed
-      cameras = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      cameras = await listCameras();
       camera = preview.getVideoTracks()[0]?.getSettings().deviceId ?? deviceId;
     } catch (e) {
-      const { name, message } = e as Error;
-      error = name === 'NotFoundError' ? 'No camera was found.'
-        : name === 'NotAllowedError' || name === 'SecurityError'
-          ? 'The camera was refused. If no question appeared, access is blocked: allow the camera for this site (the icon next to the address), and for the browser app in the phone\'s settings, then try again.'
-          : `Could not open the camera (${name}): ${message}`;
+      error = await cameraError(e as Error);
+      // Still show what exists, so the person can pick another camera
+      cameras = await listCameras().catch(() => []);
     }
   }
+
+  // Windows has no pop-up for desktop programs, only a switch in its settings: open that page, and
+  // try again by itself when the person comes back to this window
+  async function openCameraSettings() {
+    await desktop?.openCameraSettings?.();
+    const retry = () => { window.removeEventListener('focus', retry); if (kind === 'camera' && !preview) showCamera(''); };
+    window.addEventListener('focus', retry);
+    onDestroy(() => window.removeEventListener('focus', retry));
+  }
+
+  // Cameras plugged in or switched on while the dialog is open
+  const onDeviceChange = async () => {
+    if (kind !== 'camera') return;
+    cameras = await listCameras().catch(() => cameras);
+    if (!preview && cameras.length) showCamera('');
+  };
+  navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
+  onDestroy(() => navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange));
 
   if (!canScreen) showCamera();
 
@@ -532,6 +597,10 @@
         usesVirtualMic = true;
         await desktop!.shareAudioStart(audio === 'all' ? { kind: 'all' } : { kind: 'app', name: audio.slice(4) });
         preview.addTrack(await virtualMic());
+      } else if (audio && info.audio === 'system') {
+        // Everything but this app, captured by the desktop app and turned into a track here
+        usesVirtualMic = true;
+        preview.addTrack(await systemAudioTrack(desktop!.onSharePcm, () => desktop!.shareAudioStart({ kind: 'all' }), () => { desktop!.shareAudioStop(); }));
       } else if (audio && info.audio === 'loopback') {
         // System sound comes with a capture request; only its audio track is kept
         desktop!.pickScreenSource(selected);
@@ -648,7 +717,7 @@
   {#if kind === 'camera'}
     <label for="sh-cam">Camera</label>
     <select id="sh-cam" value={camera} onchange={e => showCamera(e.currentTarget.value)} disabled={!cameras.length}>
-      {#each cameras as c, i (c.deviceId)}<option value={c.deviceId}>{c.label || `Camera ${i + 1}`}</option>{:else}<option value="">{error ? 'None' : 'Asking for the camera...'}</option>{/each}
+      {#each cameras as c, i (c.deviceId)}<option value={c.deviceId}>{c.label || `Camera ${i + 1}`}</option>{:else}<option value="">{error ? 'None found' : 'Asking for the camera...'}</option>{/each}
     </select>
   {:else if kind === 'watch'}
     <!-- Watch together mode selection -->
@@ -703,11 +772,22 @@
     {:else if watchMode === 3}
       <div class="watch-panel">
         <div class="memo" bind:this={memoEl}>
-          <button type="button" class="btn" onclick={() => (memoOpen = !memoOpen)} aria-expanded={memoOpen}>Memo</button>
+          <button type="button" class="btn" onclick={toggleMemo} aria-expanded={memoOpen}>Memo</button>
           {#if memoOpen}
-            <div class="memo-menu" role="dialog" aria-label="Memo">
-              <p>{watchMemo.last ? `Last watched: ${memoText(watchMemo.last)}` : 'Nothing saved yet.'}</p>
-              <button type="button" class="btn" onclick={() => watchMemo.clear()} disabled={!watchMemo.last}>Clear</button>
+            <div class="memo-menu" role="dialog" aria-label="Memo" style:max-height="{memoMax}px">
+              {#if watchMemo.records.length}
+                <ul class="memo-list">
+                  {#each watchMemo.records as m (m.show.toLowerCase())}
+                    <li>
+                      <span>{memoText(m)}</span>
+                      <button type="button" class="memo-x" onclick={() => watchMemo.remove(m)} aria-label="Remove {m.show} from the memo" title="Remove"><Icon name="x" size={12} /></button>
+                    </li>
+                  {/each}
+                </ul>
+                <button type="button" class="btn" onclick={() => watchMemo.clear()}>Clear all</button>
+              {:else}
+                <p>Nothing saved yet.</p>
+              {/if}
             </div>
           {/if}
         </div>
@@ -933,6 +1013,11 @@
             <option value="all">Everything except Libertad</option>
             {#each apps as a (a)}<option value={`app:${a}`}>{a}</option>{/each}
           </select>
+        {:else if info.audio === 'system'}
+          <select id="sh-audio" bind:value={audio}>
+            <option value="">No sound</option>
+            <option value="all">Everything except Libertad</option>
+          </select>
         {:else if info.audio === 'loopback'}
           <select id="sh-audio" bind:value={audio}>
             <option value="">No sound</option>
@@ -980,7 +1065,10 @@
   </fieldset>
 
   {#if error}<p class="err">{error}</p>{/if}
-  {#if kind === 'camera' && error}<div class="row"><button class="btn" onclick={() => showCamera()}>Try the camera again</button></div>{/if}
+  {#if kind === 'camera' && error}<div class="row">
+    {#if cameraBlocked && desktop?.openCameraSettings}<button class="btn primary" onclick={openCameraSettings}>Open camera settings</button>{/if}
+    <button class="btn" onclick={() => showCamera()}>Try the camera again</button>
+  </div>{/if}
 
   {#snippet footer()}
     <button class="btn" onclick={onclose}>Cancel</button>
@@ -993,7 +1081,13 @@
 <style>
   .memo { position: relative; display: flex; justify-content: flex-end; margin-bottom: 10px; }
   .memo-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 220px; max-width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; background: var(--bg-1); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); }
+  .memo-menu { max-width: 360px; overflow: hidden; }
   .memo-menu p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+  /* Grows with its lines; the menu's own limit (half this window) makes it scroll */
+  .memo-list { list-style: none; margin: 0; padding: 0; align-self: stretch; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .memo-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 13px; overflow-wrap: anywhere; }
+  .memo-x { flex: none; display: flex; padding: 3px; border: none; background: transparent; color: inherit; opacity: 0.6; cursor: pointer; }
+  .memo-x:hover, .memo-x:focus-visible { opacity: 1; }
   .yt-hit { align-items: flex-start; }
   .yt-thumb { position: relative; flex: none; width: 96px; height: 54px; border-radius: 4px; overflow: hidden; background: var(--line); }
   .s-title .yt-thumb img { width: 100%; height: 100%; border-radius: 0; object-fit: cover; display: block; }

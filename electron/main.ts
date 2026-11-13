@@ -17,7 +17,8 @@ import { udpChannel } from './udp-voice.ts';
 import { registerYoutubeAccount } from './youtube-account.ts';
 import { setYoutubeQuality, setYoutubeRate, getYoutubeVideoSize, getYoutubeFrame, hideYoutubeIndicator } from './yt-quality.ts';
 import { checkForUpdate, installUpdate, checkOnStartup } from './updater.ts';
-import { ShareAudio, pipewireAvailable, VIRTUAL_MIC_LABEL, type AudioTarget } from './pipewire.ts';
+import { ShareAudio, pipewireAvailable, descendsFrom, VIRTUAL_MIC_LABEL, type AudioTarget } from './pipewire.ts';
+import { WindowsShareAudio, windowsExcludeSupported } from './win-audio.ts';
 
 const devUrl = process.env.VITE_DEV_SERVER_URL;
 
@@ -268,7 +269,7 @@ ipcMain.handle('publist:ping', (_e, host: string, port: number) => pingServer(St
 
 ipcMain.handle('yt:quality', (_e, level: string) => setYoutubeQuality(String(level)));
 ipcMain.handle('yt:size', () => getYoutubeVideoSize());
-ipcMain.handle('yt:frame', () => getYoutubeFrame());
+ipcMain.handle('yt:frame', (_e, full?: boolean) => getYoutubeFrame(full === true));
 // The video's own preview picture (320x180, no black bars), as a data address; null when it cannot be had
 ipcMain.handle('yt:thumbnail', async (_e, id: string) => {
   if (!/^[\w-]{11}$/.test(String(id))) return null;
@@ -295,17 +296,39 @@ let pickedSource: string | null = null;
 const onWayland = () => process.platform === 'linux' && app.commandLine.getSwitchValue('ozone-platform') !== 'x11' &&
   (process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY);
 
-// Sound: PipeWire on Linux (one program or everything but this app), system loopback on Windows
-const shareAudio = new ShareAudio(() => app.getAppMetrics().map(m => m.pid));
+// Sound: PipeWire on Linux (one program or everything but this app); on Windows everything but this app
+// (older Windows versions cannot leave this app out and fall back to the plain system loopback)
+const shareAudio = new ShareAudio(() => {
+  const pids = [process.pid, ...app.getAppMetrics().map(m => m.pid)];
+  const names = [app.getName(), path.basename(process.execPath)].map(n => n.toLowerCase()).filter(Boolean);
+  return { pids, names, isOwnPid: pid => descendsFrom(pid, pids) };
+});
 ipcMain.handle('share:info', async () => ({
   portal: onWayland(),
-  audio: process.platform === 'win32' ? 'loopback' : (await pipewireAvailable()) ? 'pipewire' : 'none',
+  audio: process.platform === 'win32' ? ((await windowsExcludeSupported()) ? 'system' : 'loopback') : (await pipewireAvailable()) ? 'pipewire' : 'none',
   micLabel: VIRTUAL_MIC_LABEL
 }));
+// The system's own camera switch: Windows has a privacy setting for all desktop programs, macOS asks once per app
+ipcMain.handle('share:cameraAccess', async () => {
+  try {
+    if (process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('camera') === 'not-determined') {
+      return (await systemPreferences.askForMediaAccess('camera')) ? 'granted' : 'denied';
+    }
+    return systemPreferences.getMediaAccessStatus('camera');
+  } catch { return 'granted'; }
+});
+ipcMain.handle('share:openCameraSettings', async () => {
+  const url = process.platform === 'win32' ? 'ms-settings:privacy-webcam'
+    : process.platform === 'darwin' ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera' : '';
+  if (url) await shell.openExternal(url).catch(() => {});
+});
 ipcMain.handle('share:audioApps', () => shareAudio.apps().catch(() => []));
-ipcMain.handle('share:audioStart', (_e, target: AudioTarget) =>
-  shareAudio.start(target?.kind === 'app' ? { kind: 'app', name: String(target.name) } : { kind: 'all' }));
-ipcMain.handle('share:audioStop', () => shareAudio.stop());
+const windowsAudio = new WindowsShareAudio();
+ipcMain.handle('share:audioStart', (e, target: AudioTarget) => {
+  if (process.platform === 'win32') return windowsAudio.start(chunk => { if (!e.sender.isDestroyed()) e.sender.send('share:pcm', chunk); });
+  return shareAudio.start(target?.kind === 'app' ? { kind: 'app', name: String(target.name) } : { kind: 'all' });
+});
+ipcMain.handle('share:audioStop', () => { windowsAudio.stop(); return shareAudio.stop(); });
 // Chromium fetches spellcheck dictionaries from Google (redirector.gvt1.com) as soon as a session
 // exists, even with spellcheck off; only an empty language list stops it
 app.on('session-created', s => {
@@ -313,7 +336,7 @@ app.on('session-created', s => {
   s.setSpellCheckerLanguages([]);
 });
 // The virtual microphone outlives the process otherwise
-app.on('will-quit', () => { shareAudio.stop(); });
+app.on('will-quit', () => { shareAudio.stop(); windowsAudio.stop(); });
 
 // Names first (fast and dependable), thumbnails in a second call: grabbing the pictures can be
 // slow and, under X11, can come back with nothing.

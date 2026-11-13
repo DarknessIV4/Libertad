@@ -1,9 +1,10 @@
 import { customBg, PANELS, type Slot } from './custom-bg.svelte.ts';
 import { store } from './settings.svelte.ts';
 import { readThemeColors } from './theme.ts';
-import { imageEditor, EDITABLE } from './image-editor.svelte.ts';
+import { imageEditor, type BgTarget, type AppScope } from './image-editor.svelte.ts';
 import { videoFrame } from './images.ts';
 import type { Crop } from './image-edit.ts';
+import { canEditGif } from './gif-edit.ts';
 
 // What choosing a background does, shared by the right-click menu and Settings. A scope is 'whole' (the
 // left panel, the middle and the right panel as one) or one panel on its own.
@@ -50,27 +51,47 @@ export async function applyColor(scope: Slot, color: string): Promise<void> {
 // background has). A picture is cut and turned there. A GIF or video is not made again: it keeps all of itself
 // and the part to show comes back as `crop`, cut when it is drawn (a video is cropped on a picture of one frame).
 // Null: the person closed the editor.
-export async function cropBackground(file: File): Promise<{ file: File; crop?: Crop } | null> {
+export interface Cropped { file: File; crop?: Crop; target?: BgTarget; appScope?: AppScope }
+// opts.target: the editor also asks where it goes (app, login or both, and which part of the app) with a preview of each;
+// opts.scope: the part of the app it starts on
+export async function cropBackground(file: File, opts: { target?: boolean; scope?: AppScope } = {}): Promise<Cropped | null> {
   const title = 'Crop background';
-  if (EDITABLE.test(file.type)) {
-    const r = await imageEditor.open(file, { effects: false, scopes: false, title });
-    return r ? { file: r.file } : null;
+  const target = !!opts.target, appScope = opts.scope;
+  const fallback: Cropped = { file, ...(target && { target: 'app' as BgTarget, appScope: appScope ?? 'whole' }) };
+  // Any picture the window can read is cropped as a still; a GIF keeps all of itself
+  if (file.type.startsWith('image/') && file.type !== 'image/gif' && !file.type.includes('svg')) {
+    const r = await imageEditor.open(file, { effects: false, scopes: false, target, appScope, title });
+    return r ? { file: r.file, target: r.target, appScope: r.appScope } : null;
   }
   if (file.type === 'image/gif') {
-    const r = await imageEditor.open(file, { effects: false, scopes: false, cropOnly: true, title });
-    return r ? { file, crop: r.crop } : null;
+    // Where this window can edit a GIF, it is edited like a picture (every frame turned, mirrored and cropped) and keeps moving.
+    // Elsewhere it is only cropped, and the crop is cut when it is shown.
+    if (canEditGif()) {
+      const r = await imageEditor.open(file, { effects: false, scopes: false, target, appScope, title });
+      return r ? { file: r.file, target: r.target, appScope: r.appScope } : null;
+    }
+    const r = await imageEditor.open(file, { effects: false, scopes: false, cropOnly: true, target, appScope, title });
+    return r ? { file, crop: r.crop, target: r.target, appScope: r.appScope } : null;
   }
   if (file.type.startsWith('video/')) {
     const frame = await videoFrame(file);
     // A video this window cannot show a frame of is used as it is
-    if (!frame) return { file };
+    if (!frame) return fallback;
     const r = await imageEditor.open(frame, {
-      effects: false, scopes: false, cropOnly: true, title,
+      effects: false, scopes: false, cropOnly: true, target, appScope, title,
       note: 'This is a video: it keeps playing, and only the part inside the frame is shown. The preview shows one frame.'
     });
-    return r ? { file, crop: r.crop } : null;
+    return r ? { file, crop: r.crop, target: r.target, appScope: r.appScope } : null;
   }
-  return { file };
+  return fallback;
+}
+
+// What the editor's choice of place does: the app (one panel or all), the login screen, or both. Returns what went wrong, or ''.
+export async function applyCropped(f: Cropped): Promise<string> {
+  const target = f.target ?? 'app';
+  if (target === 'login') return applyFile('home', f.file, f.crop);
+  if (target === 'both') return (await applyFile('whole', f.file, f.crop)) || applyFile('home', f.file, f.crop);
+  return applyFile(f.appScope ?? 'whole', f.file, f.crop);
 }
 
 // A picture, GIF or video. Returns what went wrong, or ''.

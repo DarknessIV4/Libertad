@@ -1,5 +1,5 @@
 import { customBg, PANELS, type Panel, type Slot } from './custom-bg.svelte.ts';
-import { applyColor, applyFile, cropBackground, removeBackground, panelColor } from './custom-bg-actions.ts';
+import { applyColor, applyFile, applyCropped, cropBackground, removeBackground, panelColor } from './custom-bg-actions.ts';
 import { menu, type MenuItem } from './menu.svelte.ts';
 import { ui } from './ui.svelte.ts';
 import { pickColor, pickFile } from './pick.ts';
@@ -13,16 +13,14 @@ function askScope(panel: Panel, apply: (scope: Slot) => void | Promise<void>): v
   ]);
 }
 
-async function chooseFile(panel: Panel, accept: string): Promise<void> {
-  const picked = await pickFile(accept);
+// Any picture, GIF or video. The editor crops it and asks where it goes: the app (a panel or all), the login screen, or both.
+async function chooseFile(panel: Panel): Promise<void> {
+  const picked = await pickFile('*/*');
   if (!picked) return;
-  // Offered for cropping first
-  const f = await cropBackground(picked);
+  const f = await cropBackground(picked, { target: true, scope: panel });
   if (!f) return;
-  askScope(panel, async scope => {
-    const error = await applyFile(scope, f.file, f.crop);
-    if (error) ui.prompt = { title: 'Custom background', label: '', confirm: 'OK', input: 'none', text: error, onsubmit: () => {} };
-  });
+  const error = await applyCropped(f);
+  if (error) ui.prompt = { title: 'Custom background', label: '', confirm: 'OK', input: 'none', text: error, onsubmit: () => {} };
 }
 
 // The entries for right-clicking free space in a panel. Only for this computer, nothing is shared.
@@ -35,8 +33,7 @@ export function customBackgroundItems(panel: Panel, extra: MenuItem[] = []): Men
         const c = await pickColor(panelColor(panel) ?? '#26282d');
         if (c) askScope(panel, scope => applyColor(scope, c));
       } },
-      { label: 'Image...', action: () => chooseFile(panel, 'image/png,image/jpeg,image/webp') },
-      { label: 'Video / GIF...', action: () => chooseFile(panel, 'video/*,image/gif') }
+      { label: 'Add Background', action: () => chooseFile(panel) }
     ])
   }];
   items.push(...extra);
@@ -73,8 +70,7 @@ export function homeBackgroundItems(): MenuItem[] {
         const c = await pickColor(customBg.homeColor ?? '#26282d');
         if (c) await applyColor('home', c);
       } },
-      { label: 'Image...', action: () => file('image/png,image/jpeg,image/webp') },
-      { label: 'Video / GIF...', action: () => file('video/*,image/gif') }
+      { label: 'Add Background', action: () => file('*/*') }
     ])
   }];
   if (customBg.has('home')) {

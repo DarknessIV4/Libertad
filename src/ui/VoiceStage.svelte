@@ -26,6 +26,8 @@
   import { mountPopoutBar, mountVideoPopoutBar, POPOUT_BAR_CSS } from '../lib/popout-bar.ts';
   import { spotState } from '../lib/spot-state.svelte.ts';
   import { zoomable } from '../lib/zoom.ts';
+  import { menuJustClosed } from '../lib/overlay.ts';
+  import { canSaveFrame, saveVideoFrame } from '../lib/save-frame.ts';
   import { stills, bgPause } from '../lib/still.svelte.ts';
   import { hiddenCards } from '../lib/hidden-cards.svelte.ts';
 
@@ -197,6 +199,117 @@ const self = $derived(session.self);
   let tilesHeight = $state(stored('libertad.stageHeight', 210));
   let meetingHeight = $state(stored('libertad.stageHeightMeeting', 460));
   const maxHeight = () => Math.max(160, window.innerHeight - 220);
+
+  // The people's cards while a picture is shown: under it or above it (hold a card and drag it over the picture), as tall as
+  // they were dragged (the handle under them). Only on this computer, nothing is shared.
+  const storedText = (key: string, fallback: string) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
+  let cardsPos = $state<'below' | 'above'>(storedText('libertad.cardsPos', 'below') === 'above' ? 'above' : 'below');
+  let cardsHeight = $state(Math.max(70, stored('libertad.cardsHeight', 150)));
+  let stageEl = $state<HTMLElement>();
+  let meetingEl = $state<HTMLElement>();
+  let cardsEl = $state<HTMLElement>();
+  let movingCards = $state(false);
+  let sizingCards = $state(false);
+  const MIN_CARDS = 70;
+  const saveCards = () => {
+    try { localStorage.setItem('libertad.cardsPos', cardsPos); localStorage.setItem('libertad.cardsHeight', String(cardsHeight)); } catch { /* storage unavailable */ }
+  };
+  // Free room under the picture and the cards, down to the edge: the bottom of the stage when it fills its column (the voice
+  // screen and the docked chat, where the stage is always as tall as the column), else the bottom of the window.
+  // Negative when they already reach past it.
+  function roomBelow(): number {
+    if (!stageEl) return 0;
+    const content = Math.max(...[meetingEl, cardsEl].map(e => e?.getBoundingClientRect().bottom ?? 0));
+    const edge = fill ? stageEl.getBoundingClientRect().bottom : window.innerHeight - 5;
+    return edge - content;
+  }
+  // How tall the picture and the cards may be right now: no taller than what ends at the edge
+  const meetingRoom = () => Math.max(240, meetingHeight + roomBelow());
+  const cardsRoom = () => Math.max(MIN_CARDS, cardsHeight + roomBelow());
+  // A smaller window shows less of it
+  function fitCardsToWindow() {
+    if (!meeting || !stageEl) return;
+    const room = cardsRoom();
+    if (cardsHeight > room) cardsHeight = room;
+  }
+  $effect(() => {
+    void meeting; void stackHeight; void collapsed;
+    const raf = requestAnimationFrame(fitCardsToWindow);
+    const onResize = () => fitCardsToWindow();
+    window.addEventListener('resize', onResize);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); };
+  });
+
+  // Holding a card and dragging it: over the upper half of the picture all the cards go above it, over the lower half under it.
+  // A drag is not a click, so the card does not open anything when let go.
+  let dragged = false;
+  function cardDrag(e: PointerEvent) {
+    if (!meeting || e.button !== 0) return;
+    const x0 = e.clientX, y0 = e.clientY;
+    let on = false;
+    const move = (ev: PointerEvent) => {
+      if (!on) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 8) return;
+        on = true; movingCards = true; dragged = true;
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'grabbing';
+      }
+      if (!meetingEl) return;
+      const r = meetingEl.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      if (ev.clientY < mid && cardsPos === 'below') cardsPos = 'above';
+      else if (ev.clientY > mid && cardsPos === 'above') cardsPos = 'below';
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (!on) return;
+      movingCards = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      saveCards();
+      fitCardsToWindow();
+      setTimeout(() => { dragged = false; }, 0);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }
+
+  // The handle under the cards (under the whole stage when they are below the picture, between them and the picture when above):
+  // dragging down makes them taller, until the stage reaches the edge of the window
+  function sizeCards(e: PointerEvent) {
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    sizingCards = true;
+    document.body.style.userSelect = 'none';
+    const y0 = e.clientY, h0 = cardsHeight;
+    const move = (ev: PointerEvent) => {
+      const want = Math.max(MIN_CARDS, h0 + ev.clientY - y0);
+      cardsHeight = Math.round(Math.min(want, cardsRoom()));
+    };
+    const up = () => {
+      sizingCards = false;
+      document.body.style.userSelect = '';
+      saveCards();
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  }
+  function cardsKey(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') cardsHeight = Math.min(cardsHeight + 16, cardsRoom());
+    else if (e.key === 'ArrowUp') cardsHeight = Math.max(MIN_CARDS, cardsHeight - 16);
+    else return;
+    e.preventDefault();
+    saveCards();
+  }
+
   // The view is as tall as it was dragged, whatever is in it: several panels share that height equally,
   // so one drag of the handle resizes all of them at once
   const stackHeight = $derived(meetingHeight);
@@ -221,13 +334,11 @@ const self = $derived(session.self);
   });
   // In the meeting view everyone sits in one row under the picture
   const rows = $derived.by(() => {
-    if (meeting) return [shown];
     const out: (typeof shown)[] = [];
     for (let i = 0; i < shown.length; i += cols) out.push(shown.slice(i, i + cols));
     return out;
   });
   const avatar = $derived.by(() => {
-    if (meeting) return 36;
     const cellW = (gridW - PAD * 2 - GAP * (cols - 1)) / cols;
     const cellH = (gridH - PAD * 2 - GAP * (rows.length - 1)) / Math.max(1, rows.length);
     return Math.max(24, Math.min(128, Math.round(Math.min(cellH * 0.5, cellW * 0.34))));
@@ -294,8 +405,11 @@ const self = $derived(session.self);
          ...([['Mute', 0], ['Volume 50%', 0.5], ['Volume 100%', 1]] as const).map(([label, v]) =>
            ({ label, checked: store.settings.shareVolume === v, action: () => { store.settings.shareVolume = v; store.saveSettings(); } }))]
       : []),
-    { separator: true, label: '' },
-    { label: 'Stats for nerds', checked: statsFor === id, action: () => (statsFor = statsFor === id ? null : id) }
+    // Stats are about a stream's connection (screen share, camera); watch together has none
+    ...(id !== WT
+      ? [{ separator: true, label: '' },
+         { label: 'Stats for nerds', checked: statsFor === id, action: () => (statsFor = statsFor === id ? null : id) }]
+      : [])
   ];
   const streamMenu = (e: MouseEvent, id: number) => menu.show(e, streamItems(id));
   // Touch screens have no right-click: holding a finger on the picture opens the same menu
@@ -527,7 +641,7 @@ const self = $derived(session.self);
       : { get: () => store.settings.shareVolume, set: (v: number) => { store.settings.shareVolume = v; store.saveSettings(); } };
     const fsName = `libertad-pop-${id}`;
     const fullscreen = popFullscreen(fsName);
-    const stopBar = mountVideoPopoutBar(w, stage, { video, watch, volume, fullscreen, hud: { cap: hudOf(id)?.cap ?? null, speed: hudOf(id)?.speed ?? false, onpopin: () => popInVideo(id) } });
+    const stopBar = mountVideoPopoutBar(w, stage, { video, watch, volume, fullscreen, hud: { cap: hudOf(id)?.cap ?? null, speed: hudOf(id)?.speed ?? false, frame: id !== WT && canSaveFrame() ? () => void saveVideoFrame(video) : undefined, onpopin: () => popInVideo(id) } });
     const timer = setInterval(() => { if (w.closed) popInVideo(id); }, 400);
     w.addEventListener('pagehide', () => popInVideo(id));
     videoPops = { ...videoPops, [id]: { w, video, parent, next, style, stopBar, timer } };
@@ -677,7 +791,7 @@ const self = $derived(session.self);
       <!-- svelte-ignore a11y_media_has_caption -->
       <div class="pic" role="presentation" use:zoomable oncontextmenu={e => streamMenu(e, id)}
         ontouchstart={e => touchStart(e, id)} ontouchend={touchEnd} ontouchmove={touchEnd} ontouchcancel={touchEnd}
-        ondblclick={isWT ? () => fullscreen(id) : undefined}>
+        ondblclick={isWT ? () => { if (!menuJustClosed()) fullscreen(id); } : undefined}>
         {#if isWT}
           <!-- Watch together player -->
           <WatchPlayer />
@@ -686,7 +800,7 @@ const self = $derived(session.self);
           {/if}
         {:else}
           <!-- Large, your own camera is shown as the others see it; only the small tile is a mirror -->
-          <video bind:this={videos[id]} use:media={streamOf(id)} autoplay playsinline muted ondblclick={() => fullscreen(id)}></video>
+          <video bind:this={videos[id]} use:media={streamOf(id)} autoplay playsinline muted ondblclick={() => { if (!menuJustClosed()) fullscreen(id); }}></video>
           {#if !isMine && w && w.state !== 'live'}
             <p class="pending" class:bad={w.state === 'failed'}>{w.state === 'failed'
               ? 'Could not connect to the stream. Across the internet both of you need a STUN server; networks that block direct connections need a relay. Both are in Settings, Voice.'
@@ -694,14 +808,14 @@ const self = $derived(session.self);
           {/if}
           {#if statsFor === id}<ShareStats own={isMine} session={id} onclose={() => (statsFor = null)} />{/if}
         {/if}
-        <!-- Full screen: the stream's volume, bottom right, only while the mouse is over it (watch together has its own bar) -->
-        {#if fsId === id && !isWT && !isMine && hasSound(id)}
+        <!-- The stream's volume, bottom right, in the app and in full screen, only while the mouse is over it (watch together has its own bar) -->
+        {#if !isWT && !isMine && hasSound(id)}
           <StreamVolume />
         {/if}
         <!-- Top right, only while the mouse is over the picture: quality (a viewer's own cap), speed, full screen, pop out (the YouTube player has these in its own overlay) -->
         {#if !(isWT && watchTogether.mode === 1)}
           {@const hud = hudOf(id)}
-          <StreamHud cap={hud?.cap ?? null} speed={hud?.speed ?? false} fullscreen={fsId === id} onfullscreen={() => fullscreen(id)}
+          <StreamHud video={isWT ? null : videos[id] ?? null} cap={hud?.cap ?? null} speed={hud?.speed ?? false} fullscreen={fsId === id} onfullscreen={() => fullscreen(id)}
             popped={!!videoPops[id]}
             onpopout={async () => { if (fsId === id) await leaveFullscreen(); await togglePip(id); }} />
         {/if}
@@ -711,7 +825,7 @@ const self = $derived(session.self);
 {/snippet}
 
 {#snippet tiles()}
-      <div class="tiles" class:strip={meeting} role="group" aria-label="People in this channel" bind:clientWidth={gridW} bind:clientHeight={gridH}>
+      <div class="tiles" role="group" aria-label="People in this channel" bind:clientWidth={gridW} bind:clientHeight={gridH}>
         {#each rows as row, r (r)}
           <div class="row" role="presentation">
         {#each row as u (u.session)}
@@ -725,8 +839,9 @@ const self = $derived(session.self);
           <!-- While a camera is shown large, its tile goes back to the avatar: one picture, not two -->
           {@const cam = focus === u.session ? null : camOf(u.session)}
           {@const w = watchOf(u.session)}
-          <button class="tile" class:talking={talking(u.session)} class:self={isSelf} class:focused={inStack(u.session)}
-            onclick={e => tileClick(u.session, e.currentTarget)}
+          <button class="tile" class:dragging={movingCards} class:talking={talking(u.session)} class:self={isSelf} class:focused={inStack(u.session)}
+            onpointerdown={cardDrag}
+            onclick={e => { if (dragged) { e.preventDefault(); return; } tileClick(u.session, e.currentTarget); }}
             oncontextmenu={e => menu.show(e, userMenu(u))}
             title={stream ? (inStack(u.session) ? 'Hide the stream' : 'Show the stream') : sharing && !isSelf ? `Sharing their ${sharing}. Click to watch` : effectiveWatchTogether && !isSelf ? `Watching together: ${effectiveWatchTogether.title}. Click to join` : isSelf && hostWatchTogether ? `Hosting watch together: ${hostWatchTogether.title}` : store.displayName(u)}
             aria-label={stream ? `${inStack(u.session) ? 'Hide' : 'Show'} the ${sharing || 'stream'} of ${store.displayName(u)}` : sharing && !isSelf ? `Watch the ${sharing} of ${store.displayName(u)}` : effectiveWatchTogether && !isSelf ? `Join watch together: ${effectiveWatchTogether.title}` : isSelf && hostWatchTogether ? `Hosting watch together: ${hostWatchTogether.title}` : store.displayName(u)}>
@@ -764,9 +879,9 @@ const self = $derived(session.self);
 {/snippet}
 
 {#if visible && self}
-  <section class="stage" class:meeting class:collapsed class:fill class:fs={isFullscreen} aria-label="Voice channel"
+  <section class="stage" bind:this={stageEl} class:meeting class:collapsed class:fill class:fs={isFullscreen} aria-label="Voice channel"
     style:height={collapsed || fill || meeting ? undefined : `${tilesHeight}px`}>
-    <header>
+    <header class="top">
     <button class="title" onclick={toggle} aria-expanded={!collapsed}>
         <svg class="caret" class:collapsed width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3l3 4 3-4" fill="none" stroke="currentColor" stroke-width="1.6" /></svg>
         <span class="name">{channel?.name || 'Root'}</span>
@@ -788,18 +903,28 @@ const self = $derived(session.self);
 
     {#if meeting}
       <!-- Meeting view: the panels + their resize handle as a unit, separate from tiles -->
-      <div class="meeting-view" style:height="{stackHeight}px">
+      <div class="meeting-view" bind:this={meetingEl} style:height="{stackHeight}px">
         <div class="panels" class:multi={stack.length > 1}>
           {#each stack as id (id)}{@render spot(id)}{/each}
         </div>
-        <ResizeHandle inline bind:width={meetingHeight} edge="bottom" min={240} max={maxHeight} initial={460} storageKey="libertad.stageHeightMeeting" label="Resize the meeting view" />
+        <ResizeHandle inline bind:width={meetingHeight} edge="bottom" min={240} max={meetingRoom} initial={460} storageKey="libertad.stageHeightMeeting" label="Resize the meeting view" />
       </div>
     {/if}
 
     {#each withSound as w (w.session)}<audio use:media={w.stream} use:loud autoplay></audio>{/each}
 
     {#if !collapsed}
-      {@render tiles()}
+      {#if meeting}
+        <!-- The cards fill the room above or under the picture. Always the same place in the markup (the order is CSS), so a card dragged across the picture keeps being the same element -->
+        <div class="cards" bind:this={cardsEl} class:above={cardsPos === 'above'} style:height="{cardsHeight}px">
+          {@render tiles()}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div class="cards-resize" class:active={sizingCards} role="separator" aria-orientation="horizontal" aria-label="Resize the cards" aria-valuenow={cardsHeight} tabindex="0"
+            title="Drag down to make the cards taller, double-click to reset" onpointerdown={sizeCards} ondblclick={() => { cardsHeight = Math.min(150, cardsRoom()); saveCards(); }} onkeydown={cardsKey}></div>
+        </div>
+      {:else}
+        {@render tiles()}
+      {/if}
       {#if watches.some(w => w.state === 'failed')}
         <p class="failed">Could not connect to the stream. Across the internet both of you need a STUN server, chosen in Settings, Voice (the person sharing has to restart the stream afterwards).</p>
       {/if}
@@ -826,6 +951,13 @@ const self = $derived(session.self);
   .mini { display: flex; gap: 3px; min-width: 0; overflow: hidden; margin-left: 4px; }
 
   /* Tile view: equal 16:9 tiles, centered, sized by the script to fill the stage */
+  .cards { position: relative; flex: none; display: flex; flex-direction: column; min-height: 0; order: 1; }
+  /* The bar stays on top of the picture (same order, and first in the markup); the cards go before it when they are above */
+  .cards.above { order: -1; }
+  .cards .tiles { flex: 1; }
+  .tile.dragging { cursor: grabbing; }
+  .cards-resize { position: absolute; z-index: 5; left: 0; right: 0; bottom: -4px; height: 8px; cursor: row-resize; touch-action: none; }
+  .cards-resize:hover, .cards-resize:focus-visible, .cards-resize.active { outline: none; background: linear-gradient(to bottom, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); }
   .tiles { flex: 1; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
   .row { flex: 1 1 0; min-height: 0; display: flex; gap: 8px; }
   .tile { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;

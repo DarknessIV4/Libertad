@@ -72,6 +72,7 @@ class VoiceEngine {
   running = $state(false);
   micOpen = $state(false);     // the microphone is held right now
   error = $state('');
+  notice = $state('');         // something was repaired or worked around, not an error
   level = $state(-100);        // current input level, dBFS
   transmitting = $state(false);
   pttDown = $state(false);
@@ -102,6 +103,17 @@ class VoiceEngine {
 
   private frameCounter = 0;      // Mumble sequence, in 10 ms frames
   private sampleTime = 0;        // encoder timestamps, microseconds
+  // Watching the microphone: some Windows drivers stop delivering sound without telling anyone, and
+  // only start again when another program (a voice chat in Discord, say) opens the device
+  private lastFrameAt = 0;        // when the capture worklet last delivered a frame
+  private inputOpenedAt = 0;      // when the microphone was last opened
+  private zeroFrames = 0;         // frames of exact digital silence in a row
+  private watchdog: ReturnType<typeof setInterval> | null = null;
+  private muteTimer: ReturnType<typeof setTimeout> | null = null;
+  private recovering = false;
+  private recoveries = 0;         // repair attempts since the microphone last worked for a while
+  private lastRecovery = 0;
+  private degraded = false;       // reopened without the browser's sound processing and on the default device
   private lastVoiceAt = 0;       // for VAD hold
   private open = false;          // gate state
   private stopping = false;      // flushing the last packet of a transmission
@@ -115,7 +127,7 @@ class VoiceEngine {
     window.addEventListener('keyup', e => this.onKey(e, false));
     // Released keys are not reported while the window is in the background
     window.addEventListener('blur', () => { this.pttDown = false; });
-    navigator.mediaDevices?.addEventListener('devicechange', () => this.refreshDevices());
+    navigator.mediaDevices?.addEventListener('devicechange', () => { this.refreshDevices(); this.onDeviceChange(); });
   }
 
   save(): void {
@@ -130,7 +142,7 @@ class VoiceEngine {
     if ('jitterMs' in patch) this.playback?.port.postMessage({ jitterMs: this.settings.jitterMs });
     if ('outputDevice' in patch) this.applyOutputDevice();
     if ('bitrate' in patch || 'frameMs' in patch) this.configureEncoder();
-    if (['inputDevice', 'echoCancellation', 'noiseSuppression', 'autoGainControl'].some(k => k in patch)) this.syncInput(true);
+    if (['inputDevice', 'echoCancellation', 'noiseSuppression', 'autoGainControl'].some(k => k in patch)) { this.degraded = false; this.notice = ''; this.recoveries = 0; this.syncInput(true); }
     else if ('releaseMicMuted' in patch) this.syncInput();
   }
 
@@ -167,6 +179,11 @@ class VoiceEngine {
       }
       const ctx = new AudioContext({ sampleRate: SAMPLE_RATE, latencyHint: 'interactive' });
       this.ctx = ctx;
+      // The browser suspends the context when the output device goes away or changes; everything
+      // (the microphone frames too) runs on its clock, so it has to be woken again
+      ctx.onstatechange = () => {
+        if (this.ctx === ctx && this.running && (ctx.state === 'suspended' || (ctx.state as string) === 'interrupted')) ctx.resume().catch(() => {});
+      };
       await ctx.audioWorklet.addModule(captureUrl);
       await ctx.audioWorklet.addModule(playbackUrl);
 
@@ -187,6 +204,7 @@ class VoiceEngine {
       this.configureEncoder();
       await ctx.resume();
       this.levelTimer = setInterval(() => { this.level = this.levelRaw; }, 50);
+      this.watchdog = setInterval(() => this.checkInput(), 1000);
       this.running = true;
       await this.refreshDevices();
     } catch (e) {
@@ -199,6 +217,10 @@ class VoiceEngine {
     this.endTransmission();
     if (this.levelTimer) clearInterval(this.levelTimer);
     this.levelTimer = null;
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
+    if (this.muteTimer) clearTimeout(this.muteTimer);
+    this.muteTimer = null;
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
     this.micOpen = false;
@@ -245,18 +267,29 @@ class VoiceEngine {
     this.stream = null;
     this.micOpen = false;
     const s = this.settings;
+    // After repeated failures the plain request: the system's default device and none of the browser's
+    // own sound processing, which some drivers do not get along with
+    const plain = this.degraded;
+    const request = (deviceId: string | undefined) => navigator.mediaDevices.getUserMedia({
+      audio: plain ? { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } : {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        echoCancellation: s.echoCancellation,
+        noiseSuppression: s.noiseSuppression,
+        autoGainControl: s.autoGainControl,
+        channelCount: 1,
+        sampleRate: SAMPLE_RATE
+      }
+    });
+    const chosen = s.inputDevice && s.inputDevice !== 'default' ? s.inputDevice : undefined;
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: s.inputDevice && s.inputDevice !== 'default' ? { exact: s.inputDevice } : undefined,
-          echoCancellation: s.echoCancellation,
-          noiseSuppression: s.noiseSuppression,
-          autoGainControl: s.autoGainControl,
-          channelCount: 1,
-          sampleRate: SAMPLE_RATE
-        }
-      });
+      try {
+        stream = await request(chosen);
+      } catch (e) {
+        // The saved device is gone (unplugged, or the driver gave it a new id): the default one will do
+        if (!chosen || !['OverconstrainedError', 'NotFoundError'].includes((e as Error).name)) throw e;
+        stream = await request(undefined);
+      }
     } catch (e) {
       this.error = `Microphone unavailable: ${(e as Error).message}`;
       return;
@@ -266,9 +299,78 @@ class VoiceEngine {
     this.stream = stream;
     this.micOpen = true;
     this.error = '';
+    this.inputOpenedAt = this.lastFrameAt = performance.now();
+    this.zeroFrames = 0;
     this.source = this.ctx.createMediaStreamSource(this.stream);
     this.source.connect(this.inputGainNode);
+    for (const track of stream.getAudioTracks()) {
+      // The driver or the system took the microphone away
+      track.addEventListener('ended', () => { if (this.stream === stream) this.recoverInput('ended'); });
+      // Muted by the browser: the device delivers nothing. Often it comes back by itself within a moment.
+      track.addEventListener('mute', () => {
+        if (this.muteTimer) clearTimeout(this.muteTimer);
+        this.muteTimer = setTimeout(() => { if (this.stream === stream && track.muted) this.recoverInput('muted'); }, 1500);
+      });
+      track.addEventListener('unmute', () => { if (this.muteTimer) clearTimeout(this.muteTimer); this.muteTimer = null; });
+    }
     this.refreshDevices();
+  }
+
+  // Once a second: is sound still coming from the microphone?
+  private checkInput(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.running) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    if (!this.micOpen || !this.stream) return;
+    const now = performance.now();
+    // The worklet delivers a frame every 10 ms; none for two seconds means the audio clock stalled
+    if (now - Math.max(this.lastFrameAt, this.inputOpenedAt) > 2000) { this.recoverInput('stalled'); return; }
+    // Exact digital silence for five seconds: a real microphone is never that quiet, a stuck driver is
+    if (this.zeroFrames > 500 && this.settings.inputGain > 0) { this.zeroFrames = 0; this.recoverInput('silent'); return; }
+    // Working for a while: the repairs worked
+    if (this.recoveries && now - this.lastRecovery > 15000 && this.zeroFrames === 0) this.recoveries = 0;
+  }
+
+  // Microphones coming and going: take a new one when ours disappeared, or when none could be opened before
+  private onDeviceChange(): void {
+    if (!this.ctx || !this.micWanted()) return;
+    const track = this.stream?.getAudioTracks()[0];
+    if (!this.stream || !track || track.readyState === 'ended') {
+      this.recoveries = 0;
+      this.restartInput();
+    } else {
+      // Drivers often change the device right after a change is announced; look again a moment later
+      const stream = this.stream;
+      setTimeout(() => { if (this.stream === stream && track.readyState === 'ended') this.recoverInput('device change'); }, 1000);
+    }
+  }
+
+  // Gets the microphone going again, stepping up: reopen it, reopen it plainly (default device, no
+  // sound processing), then rebuild the whole audio engine. Waits longer after each attempt.
+  private async recoverInput(reason: string): Promise<void> {
+    if (!this.ctx || this.recovering || !this.micWanted()) return;
+    const now = performance.now();
+    if (now - this.lastRecovery < Math.min(30000, 1000 * 2 ** this.recoveries)) return;
+    this.recovering = true;
+    this.lastRecovery = now;
+    this.recoveries++;
+    console.warn(`[voice] microphone ${reason}: repair attempt ${this.recoveries}`);
+    try {
+      if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {});
+      if (this.recoveries >= 3 && !this.degraded) {
+        this.degraded = true;
+        this.notice = 'The microphone stopped responding and was reopened with basic settings (no echo cancellation or noise suppression). This points to a problem in the audio driver; changing the microphone in the settings above brings the normal settings back.';
+      }
+      if (this.recoveries === 5) {
+        // Rebuild the audio engine itself: a new audio context and a new microphone stream
+        await this.stop();
+        await this.start();
+      } else {
+        await this.restartInput();
+      }
+    } finally {
+      this.recovering = false;
+    }
   }
 
   private async applyOutputDevice(): Promise<void> {
@@ -305,6 +407,9 @@ class VoiceEngine {
     this.playback?.port.postMessage({ clear: true });
     this.talking = {};
     this.transmitting = false;
+    this.degraded = false;
+    this.notice = '';
+    this.recoveries = 0;
     // Release the microphone while not connected (unless testing it)
     if (!this.testing) this.stop();
   }
@@ -354,6 +459,8 @@ class VoiceEngine {
   }
 
   private onFrame(frame: Float32Array<ArrayBuffer>, rms: number): void {
+    this.lastFrameAt = performance.now();
+    this.zeroFrames = rms === 0 ? this.zeroFrames + 1 : 0;
     const db = rms > 0 ? 20 * Math.log10(rms) : -100;
     this.levelRaw = Math.max(-100, db);
     const now = performance.now();
