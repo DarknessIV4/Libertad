@@ -2,6 +2,31 @@
  
 All notable changes to Libertad.
 
+## 0.4.2 - 2026-11-13
+
+### Fixed:
+
+- The app sound coming inside the screen share, even with (Everything except Libertad) option on.
+- Stats for nerds button appearing where it shouldn't be.
+- Image options when right clicking an image in chat not working.
+- Session indicator not appearing in other rooms.
+- After Entering a room, not being able to enter the session already running there.
+- A problem with mic not working in windows (i assume it was the mic entering idle or suspend mode, so  i fixed that).
+- A problem with camera devices on windows (The app looked for cam devices only ones, missed some if there was missing permissions or a problem), now it looks for cams in more ways, and multiple times, also detects a cam that was connected whil the app is one.
+- Screen share volume option not appearing in some cases.
+- Menu overlays not giving an actual overlay.
+- Memo showing only on registry in torrent together.
+- Annoying notification sound whenever a user changes their card or avatar
+- UI fixes.
+
+### Added:
+
+- Ability to use gifs or images in the app, as any part of customization (Profile card, member card, app BG).
+- Better crop preview for everything across the customization editors.
+- Added Mirror options in all editors.
+- in a session (screen share, cam, watch together), you can now drag member cards panel, above or below the session preview, and also resize it.
+- A save frame button, in all sessions (screen share, cam, watch together).
+
 ## 0.4.1 - 2026-11-13
 
 ### Added
