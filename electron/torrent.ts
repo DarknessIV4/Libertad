@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createTorrentEngine } from './torrent-core.ts';
 import { createTranscoder, findBinaries, type Transcoder } from './transcode.ts';
 import { fetchLimited, fetchSubtitle, findSubtitles } from './subtitles.ts';
-import { normalizeMagnet, MAX_QUEUE } from '../src/core/torrent-meta.ts';
+import { normalizeMagnet, MAX_MAGNET, MAX_QUEUE } from '../src/core/torrent-meta.ts';
 import { findEpisodes } from './episodes.ts';
 import { searchTitles, searchTorrents } from './search.ts';
 
@@ -60,9 +60,13 @@ export function registerTorrent(): void {
   });
 
   ipcMain.handle('torrent:play', (e, meta: unknown) => {
-    const m = meta as { magnet?: unknown; fileIdx?: unknown } | null;
-    if (!m || !okStr(m.magnet, 2048) || !okIdx(m.fileIdx)) throw new Error('bad request');
-    return engine.play({ magnet: m.magnet, fileIdx: m.fileIdx }, owner(e));
+    const m = meta as { magnet?: unknown; fileIdx?: unknown; fileName?: unknown; size?: unknown } | null;
+    if (!m || !okStr(m.magnet, MAX_MAGNET) || !okIdx(m.fileIdx)) throw new Error('bad request');
+    return engine.play({
+      magnet: m.magnet, fileIdx: m.fileIdx,
+      fileName: typeof m.fileName === 'string' ? m.fileName.slice(0, 400) : undefined,
+      size: typeof m.size === 'number' && Number.isSafeInteger(m.size) && m.size >= 0 ? m.size : undefined
+    }, owner(e));
   });
 
   // What the played file holds, and the address of its converted form (info is null when ffmpeg is missing or can not read it)

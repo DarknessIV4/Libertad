@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { voice, type TransmitMode } from '../lib/audio/voice.svelte.ts';
+  import { voice, type TransmitMode, type Detector } from '../lib/audio/voice.svelte.ts';
   import { session, sessions } from '../lib/session.svelte.ts';
+  import type { NoiseEngine } from '../lib/audio/noise.ts';
 
   function setForceTcp(on: boolean) {
     voice.update({ forceTcp: on });
@@ -12,12 +13,16 @@
   let capturing = $state(false);
 
   // Opening the settings starts audio so the meter and device names work before connecting
+  // The level meter below needs the microphone even when it is muted
+  voice.holdMeter(true);
   voice.start();
-  onDestroy(() => { if (voice.testing) voice.setTesting(false); if (session.status !== 'connected') voice.stop(); });
+  onDestroy(() => { voice.holdMeter(false); if (voice.testing) voice.setTesting(false); if (session.status !== 'connected') voice.stop(); });
 
   const METER_MIN = -80;
   const pct = (db: number) => Math.max(0, Math.min(100, ((db - METER_MIN) / -METER_MIN) * 100));
-  const open = $derived(voice.level > s.vadThreshold);
+  const open = $derived(voice.speech);
+  // RNNoise and Silero rate speech as a probability; the others go by loudness
+  const byProb = $derived(s.detector === 'rnnoise' || s.detector === 'silero');
 
   const keyName = (code: string) => code
     .replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'Num ')
@@ -80,15 +85,36 @@
     <p class="help">Works while Libertad is focused. System-wide push to talk is planned.</p>
   {/if}
 
-  <label for="v-level">Input level{s.mode === 'vad' ? ' and threshold' : ''}</label>
-  <div class="meter" class:open={s.mode !== 'vad' || open} aria-hidden="true">
-    <div class="fill" style:width="{pct(voice.level)}%"></div>
-    {#if s.mode === 'vad'}<div class="mark" style:left="{pct(s.vadThreshold)}%"></div>{/if}
-  </div>
   {#if s.mode === 'vad'}
-    <input id="v-level" type="range" min={METER_MIN} max="0" step="1" value={s.vadThreshold}
-      oninput={e => voice.update({ vadThreshold: Number(e.currentTarget.value) })} aria-label="Voice activity threshold" />
-    <p class="help">Speak normally and put the marker just below your voice; the bar turns green when you would be sending. Threshold {s.vadThreshold} dB.</p>
+    <label for="v-det">Voice detection</label>
+    <select id="v-det" value={s.detector} onchange={e => voice.update({ detector: e.currentTarget.value as Detector })}>
+      <option value="standard">Standard: Normal</option>
+      <option value="gate">Noise gate: Good</option>
+      <option value="rnnoise">RNNoise probability: Good</option>
+      <option value="silero">Silero VAD: Best</option>
+    </select>
+    <p class="help">{s.detector === 'standard' ? 'Sends when the sound is louder than the threshold.'
+      : s.detector === 'gate' ? 'Like Standard, but it closes lower than it opens and fades the sound in and out, so there are fewer cut-offs and clicks.'
+      : s.detector === 'rnnoise' ? 'Sends when RNNoise judges that it is speech, not just loud. Light on the processor.'
+      : 'Sends when Silero judges that it is speech, not just loud. The most accurate; the model loads the first time it is used.'}</p>
+  {/if}
+
+  <label for="v-level">Input level{s.mode === 'vad' ? (byProb ? ' and speech' : ' and threshold') : ''}</label>
+  <div class="meter" class:open={s.mode !== 'vad' || open} aria-hidden="true">
+    <div class="level-bar" style:width="{pct(voice.level)}%"></div>
+    {#if s.mode === 'vad' && !byProb}<div class="mark" style:left="{pct(s.vadThreshold)}%"></div>{/if}
+  </div>
+  {#if voice.level <= -99}<p class="help">{voice.diag || 'Audio engine not running'}</p>{/if}
+  {#if s.mode === 'vad'}
+    {#if byProb}
+      <input id="v-level" type="range" min="5" max="95" step="1" value={s.speechThreshold}
+        oninput={e => voice.update({ speechThreshold: Number(e.currentTarget.value) })} aria-label="Speech threshold" />
+      <p class="help">Speak normally; the bar turns green when it hears speech. Needs {s.speechThreshold}% certainty: lower catches quieter speech, higher lets less noise through.</p>
+    {:else}
+      <input id="v-level" type="range" min={METER_MIN} max="0" step="1" value={s.vadThreshold}
+        oninput={e => voice.update({ vadThreshold: Number(e.currentTarget.value) })} aria-label="Voice activity threshold" />
+      <p class="help">Speak normally and put the marker just below your voice; the bar turns green when you would be sending. Threshold {s.vadThreshold} dB.</p>
+    {/if}
     <label for="v-hold">Keep sending after speech: {s.vadHoldMs} ms</label>
     <input id="v-hold" type="range" min="100" max="1500" step="50" value={s.vadHoldMs}
       oninput={e => voice.update({ vadHoldMs: Number(e.currentTarget.value) })} />
@@ -118,6 +144,28 @@
   <label class="check"><input type="checkbox" checked={s.releaseMicMuted} onchange={e => voice.update({ releaseMicMuted: e.currentTarget.checked })} /> Give the microphone back while muted</label>
   <p class="help">For Bluetooth headsets: with the microphone open, a headset switches to its telephone mode and everything sounds like a phone call. Muted, you then hear in full quality. To talk in full quality too, choose the phone's own microphone above instead of the headset's. No reminder when you speak while muted.{#if s.releaseMicMuted && voice.running} <strong>{voice.micOpen ? 'The microphone is open now.' : 'The microphone is given back now.'}</strong>{/if}</p>
   <label class="check"><input type="checkbox" checked={s.noiseSuppression} onchange={e => voice.update({ noiseSuppression: e.currentTarget.checked })} /> Noise suppression</label>
+  <label for="v-ns">Noise suppression engine</label>
+  <select id="v-ns" value={s.noiseEngine} disabled={!s.noiseSuppression} onchange={e => voice.update({ noiseEngine: e.currentTarget.value as NoiseEngine })}>
+    <option value="speex">Speex: Lightest</option>
+    <option value="rnnoise">RNNoise: Medium</option>
+    <option value="deepfilter">DeepFilterNet3: Heaviest</option>
+  </select>
+  {#if s.noiseEngine === 'rnnoise'}
+    <label for="v-ns-set">Strength: {s.rnnoiseStrength}%</label>
+    <input id="v-ns-set" type="range" min="0" max="100" step="5" value={s.rnnoiseStrength} disabled={!s.noiseSuppression}
+      oninput={e => voice.update({ rnnoiseStrength: Number(e.currentTarget.value) })} />
+    <p class="help">How much of the cleaned voice is mixed in. 100% removes the most noise; lower keeps more of the original sound.</p>
+  {:else if s.noiseEngine === 'speex'}
+    <label for="v-ns-set">Noise reduction: {-s.speexLevel} dB</label>
+    <input id="v-ns-set" type="range" min="-60" max="-5" step="1" value={s.speexLevel} disabled={!s.noiseSuppression}
+      oninput={e => voice.update({ speexLevel: Number(e.currentTarget.value) })} />
+    <p class="help">Higher removes more noise but can make the voice sound thin or watery.</p>
+  {:else}
+    <label for="v-ns-set">Noise reduction: up to {s.dfLevel} dB</label>
+    <input id="v-ns-set" type="range" min="6" max="100" step="1" value={s.dfLevel} disabled={!s.noiseSuppression}
+      oninput={e => voice.update({ dfLevel: Number(e.currentTarget.value) })} />
+    <p class="help">The most noise the model may remove. Higher is cleaner; around 100 can sound choppy. Needs the most processing.</p>
+  {/if}
   <label class="check"><input type="checkbox" checked={s.echoCancellation} onchange={e => voice.update({ echoCancellation: e.currentTarget.checked })} /> Echo cancellation (for speakers instead of headphones)</label>
   <label class="check"><input type="checkbox" checked={s.autoGainControl} onchange={e => voice.update({ autoGainControl: e.currentTarget.checked })} /> Automatic gain control</label>
 
@@ -170,8 +218,8 @@
   .hint { font-size: 13px; color: var(--text-dim); }
   .hint.on { color: var(--speaking); font-weight: 600; }
   .meter { position: relative; height: 12px; background: var(--bg-0); border: 1px solid var(--line); overflow: hidden; }
-  .fill { height: 100%; background: var(--text-faint); transition: width 50ms linear; }
-  .meter.open .fill { background: var(--speaking); }
+  .level-bar { height: 100%; position: static; z-index: auto; background: var(--text-faint); transition: width 50ms linear; }
+  .meter.open .level-bar { background: var(--speaking); }
   .mark { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--warn); }
   input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
   .test { margin-top: 14px; }

@@ -1,3 +1,4 @@
+import { defaultRooms } from './default-room.svelte.ts';
 import { createCodec } from '../core/proto.ts';
 import { MumbleClient, describeDenial, type Channel, type User, type TextMessage } from '../core/client.ts';
 import { native, openTransport } from './native.ts';
@@ -267,7 +268,7 @@ export class Session {
     this.status = 'connecting';
 
     if (!native) {
-      this.fail('Connecting needs the desktop app or the web build served by a Libertad proxy.');
+      this.fail('Connecting needs the desktop app.');
       return;
     }
 
@@ -368,7 +369,9 @@ export class Session {
       if (!this.autoJoin && this.server && client.self) store.rememberChannel(this.server.id, client.self.channelId, client.channels.get(client.self.channelId)?.name ?? '');
       const back = this.autoJoin;
       this.autoJoin = null;
-      if (back) {
+      // The server's default room, or the question which room to go to (default-room.svelte.ts)
+      const placed = defaultRooms.connected(this, !!back);
+      if (back && !placed) {
         const ch = client.channels.get(back.id);
         if (ch && (ch.name || 'Root') === (back.name || 'Root') && client.self?.channelId !== back.id) this.joinChannel(back.id);
       }

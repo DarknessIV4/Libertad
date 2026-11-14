@@ -67,7 +67,9 @@
   }
 
   // ─── Background: pictures, GIFs, videos and colors, for the whole space or for each panel ───
-  const BG_ROWS: { scope: Slot; label: string; note: string }[] = [
+  // The start screen ('home') has its own menu elsewhere; these rows are the whole space and the three panels
+  type RowScope = Exclude<Slot, 'home'>;
+  const BG_ROWS: { scope: RowScope; label: string; note: string }[] = [
     { scope: 'whole', label: 'Whole space', note: 'One background over the channel list, the middle and the right panel' },
     { scope: 'left', label: 'Left panel', note: 'Channel list' },
     { scope: 'middle', label: 'Middle', note: 'Chat and user cards' },
@@ -75,18 +77,18 @@
   ];
   let bgError = $state('');
 
-  async function bgColor(scope: Slot) {
+  async function bgColor(scope: RowScope) {
     const start = scope === 'whole' ? (panelColor('middle') ?? colors['bg-2']) : (panelColor(scope) ?? colors[scope === 'middle' ? 'bg-2' : 'bg-1']);
     const c = await colorPicker.open(start);
     if (c) { bgError = ''; await applyColor(scope, c); }
   }
-  async function bgFile(scope: Slot, accept: string) {
+  async function bgFile(scope: RowScope, accept: string) {
     const picked = await pickFile(accept);
     const f = picked && await cropBackground(picked);
     if (f) bgError = await applyFile(scope, f.file, f.crop);
   }
   // What a row has now
-  function bgStatus(scope: Slot): string {
+  function bgStatus(scope: RowScope): string {
     const e = customBg.slots[scope];
     if (e.kind === 'image') return 'Picture';
     if (e.kind === 'video') return 'Video or GIF';
@@ -94,7 +96,7 @@
     if (panelColor(scope)) return 'Color';
     return customBg.has('whole') ? 'Part of the whole background' : 'Color scheme';
   }
-  const bgHasAny = (scope: Slot) => customBg.has(scope) || (scope !== 'whole' && !!panelColor(scope));
+  const bgHasAny = (scope: RowScope) => customBg.has(scope) || (scope !== 'whole' && !!panelColor(scope));
 
   // ─── See-through windows, buttons and panels ───
   type GlassGroup = 'window' | 'button' | 'panel';

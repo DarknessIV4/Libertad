@@ -1,8 +1,8 @@
 # Libertad
 
-**Voice chat with your friends on Mumble, in an app that feels like the chat apps you already know.**
+**Voice chat with your friends on Mumble, in an app that feels like the apps you already know.**
 
-Libertad works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It runs on Windows and Linux, and in a browser.
+Libertad works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It runs on Windows and Linux.
 
 https://github.com/user-attachments/assets/832434a1-2b63-4d36-b25f-2f67f1e0feed
 
@@ -11,7 +11,8 @@ https://github.com/user-attachments/assets/832434a1-2b63-4d36-b25f-2f67f1e0feed
 - **Talk.** Clear, low-delay voice, with push to talk, voice activity or always on, and noise suppression.
 - **Chat like you are used to.** Messages, pictures, files, link previews and YouTube cards, in every channel and in private.
 - **Share your screen or your camera** with the people in your channel.
-- **Send files**, up to 100 GB, through WebRTC. No upload sites.
+- **Watch with your friends in several ways**, watch youtube together, torrents, or stream your files, everyone controls the stream live.
+- **Send files**, up to 100 GB, straight from computer to computer through WebRTC. No upload sites.
 - **See who is who.** Profile pictures and profile cards, and banners.
 - **Make it yours.** Custom color schemes to your liking, add a background image or video, change how corners look, and control transparency, darkness, and blur effects.
 - **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose, unless you choose to log in with your YouTube account in settings.
@@ -64,121 +65,35 @@ Pick a color scheme, or customize it yourself:
 - **Not in Libertad yet:** push to talk while Libertad is in the background, whisper and shout, positional audio, the in-game overlay, recording, and the ban list and registered-user editors. The Mumble desktop app has these.
 - **Back up your identity.** It is how servers recognize you. Libertad offers a password-protected backup right after you create it, and in Settings, Identities.
 
-Libertad also runs in a browser. Browsers cannot open the TLS connection Mumble uses or present a client certificate, so a small proxy you host yourself does that part: it serves the web app and bridges each browser connection to a Mumble server.
+## Screen sharing and file transfers: STUN and relay
 
-```bash
-npm ci
-npm run build:web      # web app to dist-web/, proxy to dist-proxy/proxy.mjs
-LIBERTAD_SERVERS="mumble.example.com=My server" node dist-proxy/proxy.mjs
-```
+Screen sharing and file transfers connect you directly to the people on the other end (WebRTC). Open **Settings, Voice** to set this up:
 
-Then open `http://127.0.0.1:8080`. For development, `npm run dev:web` starts the proxy and a hot-reloading page together, with any server allowed. To deploy, copy `dist-web/` and `dist-proxy/` next to each other on the server (Node 22 or newer, no `node_modules` needed) and put a reverse proxy with HTTPS in front that forwards WebSocket upgrades. Browsers only allow the microphone on HTTPS pages (or on localhost).
-
-With Docker, the same thing is one command; settings go in a `.env` file next to `docker-compose.yml`:
-
-```bash
-echo 'LIBERTAD_SERVERS=mumble.example.com=My server' > .env
-docker compose up -d --build
-```
-
-The container uses the host's network: the proxy listens on `127.0.0.1:8080` for your reverse proxy, and a Mumble server on the same machine is reachable as `localhost`.
-
-For screen sharing, open these in the firewall (and forward them on a router in front of the server): port 3478 for UDP and TCP, and UDP 49160-49659. They carry STUN and the relay, which the browser version uses without any setting. Relayed streams pass through your server and use its bandwidth, a few Mbit/s per viewer; anyone who knows the site's address can get credentials for it (the desktop app asks from outside the site), limited by connection quotas per address; there is no bandwidth cap yet.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `LIBERTAD_SERVERS` | none | Mumble servers people may connect to: `host[:port][=Label]`, comma-separated. Required unless `LIBERTAD_ALLOW_ANY=1` |
-| `LIBERTAD_ALLOW_ANY` | off | Allow any server on the public internet. Private and loopback addresses stay blocked, except servers listed in `LIBERTAD_SERVERS` (for a Mumble server on the same machine: `LIBERTAD_SERVERS=localhost`), or all of them with `LIBERTAD_ALLOW_PRIVATE=1` |
-| `LIBERTAD_PORT`, `LIBERTAD_BIND` | `8080`, `127.0.0.1` | Where the proxy listens |
-| `LIBERTAD_ORIGINS` | same host | Origins allowed to use the API, comma-separated, when the page is hosted elsewhere |
-| `LIBERTAD_TRUST_PROXY` | off | Take client addresses from `X-Forwarded-For` (set this behind a reverse proxy) |
-| `LIBERTAD_SEND_PROXY` | off | Announce each visitor's address to the server with the PROXY protocol (see below). Breaks connections to a plain Mumble server |
-| `LIBERTAD_STUN_PORT`, `LIBERTAD_STUN_BIND` | `3478`, all addresses | Port for screen sharing between browser users: STUN over UDP, and the relay over UDP and TCP. Browsers reach it directly, not through nginx. `0` turns both off |
-| `LIBERTAD_TURN` | on | The relay (TURN) for people who cannot connect directly: mobile networks, strict company networks, browsers that forbid direct UDP such as Vanadium. `0` leaves only STUN |
-| `LIBERTAD_TURN_PORTS` | `49160-49659` | UDP ports the relayed streams use, one per relayed route |
-| `LIBERTAD_TURN_URLS` | none | Extra relay addresses handed to clients, comma-separated, for example `turns:turn.example.com:443?transport=tcp` when a TLS front forwards to port 3478. For networks that only let port 443 out |
-| `LIBERTAD_DEBUG` | off | Log relay events (credentials handed out, routes granted or refused) |
-| `LIBERTAD_TURN_MAX`, `LIBERTAD_TURN_PER_ADDRESS` | `500`, `64` | Relayed routes in total and per client address. A camera round uses several per person |
-| `LIBERTAD_TURN_IP` | found automatically | The server's public address, announced for relayed streams. Set it when the server sits behind a 1:1 NAT, as on many cloud hosts |
-| `LIBERTAD_STATIC` | `../dist-web` | Folder with the web build |
-| `LIBERTAD_MAX_CONNECTIONS`, `LIBERTAD_MAX_PER_ADDRESS` | `200`, `8` | Connection limits, in total and per client address |
-
-Example for nginx. `Host` must be passed on unchanged, because the proxy only accepts requests whose origin matches it. `X-Forwarded-For` carries the visitor's address; start the proxy with `LIBERTAD_TRUST_PROXY=1` so its per-address limits use it.
-
-```nginx
-map $http_upgrade $connection_upgrade { default upgrade; '' close; }
-
-server {
-    listen 443 ssl;
-    server_name voice.example.com;
-    # ssl_certificate and ssl_certificate_key go here
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 1h;
-        proxy_send_timeout 1h;
-        proxy_buffering off;
-    }
-}
-```
-
-By default the Mumble server sees every browser user coming from the proxy's address, and that is the address other people and admins get in a user's information. No nginx setting changes that. Bans by IP on the Mumble server would then hit all users of the proxy; ban by certificate instead. In your own information Libertad shows the address the proxy saw for you, next to the one the server sees.
-
-#### Showing the Mumble server the visitor's real address
-
-Mumble does not understand the PROXY protocol ([mumble#4769](https://github.com/mumble-voip/mumble/issues/4769)), so the only way is to make the connection to it really come from the visitor's address. [go-mmproxy](https://github.com/path-network/go-mmproxy) does this on Linux: it accepts a connection that starts with a PROXY line and opens the connection to the server with that address as the source. It has to run on the same machine as the Mumble server, as root or with `CAP_NET_ADMIN`, with routing rules that send the server's replies back to it:
-
-```bash
-# on the Mumble server's machine
-ip rule add from 127.0.0.1/8 iif lo table 123
-ip route add local 0.0.0.0/0 dev lo table 123
-ip -6 rule add from ::1/128 iif lo table 123
-ip -6 route add local ::/0 dev lo table 123
-go-mmproxy -l 127.0.0.1:64750 -4 127.0.0.1:64738 -6 "[::1]:64738"
-
-# the Libertad proxy then connects to go-mmproxy instead of Mumble
-LIBERTAD_SEND_PROXY=1 LIBERTAD_TRUST_PROXY=1 LIBERTAD_SERVERS="127.0.0.1:64750=My server" node dist-proxy/proxy.mjs
-```
-
-The routing rules and options are go-mmproxy's; check its README for your system. Libertad's side (sending the PROXY line) is covered by tests, the go-mmproxy setup itself has not been tested with Libertad. People on the desktop client keep connecting to Mumble directly.
-
-What is different from the desktop app:
-
-- **The proxy is trusted.** Your certificate and its private key are kept in the browser's storage and sent to the proxy on every connect, and everything you send, including the server password, passes through it. Whoever runs the proxy could act as you. Use a proxy you run yourself or trust.
-- **Voice goes over TCP.** Browsers have no UDP sockets, so voice uses Mumble's TCP tunnel through the proxy. It works, with more delay on lossy connections.
-- **Clearing the browser's data removes your identity.** Download a backup; the same `.p12` file works in the desktop app and in Mumble.
-- **Not available:** the public server browser, link previews fetched by your own computer, the tray icon, importing the desktop Mumble certificate automatically.
-- Voice uses the browser's own audio codec where there is one, and a built-in one otherwise (Firefox on Android). Both are tested in Chromium only.
-
-</details>
+- **STUN server:** across the internet both sides need one to find a route. It learns your IP address but never sees the stream. With none selected, no outside server is contacted and streams only work on the same network. Google and Cloudflare are offered, or type your own.
+- **Relay (optional):** the address of a Libertad relay server. When a direct connection is not possible (mobile data, strict company networks), the stream goes through that server instead. Its operator sees your IP address and carries the stream, but cannot watch it.
 
 <details>
 <summary><b>How file sharing works</b></summary>
 
-Files travel through the Mumble server, to other Libertad users. There is no file host and nothing is stored on the server.
+Files go directly from computer to computer, to other Libertad users, over an encrypted WebRTC connection, using the same STUN and relay settings as screen sharing. There is no file host and nothing is stored on a server.
 
 - A file is announced in the chat with its name, size and a preview picture. Regular Mumble users see that and nothing more.
 - Libertad users fetch it with one click, or by themselves when it is small (20 MB by default, Settings, Chat and files). Small pictures are sent inline as they are, so everyone sees them.
-- The pieces are chat messages addressed only to the people downloading. Murmur allows about one message a second per user, but a message may be as long as the server's image limit (128 KB of text by default), and Libertad packs 15 bits into every character. On a server with default limits that is about 200 KB/s, or 12 MB a minute, from each person sending. One message reaches every downloader at once, so ten people fetching the same file cost the sender no more than one.
-- Anyone who has a file can send it, not only the person who posted it. A download asks everyone online who has it and splits the pieces between up to four of them (the server limits each sender separately), so it keeps working after the sender has left.
+- **Fallback through the Mumble server.** If no direct connection is possible, the pieces travel as chat messages through the Mumble server, addressed only to the people downloading. Murmur allows about one message a second per user, but a message may be as long as the server's image limit (128 KB of text by default), and Libertad packs 15 bits into every character. On a server with default limits that is about 200 KB/s, or 12 MB a minute, from each person sending. One message reaches every downloader at once, so ten people fetching the same file cost the sender no more than one.
+- Anyone who has a file can send it, not only the person who posted it. A download asks everyone online who has it and splits the pieces between several of them, so it keeps working after the sender has left.
 - Each computer keeps the files it sent and received, up to 100 GB, oldest out first. Files are checked against the hash in the announcement.
 - Large files (256 MB and up) ask where to save when you click Download, before anything is fetched, and are written straight into that file, so they are not stored twice. A part file named `<name>.libertadpart` sits beside it until the download is complete and checked, and is deleted if the download stops or fails. Because they are not kept in the app's storage, other people cannot fetch them from you afterwards. A large file you send is sent from where it is and not copied into the app's storage either.
 - Your own chat messages always go out first; files use what is left of the server's message limit.
 
-Servers can raise the limits for faster transfers: `imagemessagelength` (larger pieces, 0 for no limit) and `messagelimit` / `messageburst` in the server's configuration. Needs Mumble 1.4 or newer on the server. Sending a large file uses your upload bandwidth; on a slow line, voice over the TCP tunnel (as in the browser version) can lag while it runs.
+For the Mumble server fallback, servers can raise the limits for faster transfers: `imagemessagelength` (larger pieces, 0 for no limit) and `messagelimit` / `messageburst` in the server's configuration. Needs Mumble 1.4 or newer on the server. Sending a large file over the fallback uses your upload bandwidth.
 
 </details>
 
 ### Privacy and security
 
-- **Your identity is a certificate** that stays on your computer, stored with owner-only permissions. Libertad reminds you to back it up. (The browser version is different, see above.)
+- **Your identity is a certificate** that stays on your computer, stored with owner-only permissions. Libertad reminds you to back it up.
 - **Server certificates are pinned** the first time you connect. If one changes, Libertad stops before sending your password and asks you.
-- **Chats don't phone home.** Files come through the Mumble server; media links are only loaded from hosts you add yourself. YouTube players are off by default and click-to-play in privacy mode when enabled.
+- **Chats don't phone home.** Files go directly between users (or through the Mumble server as a fallback); media links are only loaded from hosts you add yourself. YouTube players are off by default and click-to-play in privacy mode when enabled.
 - **Strict content security policy** in the app, and all message HTML is sanitized.
 
 ### Roadmap
@@ -232,7 +147,6 @@ docker run -d --name libertad-test-murmur -p 64739:64738 -p 64739:64738/udp \
 MUMBLE_TEST_HOST=localhost:64739 npm test
 npm run build
 MUMBLE_TEST_HOST=localhost:64739 MUMBLE_SUPERUSER_PASSWORD=testsuper npm run test:e2e
-npm run build:web && MUMBLE_TEST_HOST=localhost:64739 npm run test:e2e:web   # browser build through the proxy
 ```
 
 On Linux the end-to-end test forces X11, so it can run on a virtual display: `Xvfb :99 & DISPLAY=:99 npm run test:e2e`. See [CLAUDE.md](CLAUDE.md) for the architecture and project conventions.

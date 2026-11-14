@@ -11,6 +11,8 @@ import { hiddenCards } from './hidden-cards.svelte.ts';
 import { pickColor, pickFile } from './pick.ts';
 import { setBannerFromFile } from './banner-actions.ts';
 import { imageEditor, EDITABLE_OR_GIF } from './image-editor.svelte.ts';
+import { roles } from './roles.svelte.ts';
+import { deafenFor } from './deafen-for.svelte.ts';
 import { PERM, type Channel, type User } from '../core/client.ts';
 
 // A person's profile card, next to the element that was clicked (or at a point, from a menu)
@@ -31,7 +33,8 @@ export function channelMenu(c: Channel): MenuItem[] {
     { separator: true, label: '' },
     { label: 'Create channel...', disabled: no(PERM.MakeChannel) && no(PERM.MakeTempChannel), action: () => (ui.channelDialog = { mode: 'create', parent: c.id }) },
     { label: 'Edit channel...', disabled: no(PERM.Write), action: () => (ui.channelDialog = { mode: 'edit', id: c.id }) },
-    { label: 'Permissions...', disabled: no(PERM.Write), action: () => (ui.channelDialog = { mode: 'edit', id: c.id, tab: 'permissions' }) }
+    // Admins (see roles.ts) have Write below the root to delete channels, but do not edit permissions or groups
+    { label: 'Permissions...', disabled: no(PERM.Write) || roles.limited(session), action: () => (ui.channelDialog = { mode: 'edit', id: c.id, tab: 'permissions' }) }
   ];
   if (!here) {
     manage.push(linked
@@ -118,6 +121,8 @@ export function userMenu(u: User, card?: CardChoices): MenuItem[] {
       ...(card ? [] : [pauseBackgroundItem(u)]),
       { label: 'Send message', action: () => session.selectView(`dm:${u.session}`) },
       { label: 'Mute for me', checked: !!voice.settings.localMutes[userKey(u)], action: () => voice.setLocalMute(u, !voice.settings.localMutes[userKey(u)]) },
+      // They stop hearing you, everyone else still does (not a server deafen: they still hear the others)
+      { label: 'Deafen for me', checked: deafenFor.has(session, u), action: () => deafenFor.toggle(session, u) },
       {
         label: 'Volume',
         slider: {
@@ -139,6 +144,12 @@ export function userMenu(u: User, card?: CardChoices): MenuItem[] {
     { label: 'Priority speaker', checked: u.prioritySpeaker, action: () => session.setPrioritySpeaker(u.session, !u.prioritySpeaker) }
   );
   if (!isSelf && u.userId == null) items.push({ label: 'Register user', action: () => session.register(u.session) });
+  // Only the SuperUser gives or takes the Admin role (the server keeps it as membership of a group on the root)
+  if (!isSelf && roles.isSuper(session) && u.userId !== 0) {
+    items.push(roles.hasAdmin(session, u)
+      ? { label: 'Remove admin', action: () => roles.revoke(session, u) }
+      : { label: 'Make admin', action: () => roles.grant(session, u) });
+  }
   if (!isSelf) {
     items.push(
       { separator: true, label: '' },

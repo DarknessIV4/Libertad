@@ -84,10 +84,3 @@ export const stripBanner = (comment: string): string => comment.replace(FIND_ALL
 export const withBanners = (comment: string, b: Record<Slot, Banner | null>): string =>
   SLOTS.map(s => (b[s] ? encodeBanner(b[s]!, s) : '')).join('') + stripBanner(comment);
 
-export function sameBanner(a: Banner | null, b: Banner | null): boolean {
-  if (!a || !b) return a === b;
-  if (a.kind === 'color') return b.kind === 'color' && a.color.toLowerCase() === b.color.toLowerCase() && a.scope === b.scope;
-  if (a.kind === 'image') return b.kind === 'image' && a.src === b.src && a.scope === b.scope;
-  return b.kind === 'file' && a.meta.i === b.meta.i && a.meta.h === b.meta.h && a.scope === b.scope;
-}
-

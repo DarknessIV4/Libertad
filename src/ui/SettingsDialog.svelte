@@ -6,7 +6,7 @@
   import SoundSettings from './SoundSettings.svelte';
   import ShortcutSettings from './ShortcutSettings.svelte';
   import { store } from '../lib/settings.svelte.ts';
-  import { native, desktop, isWeb } from '../lib/native.ts';
+  import { native, desktop } from '../lib/native.ts';
   import { youtubeAccount as yt } from '../lib/youtube-account.svelte.ts';
   import YouTubeSignIn from './YouTubeSignIn.svelte';
   import { previewMode } from '../lib/preview.ts';
@@ -111,7 +111,7 @@
     <h3>Screen sharing</h3>
     <label for="s-stun">STUN server</label>
     <select id="s-stun" value={stunChoice} onchange={e => chooseStun(e.currentTarget.value)}>
-      <option value="">{isWeb ? 'This site\'s own server' : 'None (same network only)'}</option>
+      <option value="">None (same network only)</option>
       {#each STUN_PRESETS as p (p.url)}<option value={p.url}>{p.name} ({p.url})</option>{/each}
       <option value="custom">Another server...</option>
     </select>
@@ -120,9 +120,9 @@
     {/if}
     <label for="s-relay">Relay <span class="opt">(optional)</span></label>
     <input id="s-relay" bind:value={s.relayServer} onchange={() => { s.relayServer = s.relayServer.trim(); store.saveSettings(); }}
-      placeholder={isWeb ? 'this site (automatic)' : 'https://voice.example.com'} autocomplete="off" />
-    <p class="help">The address of a Libertad web version. When a direct connection is not possible (mobile data, strict company networks), the stream goes through that server instead, by itself. {isWeb ? 'Empty uses the site you are on.' : 'Its operator sees your IP address and carries the stream, but cannot watch it.'}</p>
-    <p class="help">Screen sharing connects you directly to the people watching. Across the internet both sides need a STUN server to find a route; it learns your IP address but never sees the stream. {isWeb ? 'By default the site you are on provides it.' : 'With none, no outside server is contacted and streams only work on the same network.'} Networks that block direct connections, like many mobile ones, need more than STUN.</p>
+      placeholder="https://voice.example.com" autocomplete="off" />
+    <p class="help">The address of a Libertad relay server. When a direct connection is not possible (mobile data, strict company networks), the stream goes through that server instead, by itself. Its operator sees your IP address and carries the stream, but cannot watch it.</p>
+    <p class="help">Screen sharing connects you directly to the people watching. Across the internet both sides need a STUN server to find a route; it learns your IP address but never sees the stream. With none, no outside server is contacted and streams only work on the same network. Networks that block direct connections, like many mobile ones, need more than STUN.</p>
   {:else if tab === 'sounds'}
     <SoundSettings />
   {:else if tab === 'appearance'}
@@ -213,7 +213,7 @@
       {#if yt.dialog}<YouTubeSignIn />{/if}
     {/if}
   {:else}
-    <p class="help">Servers recognize you by your certificate. The default is used unless a server is set to another one.{isWeb ? ' Certificates are kept in this browser and passed to the proxy when you connect.' : ''}</p>
+    <p class="help">Servers recognize you by your certificate. The default is used unless a server is set to another one.</p>
     <IdentityList />
   {/if}
   </div>

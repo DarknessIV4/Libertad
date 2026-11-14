@@ -23,10 +23,10 @@ export interface WtFile {
   createReadStream(o?: { start?: number; end?: number }): AsyncIterable<Uint8Array> & { destroy(e?: Error): void };
 }
 export interface WtTorrent {
-  infoHash: string; name: string; ready: boolean; private?: boolean; files: WtFile[]; announce: string[];
+  infoHash: string; name: string; ready: boolean; torrentFile?: Uint8Array; private?: boolean; files: WtFile[]; announce: string[];
   numPeers: number; downloadSpeed: number; uploadSpeed: number; downloaded: number;
   once(ev: string, fn: (...a: any[]) => void): void;
-  destroy(opts?: { destroyStore?: boolean }): void;
+  destroy(opts?: { destroyStore?: boolean }, cb?: () => void): void;
 }
 export interface WtClient {
   add(id: string | Uint8Array, opts: object): WtTorrent;
@@ -42,6 +42,57 @@ export interface EngineOptions {
   // Converts what the page can not play; null/absent when there is no ffmpeg
   transcoder?: Transcoder | null;
 }
+
+// Public trackers added to every torrent here. A magnet link carries only a few trackers, and a joiner that
+// is given none that work finds nobody (0 peers, loading forever) even though the swarm is there.
+const FALLBACK_TRACKERS = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.tracker.cl:1337/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://tracker.dler.org:6969/announce',
+  'udp://explodie.org:6969/announce',
+  'udp://tracker.openbittorrent.com:6969/announce'
+];
+
+// HTTP(S) trackers: they get through on networks that block UDP, which is what a "0 peers" joiner is often stuck behind
+const HTTP_TRACKERS = [
+  'https://tracker.tamersunion.org:443/announce',
+  'https://tracker.gbitt.info:443/announce',
+  'https://tracker1.520.jp:443/announce',
+  'http://tracker.opentrackr.org:1337/announce',
+  'http://tracker.files.fm:6969/announce'
+];
+const EXTRA_UDP_TRACKERS = [
+  'udp://tracker.theoks.net:6969/announce',
+  'udp://tracker.0x7c0.com:6969/announce'
+];
+// Tried one after the other while nobody has answered: the first is the normal one, the rest are what a stalled torrent is re-added with
+const TRACKER_SETS: string[][] = [
+  FALLBACK_TRACKERS,
+  [...HTTP_TRACKERS, ...FALLBACK_TRACKERS.slice(0, 3)],
+  [...EXTRA_UDP_TRACKERS, ...HTTP_TRACKERS, ...FALLBACK_TRACKERS]
+];
+const ALL_FALLBACKS = new Set(TRACKER_SETS.flat());
+// How long a torrent with no peers (and no file list yet) waits before it is re-added with other trackers
+// Public caches that keep the .torrent files of popular torrents: asked in parallel with the peers, whichever answers first gives
+// the file list (an address that does not have the file is skipped by WebTorrent). Only used here, never put in a shared link.
+const TORRENT_CACHES: ((hash: string) => string)[] = [
+  h => `https://itorrents.org/torrent/${h.toUpperCase()}.torrent`,
+  h => `https://torrage.info/torrent.php?h=${h.toUpperCase()}`,
+  h => `https://btcache.me/torrent/${h.toUpperCase()}`
+];
+const withCaches = (magnet: string): string => {
+  const hash = parseMagnet(magnet)?.infoHash;
+  return hash ? magnet + TORRENT_CACHES.map(c => `&xs=${encodeURIComponent(c(hash))}`).join('') : magnet;
+};
+const STALL_MS = 5000;
+// The same for a torrent whose file list is known but that has not sent a single byte (checked every 5 s, refreshed after 3 quiet checks)
+const START_CHECK_MS = 5000;
+const START_QUIET_CHECKS = 3;
+// Peers that are there but never send the file list are given this long before the torrent is re-added
+const NO_METADATA_MS = 20000;
 
 const PRIVATE = 'This is a private torrent. Its tracker would give your personal key to everybody in the channel, so it can not be shared here.';
 const MIME: Record<string, string> = {
@@ -68,7 +119,14 @@ export function parseRange(header: string | undefined, size: number): { start: n
   return start > end || start >= size ? 'bad' : { start, end };
 }
 
-interface Entry { t: WtTorrent; owners: Set<object>; ready: Promise<void> }
+interface Entry {
+  t: WtTorrent; owners: Set<object>; ready: Promise<void>;
+  readd?: (attempt: number, source?: Uint8Array) => WtTorrent;
+  swap?: Promise<void>;     // the torrent is being re-added: requests for its file wait for it
+  watching?: boolean;
+  snap?: TorrentStats;         // the last numbers shown, kept while the torrent is being re-added
+  remap?: Map<number, number>; // the file number a link names -> where that file really is in the torrent
+}
 
 export function createTorrentEngine(opts: EngineOptions) {
   const timeoutMs = opts.metadataTimeoutMs ?? 90000;
@@ -85,11 +143,30 @@ export function createTorrentEngine(opts: EngineOptions) {
       const Ctor = opts.loadClient ? await opts.loadClient() : ((await import(spec)).default as WtConstructor);
       await fs.rm(opts.root, { recursive: true, force: true });
       await fs.mkdir(opts.root, { recursive: true });
-      const client = new Ctor({ maxConns: 80 });
+      const client = new Ctor({ maxConns: 150 });
       client.on('error', () => {}); // a failed torrent reports itself to whoever waits for it
       return client;
     })();
     return clientP;
+  }
+
+  // The file a link's number stands for. Torrentio numbers a torrent's files its own way, so the number can name another file
+  // (or none) here: the file of the same size or name is the one meant, and a link whose number names nothing plays the largest video.
+  const fileOf = (entry: Entry | undefined, idx: number): WtFile | undefined => entry?.t.files[entry.remap?.get(idx) ?? idx];
+  function resolveIdx(files: readonly WtFile[], idx: number, hint?: { fileName?: string; size?: number }): number {
+    const at0 = files[idx];
+    // Without a name or size to go by, a number that names no file stays an error
+    if (!at0 && !hint?.fileName && !hint?.size) return idx;
+    const base = (n: string) => n.slice(Math.max(n.lastIndexOf('/'), n.lastIndexOf('\\')) + 1).toLowerCase();
+    const size = hint?.size && hint.size > 0 ? hint.size : 0, name = hint?.fileName ? base(hint.fileName) : '';
+    const at = files[idx];
+    if (at && (!size || at.length === size)) return idx;
+    const found = files.findIndex(f => (!size || f.length === size) && (size || name) && (!name || base(f.path || f.name) === name));
+    if (found >= 0) return found;
+    const bySize = size ? files.findIndex(f => f.length === size && isVideoName(f.name)) : -1;
+    if (bySize >= 0) return bySize;
+    if (at) return idx; // nothing fits better: the number is trusted
+    return pickDefaultFile(files.map((f, index) => ({ index, name: f.path || f.name, length: f.length })));
   }
 
   function drop(entry: Entry, keepFiles = false) {
@@ -102,29 +179,60 @@ export function createTorrentEngine(opts: EngineOptions) {
 
   // Waits for the torrent's metadata. Fails, and forgets the torrent, when nobody answers in time
   // or when it is a private torrent.
-  function track(t: WtTorrent, known: string | null, owner: object): Entry {
-    const entry: Entry = { t, owners: new Set([owner]), ready: Promise.resolve() };
+  // `readd(attempt, source)` adds the same torrent again with another set of trackers (from its file list when `source` is given):
+  // it is used when nobody has answered for a while, or when the peers that did answer never send the file list.
+  function track(t: WtTorrent, known: string | null, owner: object, readd?: (attempt: number, source?: Uint8Array) => WtTorrent): Entry {
+    const entry: Entry = { t, owners: new Set([owner]), ready: Promise.resolve(), readd };
     entry.ready = new Promise<void>((resolve, reject) => {
+      let stalled: ReturnType<typeof setInterval> | null = null, over = false;
+      const done = () => { over = true; clearTimeout(timer); if (stalled) clearInterval(stalled); };
       const fail = (e: Error) => {
-        clearTimeout(timer);
+        done();
         // A duplicate is a torrent that is already here: its files are the ones in use
         drop(entry, /duplicate torrent/i.test(e.message));
         reject(e);
       };
       const timer = setTimeout(() => fail(new Error('Nobody sharing this torrent could be found. It may be dead, or the link is wrong.')), timeoutMs);
-      t.once('ready', () => {
-        clearTimeout(timer);
-        if (t.private) fail(new Error(PRIVATE)); else resolve();
-      });
-      t.once('error', (e: Error) => fail(e));
+      const watch = (cur: WtTorrent) => {
+        cur.once('ready', () => {
+          if (entry.t !== cur) return;
+          done();
+          if (cur.private) fail(new Error(PRIVATE)); else resolve();
+        });
+        cur.once('error', (e: Error) => { if (entry.t === cur) fail(e); });
+      };
+      watch(t);
+      if (readd) {
+        let attempt = 0, busy = false, since = Date.now();
+        stalled = setInterval(() => {
+          const cur = entry.t;
+          // 0 peers: try other trackers soon. Peers that give no file list (a link with thousands of dead ones): after a longer while
+          if (busy || cur.ready || (cur.numPeers > 0 && Date.now() - since < NO_METADATA_MS)) return;
+          if (attempt >= TRACKER_SETS.length - 1) { clearInterval(stalled!); return; }
+          busy = true;
+          attempt++;
+          let went = false;
+          const go = () => {
+            if (went) return;
+            went = true;
+            busy = false;
+            since = Date.now();
+            if (over) return;
+            try { const next = readd(attempt); entry.t = next; watch(next); } catch (e) { fail(e as Error); }
+          };
+          // Let go of the old one first (its files are closed when the callback runs), then add it again
+          setTimeout(go, 3000);
+          try { cur.destroy({ destroyStore: false }, go); } catch { go(); }
+        }, STALL_MS);
+      }
     });
     entry.ready.catch(() => {});
     if (known) torrents.set(known, entry);
-    else entry.ready.then(() => { torrents.set(t.infoHash, entry); }, () => {});
+    else entry.ready.then(() => { torrents.set(entry.t.infoHash, entry); }, () => {});
     return entry;
   }
 
-  const addOpts = () => ({ path: opts.root, deselect: true });
+  const addOpts = (attempt = 0) => ({ path: opts.root, deselect: true, announce: TRACKER_SETS[Math.min(attempt, TRACKER_SETS.length - 1)] });
 
   function describe(entry: Entry): TorrentInfo {
     const t = entry.t;
@@ -132,10 +240,52 @@ export function createTorrentEngine(opts: EngineOptions) {
     return {
       infoHash: t.infoHash,
       name: t.name,
-      magnet: buildMagnet(t.infoHash, t.name, t.announce),
+      // Only the torrent's own trackers are shared on, not the ones added here (the joiner adds those itself)
+      magnet: buildMagnet(t.infoHash, t.name, t.announce.filter(a => !ALL_FALLBACKS.has(a))),
       files,
       defaultIndex: pickDefaultFile(files)
     };
+  }
+
+  // A torrent whose file list is known but that sends nothing: the same torrent is added again (from its own file list, so no
+  // second wait for it) with other trackers, which brings other peers. Requests for the file wait until that is done.
+  function refresh(entry: Entry, fileIdx: number, attempt: number) {
+    const old = entry.t, source = old.torrentFile;
+    entry.swap = new Promise<void>(resolve => {
+      let went = false;
+      const finish = () => { entry.swap = undefined; resolve(); };
+      const go = () => {
+        if (went) return;
+        went = true;
+        try {
+          const next = entry.readd!(attempt, source);
+          entry.t = next;
+          next.once('ready', () => { next.files[entry.remap?.get(fileIdx) ?? fileIdx]?.select(); finish(); });
+          next.once('error', finish);
+          setTimeout(finish, 20000);
+        } catch { finish(); }
+      };
+      setTimeout(go, 3000);
+      try { old.destroy({ destroyStore: false }, go); } catch { go(); }
+    });
+  }
+
+  // Once the file is chosen: if not a single byte has arrived after 15 seconds (peers that are there but stuck, trackers that
+  // answered with dead addresses) the torrent is refreshed, up to twice with other trackers. Stops by itself at the first byte.
+  function watchStart(entry: Entry, hash: string, fileIdx: number) {
+    if (entry.watching || !entry.readd) return;
+    entry.watching = true;
+    let quiet = 0, tries = 0;
+    const iv = setInterval(() => {
+      const t = entry.t;
+      if (torrents.get(hash) !== entry || t.downloaded > 0 || tries >= TRACKER_SETS.length - 1) { clearInterval(iv); entry.watching = false; return; }
+      if (entry.swap) return;
+      quiet = t.downloadSpeed > 0 ? 0 : quiet + 1;
+      if (quiet < START_QUIET_CHECKS) return;
+      quiet = 0;
+      refresh(entry, fileIdx, ++tries);
+    }, START_CHECK_MS);
+    iv.unref?.();
   }
 
   // Looks a torrent up (magnet link, bare hash, or the bytes of a .torrent file) and waits for its file list
@@ -148,7 +298,7 @@ export function createTorrentEngine(opts: EngineOptions) {
       if (!magnet || !hash) throw new Error('That is not a magnet link, an info hash or a .torrent file');
       entry = torrents.get(hash);
       if (entry) entry.owners.add(owner);
-      else entry = track(client.add(magnet, addOpts()), hash, owner);
+      else entry = track(client.add(withCaches(magnet), addOpts()), hash, owner, (n, src) => client.add(src ?? withCaches(magnet), addOpts(n)));
     } else {
       entry = track(client.add(source, addOpts()), null, owner);
     }
@@ -182,7 +332,9 @@ export function createTorrentEngine(opts: EngineOptions) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return fail(405, { Allow: 'GET, HEAD' });
     const m = /^\/([0-9a-f]{36})\/([0-9a-f]{40})\/(\d{1,5})(?:\/hls\/(\d{1,2})\/(index\.m3u8|seg\d{1,6}\.ts))?$/.exec((req.url ?? '').split('?')[0]);
     if (!m || m[1] !== token) return fail(404);
-    const file = torrents.get(m[2])?.t.files[Number(m[3])];
+    const entry = torrents.get(m[2]);
+    if (entry?.swap) { void entry.swap.then(() => serve(req, res, token, port)); return; }
+    const file = fileOf(entry, Number(m[3]));
     if (!file) return fail(404);
     if (m[5]) {
       // The converted video: the transcoder reads the file from this same server, so it is fetched like any player does
@@ -213,17 +365,23 @@ export function createTorrentEngine(opts: EngineOptions) {
   }
 
   // The torrent is added when it is not here yet (a viewer joining), then the file is chosen and its address returned
-  async function play(meta: { magnet: string; fileIdx: number }, owner: object): Promise<TorrentPlay> {
+  async function play(meta: { magnet: string; fileIdx: number; fileName?: string; size?: number }, owner: object): Promise<TorrentPlay> {
     const client = await getClient();
     const parsed = parseMagnet(meta.magnet);
     if (!parsed) throw new Error('That is not a magnet link');
     let entry = torrents.get(parsed.infoHash);
     if (entry) entry.owners.add(owner);
-    else entry = track(client.add(buildMagnet(parsed.infoHash, parsed.name, parsed.trackers), addOpts()), parsed.infoHash, owner);
+    else {
+      const magnet = buildMagnet(parsed.infoHash, parsed.name, parsed.trackers);
+      entry = track(client.add(withCaches(magnet), addOpts()), parsed.infoHash, owner, (n, src) => client.add(src ?? withCaches(magnet), addOpts(n)));
+    }
     await entry.ready;
-    const file = entry.t.files[meta.fileIdx];
+    const real = resolveIdx(entry.t.files, meta.fileIdx, meta);
+    if (real !== meta.fileIdx) (entry.remap ??= new Map()).set(meta.fileIdx, real); else entry.remap?.delete(meta.fileIdx);
+    const file = entry.t.files[real];
     if (!file) throw new Error('That file is not in this torrent');
     file.select();
+    watchStart(entry, parsed.infoHash, meta.fileIdx);
     const srv = await ensureServer();
     return { url: `http://127.0.0.1:${srv.port}/${srv.token}/${parsed.infoHash}/${meta.fileIdx}`, fileName: file.name, length: file.length };
   }
@@ -231,7 +389,7 @@ export function createTorrentEngine(opts: EngineOptions) {
   // What is in the played file, and where its converted form is served from (null: nothing can convert it here)
   async function probe(infoHash: string, fileIdx: number): Promise<{ info: MediaInfo | null; hls: string | null }> {
     const tc = opts.transcoder;
-    if (!tc || !torrents.get(infoHash)?.t.files[fileIdx]) return { info: null, hls: null };
+    if (!tc || !fileOf(torrents.get(infoHash), fileIdx)) return { info: null, hls: null };
     const srv = await ensureServer();
     const base = `http://127.0.0.1:${srv.port}/${srv.token}/${infoHash}/${fileIdx}`;
     const info = await tc.probe(`${infoHash}:${fileIdx}`, base);
@@ -241,8 +399,9 @@ export function createTorrentEngine(opts: EngineOptions) {
   function stats(infoHash: string, fileIdx: number): TorrentStats {
     const entry = torrents.get(infoHash);
     if (!entry) return { ready: false, peers: 0, down: 0, up: 0, progress: 0, downloaded: 0 };
-    const t = entry.t, file = t.files[fileIdx];
-    return { ready: t.ready, peers: t.numPeers, down: t.downloadSpeed, up: t.uploadSpeed, progress: file?.progress ?? 0, downloaded: t.downloaded };
+    if (entry.swap && entry.snap) return entry.snap;
+    const t = entry.t, file = fileOf(entry, fileIdx);
+    return (entry.snap = { ready: t.ready, peers: t.numPeers, down: t.downloadSpeed, up: t.uploadSpeed, progress: file?.progress ?? 0, downloaded: t.downloaded });
   }
 
   async function readRange(f: WtFile, start: number, end: number, ms: number): Promise<Uint8Array> {
@@ -261,7 +420,7 @@ export function createTorrentEngine(opts: EngineOptions) {
   // What the subtitle search needs to know about the played file; the hash is null when the ends
   // of the file did not arrive in time
   async function fileFacts(infoHash: string, fileIdx: number, ms = 20000): Promise<{ name: string; size: number; hash: string | null } | null> {
-    const file = torrents.get(infoHash)?.t.files[fileIdx];
+    const file = fileOf(torrents.get(infoHash), fileIdx);
     if (!file) return null;
     let hash: string | null = null;
     if (file.length >= HASH_CHUNK) {
@@ -288,7 +447,7 @@ export function createTorrentEngine(opts: EngineOptions) {
     let p = heads.get(key);
     if (!p) {
       p = (async () => {
-        const file = torrents.get(infoHash)?.t.files[fileIdx];
+        const file = fileOf(torrents.get(infoHash), fileIdx);
         if (!file || !MATROSKA.test(file.name) || file.length < 1024) return null;
         const head = parseHead(await readRange(file, 0, Math.min(file.length, HEAD_BYTES) - 1, ms));
         if (!head) return null;
@@ -321,7 +480,7 @@ export function createTorrentEngine(opts: EngineOptions) {
     void (async () => {
       try {
         const info = await embeddedInfo(infoHash, fileIdx, 20000);
-        const file = torrents.get(infoHash)?.t.files[fileIdx];
+        const file = fileOf(torrents.get(infoHash), fileIdx);
         if (!info || !file || !info.tracks.length) return onBatch({ cues: [], progress: 1, done: true });
         const { head, codecs } = info;
         const first = head.firstCluster ?? head.segStart;

@@ -4,8 +4,8 @@ import { sessions } from './session.svelte.ts';
 
 export interface ServerCount { users: number; maxUsers: number; ping: number }
 
-// How many people are on each saved server, before connecting: a UDP ping (through the proxy in
-// the browser) at start, for servers added later, and once a minute while the window is visible
+// How many people are on each saved server, before connecting: a UDP ping at start, for servers
+// added later, and once a minute while the window is visible (servers you are connected to count live)
 class ServerStatus {
   counts = $state<Record<string, ServerCount | null>>({});
   private started = false;
@@ -28,6 +28,7 @@ class ServerStatus {
 
   private refresh(list: { id: string; host: string; port: number }[]): void {
     for (const s of list) {
+      if (sessions.byServer(s.id)?.status === 'connected') continue;
       native!.pingServer(s.host, s.port).catch(() => null).then(r => {
         this.counts[s.id] = r ? { users: r.users, maxUsers: r.maxUsers, ping: Math.round(r.ping) } : null;
       });

@@ -2,6 +2,33 @@
  
 All notable changes to Libertad.
 
+## 0.4.4 - 2026-11-14
+
+### Fixed:
+
+- Some torrent link not working, exceeding length, or reporting broken< Should work better now.
+- Peers being 0 for you, while others can watch clearly, added better code and fallbacks, refreshers.
+- Some UI stuff.
+
+### Changed:
+
+- Some UI arrangements.
+- Torrent together backend.
+- Better Torrent management, (For HEVC files, Better to let the Convertion finish first before starting).
+
+### Added:
+
+- More Noise suppression engines in Voice.
+- More Voice activity options in voice.
+- Admin Roles, can be given by SuperUser to other users, allows you to modify channels or move, mute/deafen people, only Registered user can be Admins.
+- Choosing a Channel when joining a Server, and setting a default channel.
+- Deafen for me button, making a user not able to hear you.
+- Minor details.
+
+### Removed:
+
+- Removed web/Server Editions entirely.
+
 ## 0.4.3 - 2026-11-14
 
 ### Fixed:

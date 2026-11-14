@@ -10,8 +10,11 @@
   import CertViewer from './ui/CertViewer.svelte';
   import PromptDialog from './ui/PromptDialog.svelte';
   import UpdateDialog from './ui/UpdateDialog.svelte';
+  import RoomPicker from './ui/RoomPicker.svelte';
   import TitleBar from './ui/TitleBar.svelte';
   import { titlebar } from './lib/titlebar.svelte.ts';
+  import { roles } from './lib/roles.svelte.ts';
+  import { deafenFor } from './lib/deafen-for.svelte.ts';
   import ContextMenu from './ui/ContextMenu.svelte';
   import ColorPicker from './ui/ColorPicker.svelte';
   import ImageEditor from './ui/ImageEditor.svelte';
@@ -53,6 +56,9 @@
   let navOpen = $state(false);
   let editing = $state<{ server: SavedServer | null } | null>(null);
 
+  // Not connected to the server shown: the start screen with the saved servers takes the window
+  const home = $derived(session.status === 'idle');
+
   // The chat dragged to the right: it takes the member list's place and the user cards take the middle
   const chatRight = $derived(chatDock.side === 'right' && panelInline && session.status === 'connected');
   $effect(() => { chatDock.enabled = panelInline && session.status === 'connected' && !home; });
@@ -63,8 +69,6 @@
   // Panels that turn see-through because a picture shows behind them (their own, or the whole background
   // unless they have a color of their own)
   const seeThrough = $derived(home ? '' : PANELS.filter(k => present[k] && (customBg.has(k) || (customBg.has('whole') && !colored(k)))).join(' '));
-  // Not connected to the server shown: the start screen with the saved servers takes the window
-  const home = $derived(session.status === 'idle');
 
   // Color scheme on the root element; dark is the stylesheet default
   $effect(() => {
@@ -79,6 +83,15 @@
 
   // Room for the window's own title bar at the top (0 without it); the layout, the backgrounds and the dialogs read it
   $effect(() => { document.documentElement.style.setProperty('--titlebar-h', `${titlebar.height}px`); });
+
+  // The Admin role: the SuperUser reads who is in the group once per server; everyone else checks the note kept on
+  // this computer against what the server says they may do
+  const superOf = $derived(session.status === 'connected' && roles.isSuper(session) ? (session.server?.id ?? null) : null);
+  $effect(() => { if (superOf) void roles.refresh(session); });
+  $effect(() => { void session.tick; if (session.status === 'connected') roles.verify(session); });
+
+  // "Deafen for me": who hears your voice follows who is in your channel (and leaves with the connection)
+  $effect(() => { deafenFor.sync(); });
 
   // Rounded edges: a flag and a 0 to 1 factor on the root element, which themes.css turns into radii
   $effect(() => {
@@ -223,6 +236,7 @@
   {#key ui.channelDialog}<ChannelDialog {...ui.channelDialog} onclose={() => (ui.channelDialog = null)} />{/key}
 {/if}
 {#if share.dialog}<ShareDialog onclose={() => (share.dialog = null)} />{/if}
+{#if ui.roomPicker}<RoomPicker serverId={ui.roomPicker.serverId} onclose={() => (ui.roomPicker = null)} />{/if}
 {#if ui.prompt}<PromptDialog {...ui.prompt} onclose={() => { const p = ui.prompt; ui.prompt = null; p?.oncancel?.(); }} />{/if}
 <UpdateDialog />
 <ProfileCard />

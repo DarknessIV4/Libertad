@@ -113,3 +113,21 @@ test('a stream becomes a checked torrent to share', () => {
   assert.equal(streamToMeta({ infoHash: 'nope' }), null);
   assert.equal(streamToMeta({ infoHash: H })?.fileIdx, 0, 'a single-file torrent has no file number');
 });
+
+test('a long non-Latin name never makes a link longer than the limit, and it still parses', () => {
+  const trackers = Array.from({ length: 8 }, (_, i) => `udp://tracker${i}.example.org:6969/announce`);
+  const m = buildMagnet(H, 'فيلم'.repeat(50), trackers);
+  assert.ok(m.length <= 2048);
+  assert.equal(parseMagnet(m)?.infoHash, H);
+});
+
+test('a long link or long names from an older version are shortened, not refused', () => {
+  const trackers = Array.from({ length: 8 }, (_, i) => `udp://t${i}.example.org:6969/announce?${'k'.repeat(250)}`);
+  const long = `magnet:?xt=urn:btih:${H}&dn=${encodeURIComponent('فيلم'.repeat(50))}` + trackers.map(t => `&tr=${encodeURIComponent(t)}`).join('');
+  assert.ok(long.length > 2048);
+  const m = validTorrentMeta({ infoHash: H, magnet: long, fileIdx: 0, name: 'n'.repeat(500), fileName: 'f'.repeat(600), size: 5 });
+  assert.ok(m);
+  assert.ok(m.magnet.length <= 2048);
+  assert.equal(m.name.length, 300);
+  assert.equal(m.fileName.length, 400);
+});

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { voice, type TransmitMode } from '../lib/audio/voice.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
 
@@ -8,6 +9,9 @@
   let pos = $state({ x: 0, y: 0 });
 
   voice.refreshDevices();
+  // The level meter needs the microphone even when it is muted
+  voice.holdMeter(true);
+  onDestroy(() => voice.holdMeter(false));
 
   // Open above the button it came from, kept on screen
   $effect(() => {
@@ -39,7 +43,7 @@
     <label for="qa-gain">Input volume: {Math.round(s.inputGain * 100)}%</label>
     <input id="qa-gain" type="range" min="0" max="3" step="0.05" value={s.inputGain}
       oninput={e => voice.update({ inputGain: Number(e.currentTarget.value) })} />
-    <div class="meter" aria-hidden="true"><div class="fill" class:open={s.mode !== 'vad' || voice.level > s.vadThreshold} style:width="{pct(voice.level)}%"></div></div>
+    <div class="meter" aria-hidden="true"><div class="level-bar" class:open={s.mode !== 'vad' || voice.speech} style:width="{pct(voice.level)}%"></div></div>
     <div class="modes" role="radiogroup" aria-label="Transmit mode">
       {#each modes as m (m.id)}
         <button role="radio" aria-checked={s.mode === m.id} class:active={s.mode === m.id} onclick={() => voice.update({ mode: m.id })}>{m.label}</button>
@@ -66,8 +70,8 @@
   select { font-size: 13px; padding: 6px 8px; }
   input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
   .meter { height: 6px; background: var(--bg-3); margin-top: 4px; overflow: hidden; }
-  .fill { height: 100%; background: var(--text-faint); transition: width 50ms linear; }
-  .fill.open { background: var(--speaking); }
+  .level-bar { height: 100%; position: static; z-index: auto; background: var(--text-faint); transition: width 50ms linear; }
+  .level-bar.open { background: var(--speaking); }
   .modes { display: flex; gap: 2px; margin-top: 10px; }
   .modes button { flex: 1; padding: 5px 4px; font-size: 12px; background: var(--bg-3); color: var(--text-dim); }
   .modes button.active { background: var(--accent); color: var(--accent-text); }

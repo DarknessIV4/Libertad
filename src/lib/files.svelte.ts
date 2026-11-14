@@ -15,7 +15,7 @@ import { FileP2P } from '../core/file-p2p.ts';
 import { rtcConfig } from './ice.ts';
 import type { Session } from './session.svelte.ts';
 import { getBlob, putBlob, getData, putData, deleteBlob } from './blobstore.ts';
-import { desktop, isWeb, type FileBegin } from './native.ts';
+import { desktop, type FileBegin } from './native.ts';
 import { formatBytes } from './html.ts';
 import { setRateLimits } from '../core/client.ts';
 import { store } from './settings.svelte.ts';

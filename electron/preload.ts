@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('libertadNative', {
   torrent: {
     inspect: (input: string) => ipcRenderer.invoke('torrent:inspect', String(input)),
     openFile: () => ipcRenderer.invoke('torrent:openFile'),
-    play: (meta: { magnet: string; fileIdx: number }) => ipcRenderer.invoke('torrent:play', { magnet: String(meta.magnet), fileIdx: Number(meta.fileIdx) }),
+    play: (meta: { magnet: string; fileIdx: number; fileName?: string; size?: number }) => ipcRenderer.invoke('torrent:play', { magnet: String(meta.magnet), fileIdx: Number(meta.fileIdx), fileName: meta.fileName, size: meta.size }),
     probe: (infoHash: string, fileIdx: number) => ipcRenderer.invoke('torrent:probe', String(infoHash), Number(fileIdx)),
     stats: (infoHash: string, fileIdx: number) => ipcRenderer.invoke('torrent:stats', String(infoHash), Number(fileIdx)),
     stop: (infoHash: string) => ipcRenderer.invoke('torrent:stop', String(infoHash)),

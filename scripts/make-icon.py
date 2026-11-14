@@ -92,9 +92,9 @@ def svg(path):
 
 import os
 root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-for d, size in (('build', 1024), ('public', 256), ('dist', 256), ('dist-web', 256)):
+for d, size in (('build', 1024), ('public', 256), ('dist', 256)):
     if os.path.isdir(os.path.join(root, d)):
         png(os.path.join(root, d, 'icon.png'), size // N)
-for p in ('build/icon.svg', 'public/favicon.svg', 'dist/favicon.svg', 'dist-web/favicon.svg'):
+for p in ('build/icon.svg', 'public/favicon.svg', 'dist/favicon.svg'):
     if os.path.isdir(os.path.dirname(os.path.join(root, p))):
         svg(os.path.join(root, p))

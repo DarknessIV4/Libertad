@@ -6,6 +6,7 @@
   import { menu, type MenuItem } from '../lib/menu.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
   import { channelMenu, userMenu, openProfile } from '../lib/actions.ts';
+  import { defaultRooms } from '../lib/default-room.svelte.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { share } from '../lib/share.svelte.ts';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
@@ -111,6 +112,7 @@
       { separator: true, label: '' },
       { label: 'Change icon...', action: () => { iconFor = s.id; iconPicker.click(); } },
       ...(s.icon ? [{ label: 'Remove icon', action: () => store.setServerIcon(s.id, undefined) }] : []),
+      { label: 'Clear Default room', disabled: !defaultRooms.has(s.id), action: () => defaultRooms.clear(s.id) },
       { label: 'Edit...', action: () => onedit(s) }
     ];
     menu.show(e, items);

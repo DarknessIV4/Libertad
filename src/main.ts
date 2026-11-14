@@ -13,12 +13,8 @@ import { startTray } from './lib/tray.svelte.ts';
 import { startTextMenu } from './lib/text-menu.ts';
 import { startShortcuts } from './lib/shortcuts.svelte.ts';
 import { startHints } from './lib/hints.ts';
-import { isWeb } from './lib/native.ts';
-import { proxyInfo } from './lib/web.svelte.ts';
 import { youtubeAccount } from './lib/youtube-account.svelte.ts';
 import { serverStatus } from './lib/server-status.svelte.ts';
-
-if (isWeb) proxyInfo.load();
 
 mount(App, { target: document.getElementById('app')! });
 startTray();

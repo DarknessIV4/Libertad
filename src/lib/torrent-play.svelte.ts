@@ -26,6 +26,9 @@ interface AudioTrackListLike {
 
 // The <video> gave up on the file itself
 class MediaFailure extends Error {}
+// The video's start never arrived: the peers of this link send nothing
+class SlowLink extends Error {}
+const START_TIMEOUT_MS = 150000;
 
 export class TorrentPlay {
   status = $state<TorrentStatus>('idle');
@@ -96,7 +99,7 @@ export class TorrentPlay {
     };
 
     try {
-      const play = await api.play({ magnet: meta.magnet, fileIdx: meta.fileIdx });
+      const play = await api.play({ magnet: meta.magnet, fileIdx: meta.fileIdx, fileName: meta.fileName, size: meta.size });
       if (run !== this.run) return;
       // What is in the file decides whether the page can play it itself or it has to be converted first (HEVC,
       // DTS, an AVI ...). Without ffmpeg there is no probe, and the file is simply tried.
@@ -113,6 +116,7 @@ export class TorrentPlay {
           await this.loadDirect(video, play.url);
         } catch (e) {
           // The page's guess was wrong (or there was no probe): convert it after all
+          if (e instanceof SlowLink) throw e;
           if (!(e instanceof MediaFailure) || !base || !info) throw new Error(this.mediaError(video, !!base));
           this.converting = 'this format';
           await this.loadConverted(video, base, info, pickAudio(info.audio, preferredLangs(navigator.languages, '')), 0, run);
@@ -130,12 +134,36 @@ export class TorrentPlay {
     }
   }
 
+  // Loads the video from its local address. A dropped connection (the torrent was refreshed under it) is tried again a few
+  // times. It only gives up when no byte of the torrent has arrived for START_TIMEOUT_MS, so a slow but working link keeps going.
   private loadDirect(video: HTMLVideoElement, url: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const loaded = () => { video.removeEventListener('error', failed); resolve(); };
-      const failed = () => { video.removeEventListener('loadedmetadata', loaded); reject(new MediaFailure()); };
-      video.addEventListener('loadedmetadata', loaded, { once: true });
-      video.addEventListener('error', failed, { once: true });
+      let retries = 0, seen = this.stats?.downloaded ?? 0, timer: ReturnType<typeof setTimeout>, retry: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        clearTimeout(timer); clearTimeout(retry);
+        video.removeEventListener('loadedmetadata', loaded);
+        video.removeEventListener('error', failed);
+      };
+      const check = () => {
+        const now = this.stats?.downloaded ?? 0;
+        if (now > seen) { seen = now; timer = setTimeout(check, START_TIMEOUT_MS); return; }
+        cleanup();
+        reject(new SlowLink(`This link sent no data for ${START_TIMEOUT_MS / 1000} seconds (its peers are stuck or gone). Try another link or release.`));
+      };
+      const loaded = () => { cleanup(); resolve(); };
+      const failed = () => {
+        // 2: the connection to the local address broke
+        if (video.error?.code === 2 && retries < 3) {
+          retries++;
+          retry = setTimeout(() => { video.src = url; video.load(); }, 1500);
+          return;
+        }
+        cleanup();
+        reject(new MediaFailure());
+      };
+      video.addEventListener('loadedmetadata', loaded);
+      video.addEventListener('error', failed);
+      timer = setTimeout(check, START_TIMEOUT_MS);
       video.src = url;
       video.load();
     });

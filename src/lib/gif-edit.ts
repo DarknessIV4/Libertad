@@ -22,12 +22,6 @@ export const DEFAULT_GIF: GifOptions = {
   maxBytes: 5 * 1024 * 1024
 };
 
-// A profile picture has to fit what the server takes (about 128 KB), so it is made smaller first, and only then shorter
-export const avatarGif = (maxBytes: number): GifOptions => ({
-  attempts: [{ side: 256, frames: 90 }, { side: 192, frames: 90 }, { side: 160, frames: 90 }, { side: 128, frames: 90 }, { side: 96, frames: 90 }, { side: 96, frames: 60 }, { side: 64, frames: 60 }, { side: 64, frames: 30 }],
-  maxBytes
-});
-
 export interface RawFrame { data: Uint8ClampedArray; delay: number }
 
 // How far (sum of the red, green and blue differences) a pixel may drift from what the GIF already shows

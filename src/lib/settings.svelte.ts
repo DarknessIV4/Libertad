@@ -60,7 +60,7 @@ export interface Settings {
   shareCrossRoom: boolean; // what you host (a screen, a camera, a Watch Together) can be watched from other rooms; off: only from yours
   shareDynamicFps: boolean; // a screen share that shows nothing new is sent at 1 frame per second until something moves
   shareVolume: number;    // volume of streams we watch, 0 to 1
-  relayServer: string;    // a Libertad web proxy whose STUN and relay to use for screen sharing
+  relayServer: string;    // a Libertad relay server whose STUN and relay to use for screen sharing
   stunServer: string;     // helps screen sharing connect through routers; empty contacts nobody
   shareNoticeSeen: boolean; // the note that screen sharing reveals IP addresses was confirmed
   hints: boolean;         // tooltips (title attributes) when resting the pointer on buttons

@@ -18,7 +18,7 @@ export async function quickMessage(server: SavedServer, html: string): Promise<v
     return;
   }
   if (open && open.status !== 'idle') throw new Error('Still connecting to this server. Try again in a moment.');
-  if (!native) throw new Error('Connecting needs the desktop app or the web build served by a Libertad proxy.');
+  if (!native) throw new Error('Connecting needs the desktop app.');
 
   const transport = (await openTransport(server.host, server.port, server.identityId))!;
   let client: MumbleClient | null = null;

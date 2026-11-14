@@ -153,22 +153,6 @@ export class WatchAssembler extends SignalAssembler<WatchType> {
   }
 }
 
-// Encode a file chunk as raw binary: [type:1][offset:4][length:2][data...]
-export function encodeFileChunk(offset: number, data: Uint8Array): Uint8Array {
-  const packet = new Uint8Array(1 + FILE_CHUNK_HEADER + data.length);
-  packet[0] = WATCH.fileChunk;
-  // offset (4 bytes, big-endian)
-  packet[1] = (offset >>> 24) & 0xff;
-  packet[2] = (offset >>> 16) & 0xff;
-  packet[3] = (offset >>> 8) & 0xff;
-  packet[4] = offset & 0xff;
-  // length (2 bytes, big-endian)
-  packet[5] = (data.length >>> 8) & 0xff;
-  packet[6] = data.length & 0xff;
-  packet.set(data, 7);
-  return packet;
-}
-
 // Decode a raw binary file chunk
 export function decodeFileChunk(packet: Uint8Array): { offset: number; data: Uint8Array } | null {
   if (packet.length < 1 + FILE_CHUNK_HEADER) return null;

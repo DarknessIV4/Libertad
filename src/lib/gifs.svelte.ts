@@ -47,5 +47,5 @@ export async function searchGifs(q: string, page = 0): Promise<{ gifs: Gif[]; mo
 export async function gifFile(g: Gif): Promise<File> {
   if (!desktop) throw new Error('This needs the desktop app');
   const bytes = await desktop.gifFetch(g.url);
-  return new File([bytes], `${g.id}.gif`, { type: 'image/gif' });
+  return new File([bytes as BlobPart], `${g.id}.gif`, { type: 'image/gif' });
 }

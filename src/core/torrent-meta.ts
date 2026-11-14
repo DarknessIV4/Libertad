@@ -41,7 +41,15 @@ const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const TRACKER_PROTOCOLS = new Set(['udp:', 'http:', 'https:', 'ws:', 'wss:']);
 
 export const MAX_TRACKERS = 8;
+
+// The torrent engine runs in Node, which cannot talk to the WebRTC trackers (ws:, wss:): they come last,
+// so the few trackers that are shared are the ones a download can actually use
+const trackerRank = (u: string): number => /^udp:/i.test(u) ? 0 : /^https?:/i.test(u) ? 1 : 2;
+export const bestTrackers = (list: readonly string[], max = MAX_TRACKERS): string[] =>
+  list.map((u, i) => ({ u, i })).sort((a, b) => trackerRank(a.u) - trackerRank(b.u) || a.i - b.i).slice(0, max).map(x => x.u);
 export const MAX_MAGNET = 2048;
+// What is accepted from another person: older versions of the app sent links and names of any length up to their own wider limits
+const MAX_MAGNET_IN = 32768;
 
 // The info hash as 40 lowercase hex characters, from hex or from the base32 form magnet links also use
 export function btihToHex(btih: string): string | null {
@@ -76,7 +84,7 @@ export function parseMagnet(input: string): ParsedMagnet | null {
   if (!infoHash) return null;
   const trackers: string[] = [];
   for (const raw of url.searchParams.getAll('tr')) {
-    if (trackers.length >= MAX_TRACKERS) break;
+    if (trackers.length >= 64) break;
     // Torrentio writes its trackers as "tracker:udp://host:port/announce"
     const tr = raw.replace(/^tracker:/i, '');
     if (tr.length > 300) continue;
@@ -84,14 +92,27 @@ export function parseMagnet(input: string): ParsedMagnet | null {
       if (TRACKER_PROTOCOLS.has(new URL(tr).protocol) && !trackers.includes(tr)) trackers.push(tr);
     } catch { /* not an address */ }
   }
-  const name = (url.searchParams.get('dn') ?? '').slice(0, 200);
-  return { infoHash, name, trackers };
+  const name = clip(url.searchParams.get('dn') ?? '', 200);
+  return { infoHash, name, trackers: bestTrackers(trackers) };
 }
 
+// At most `max` characters, never cutting a character in two (a lone half would make encodeURIComponent throw)
+const clip = (s: string, max: number): string => { const c = Array.from(s); return c.length <= max ? s : c.slice(0, max).join(''); };
+
+// Always at most MAX_MAGNET long: a long name in a script like Arabic or Chinese is 9 bytes per character once encoded, and a link
+// longer than that is thrown away by every receiver as invalid (the party then shows the link as broken). The name is cut first, then trackers.
 export function buildMagnet(infoHash: string, name: string, trackers: readonly string[]): string {
-  let m = `magnet:?xt=urn:btih:${infoHash}`;
-  if (name) m += `&dn=${encodeURIComponent(name.slice(0, 200))}`;
-  for (const t of trackers.slice(0, MAX_TRACKERS)) m += `&tr=${encodeURIComponent(t)}`;
+  const best = bestTrackers(trackers);
+  let n = clip(name, 200), keep = best.length;
+  const make = () => {
+    let m = `magnet:?xt=urn:btih:${infoHash}`;
+    if (n) m += `&dn=${encodeURIComponent(n)}`;
+    for (const t of best.slice(0, keep)) m += `&tr=${encodeURIComponent(t)}`;
+    return m;
+  };
+  let m = make();
+  while (m.length > MAX_MAGNET && n) { n = clip(n, Math.floor(Array.from(n).length / 2)); m = make(); }
+  while (m.length > MAX_MAGNET && keep > 0) { keep--; m = make(); }
   return m;
 }
 
@@ -111,10 +132,13 @@ const str = (v: unknown, max: number): string | null => typeof v === 'string' &&
 export function validTorrentMeta(x: unknown): TorrentMeta | null {
   if (!x || typeof x !== 'object') return null;
   const o = x as Record<string, unknown>;
-  const magnet = str(o.magnet, MAX_MAGNET);
-  const name = str(o.name, 300);
-  const fileName = str(o.fileName, 400);
-  if (magnet === null || name === null || fileName === null) return null;
+  // Links from older versions of the app can be longer than the limit they are rebuilt to: they are accepted and shortened
+  const magnet = str(o.magnet, MAX_MAGNET_IN);
+  // A name that is too long is cut, not refused: the party should still play
+  if (typeof o.name !== 'string' || typeof o.fileName !== 'string' || o.name.length > MAX_MAGNET_IN || o.fileName.length > MAX_MAGNET_IN) return null;
+  const name = clip(o.name, 300);
+  const fileName = clip(o.fileName, 400);
+  if (magnet === null) return null;
   const parsed = parseMagnet(magnet);
   // The hash and the magnet link have to agree: the link is what gets downloaded
   if (!parsed || typeof o.infoHash !== 'string' || o.infoHash.toLowerCase() !== parsed.infoHash) return null;

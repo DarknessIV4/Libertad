@@ -3,6 +3,7 @@
   import { store, type SavedServer } from '../lib/settings.svelte.ts';
   import { sessions } from '../lib/session.svelte.ts';
   import { menu } from '../lib/menu.svelte.ts';
+  import { defaultRooms } from '../lib/default-room.svelte.ts';
   import { desktop } from '../lib/native.ts';
   import { makeServerIcon } from '../lib/images.ts';
 
@@ -62,6 +63,7 @@
       { separator: true, label: '' },
       { label: 'Change icon...', action: () => { iconFor = s.id; iconPicker.click(); } },
       ...(s.icon ? [{ label: 'Remove icon', action: () => store.setServerIcon(s.id, undefined) }] : []),
+      { label: 'Clear Default room', disabled: !defaultRooms.has(s.id), action: () => defaultRooms.clear(s.id) },
       { label: 'Edit...', action: () => onedit(s) }
     ]);
   }

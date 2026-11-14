@@ -1,5 +1,7 @@
 import { WasmEncoder, WasmDecoder, type Opus } from './opus-wasm.ts';
 import { loadOpus } from './opus-load.ts';
+import { createNoise, type NoiseEngine, type NoiseNode } from './noise.ts';
+import type { Probe } from './detect.ts';
 import captureUrl from './capture.worklet.ts?worker&url';
 import playbackUrl from './playback.worklet.ts?worker&url';
 import { encodeVoice, decodeVoice } from '../../core/voice-packet.ts';
@@ -7,6 +9,9 @@ import type { MumbleClient } from '../../core/client.ts';
 import { load, save } from '../storage.ts';
 
 export type TransmitMode = 'vad' | 'ptt' | 'continuous';
+// How voice activity is told from noise: loudness only (standard), loudness with a smoothed gate,
+// RNNoise's speech probability, or Silero VAD
+export type Detector = 'standard' | 'gate' | 'rnnoise' | 'silero';
 
 export interface VoiceSettings {
   inputDevice: string;
@@ -15,10 +20,16 @@ export interface VoiceSettings {
   pttKey: string;            // KeyboardEvent.code
   vadThreshold: number;      // dBFS; louder frames open the voice activity gate
   vadHoldMs: number;         // keep sending this long after the level drops
+  detector: Detector;
+  speechThreshold: number;   // %, how sure RNNoise or Silero must be that it is speech
   inputGain: number;         // 0..3
   outputVolume: number;      // 0..2
   echoCancellation: boolean;
-  noiseSuppression: boolean;
+  noiseSuppression: boolean; // on/off for the engine below; stays as set
+  noiseEngine: NoiseEngine;  // RNNoise (medium), Speex (lightest), DeepFilterNet3 (heaviest)
+  rnnoiseStrength: number;   // 0..100 %
+  speexLevel: number;        // dB, -60..-5
+  dfLevel: number;           // dB, 6..100
   autoGainControl: boolean;
   bitrate: number;           // Opus bits per second
   frameMs: 10 | 20 | 40 | 60;
@@ -42,10 +53,16 @@ const defaults: VoiceSettings = {
   pttKey: 'Backquote',
   vadThreshold: -45,
   vadHoldMs: 350,
+  detector: 'standard',
+  speechThreshold: 50,
   inputGain: 1,
   outputVolume: 1,
   echoCancellation: true,
   noiseSuppression: true,
+  noiseEngine: 'rnnoise',
+  rnnoiseStrength: 100,
+  speexLevel: -25,
+  dfLevel: 40,
   autoGainControl: true,
   bitrate: 40000,
   frameMs: 20,
@@ -58,6 +75,11 @@ const defaults: VoiceSettings = {
 
 const SAMPLE_RATE = 48000;
 const FRAME = 480; // 10 ms
+// The noise gate closes 6 dB below where it opens, fades in within 1 ms and out over 100 ms
+const GATE_HYSTERESIS = 6;
+const GATE_ATTACK = 1 / 48;
+const GATE_RELEASE = 1 / 4800;
+const GATE_RELEASE_MS = 100;
 // Rough per-packet cost of IP, TCP/TLS or UDP, and Mumble headers, for the bandwidth limit
 const PACKET_OVERHEAD_BYTES = 60;
 
@@ -74,7 +96,9 @@ class VoiceEngine {
   error = $state('');
   notice = $state('');         // something was repaired or worked around, not an error
   level = $state(-100);        // current input level, dBFS
+  diag = $state('');           // why the meter might be flat: microphone, audio clock and frame state
   transmitting = $state(false);
+  speech = $state(false);      // the voice detector hears speech right now
   pttDown = $state(false);
   testing = $state(false);     // hear yourself
   talking = $state<Record<number, boolean>>({});
@@ -87,12 +111,22 @@ class VoiceEngine {
   private inputGainNode: GainNode | null = null;
   private outputGainNode: GainNode | null = null;
   private capture: AudioWorkletNode | null = null;
+  private noise: NoiseNode | null = null;   // microphone → noise engine → input gain
+  private noiseSeq = 0;
+  private probe: Probe | null = null;       // RNNoise or Silero, when chosen as the voice detector
+  private probeKind: Detector | null = null;
+  private probeSeq = 0;
+  private gateOpen = false;
+  private gateGain = 0;
+  private noisePending = false;               // the engine is loading; the microphone waits for it
   private playback: AudioWorkletNode | null = null;
   // The browser's Opus codec (WebCodecs), or our own in WebAssembly where the browser has none
   private opus: Opus | null = null;
   private encoder: AudioEncoder | WasmEncoder | null = null;
   private decoders = new Map<number, { decoder: AudioDecoder | WasmDecoder; lastFrame: number; timer: ReturnType<typeof setTimeout> | null }>();
   private client: MumbleClient | null = null;
+  // Where your voice goes: 0 normal talking, 1 the whisper list of "Deafen for me" (see deafen-for.svelte.ts)
+  target = 0;
   private sessionGains = new Map<number, number>();
   private unsubscribe: (() => void)[] = [];
   // Push-to-talk press/release, for the notification sounds
@@ -119,6 +153,11 @@ class VoiceEngine {
   private stopping = false;      // flushing the last packet of a transmission
   private held: Uint8Array[] = [];
   private levelRaw = -100;
+  private analyser: AnalyserNode | null = null;
+  private analyserBuf: Float32Array<ArrayBuffer> | null = null;
+  private frameCount = 0;
+  private diagFrames = 0;
+  private diagAt = 0;
   private levelTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -142,7 +181,9 @@ class VoiceEngine {
     if ('jitterMs' in patch) this.playback?.port.postMessage({ jitterMs: this.settings.jitterMs });
     if ('outputDevice' in patch) this.applyOutputDevice();
     if ('bitrate' in patch || 'frameMs' in patch) this.configureEncoder();
-    if (['inputDevice', 'echoCancellation', 'noiseSuppression', 'autoGainControl'].some(k => k in patch)) { this.degraded = false; this.notice = ''; this.recoveries = 0; this.syncInput(true); }
+    if ('detector' in patch || 'mode' in patch) this.syncProbe();
+    if (['noiseSuppression', 'noiseEngine', 'rnnoiseStrength', 'speexLevel', 'dfLevel'].some(k => k in patch)) this.applyNoise();
+    if (['inputDevice', 'echoCancellation', 'autoGainControl'].some(k => k in patch)) { this.degraded = false; this.notice = ''; this.recoveries = 0; this.syncInput(true); }
     else if ('releaseMicMuted' in patch) this.syncInput();
   }
 
@@ -159,10 +200,25 @@ class VoiceEngine {
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
+  // start() and stop() run one after the other, in the order they were called. Both take a while
+  // (stop closes the audio context), and a start that came in meanwhile used to see the old context,
+  // do nothing, and leave the engine stopped for good: no microphone, no level meter.
+  private lifecycle: Promise<unknown> = Promise.resolve();
+  private queue(task: () => Promise<void>): Promise<void> {
+    const run = this.lifecycle.then(task, task);
+    this.lifecycle = run.catch(() => {});
+    return run;
+  }
+
   // Starts the audio graph; safe to call repeatedly
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    return this.queue(() => this.doStart());
+  }
+
+  private async doStart(): Promise<void> {
     if (this.ctx) return;
     this.error = '';
+    let made: AudioContext | null = null;
     try {
       const builtIn = typeof AudioEncoder !== 'undefined' && typeof AudioDecoder !== 'undefined' &&
         (await AudioEncoder.isConfigSupported(this.encoderConfig()).catch(() => ({ supported: false }))).supported;
@@ -177,8 +233,7 @@ class VoiceEngine {
           throw new Error(`This browser has no Opus audio codec, and the built-in one could not be loaded (${(e as Error).message})`);
         }
       }
-      const ctx = new AudioContext({ sampleRate: SAMPLE_RATE, latencyHint: 'interactive' });
-      this.ctx = ctx;
+      const ctx = made = new AudioContext({ sampleRate: SAMPLE_RATE, latencyHint: 'interactive' });
       // The browser suspends the context when the output device goes away or changes; everything
       // (the microphone frames too) runs on its clock, so it has to be woken again
       ctx.onstatechange = () => {
@@ -199,21 +254,33 @@ class VoiceEngine {
       this.capture.port.onmessage = e => this.onFrame(e.data.frame, e.data.rms);
       this.inputGainNode.connect(this.capture);
 
+      // Only now is the engine there for the rest of the class: a microphone request left over from
+      // an earlier run must not find a half-built graph
+      this.ctx = ctx;
       await this.applyOutputDevice();
-      await this.syncInput();
       this.configureEncoder();
-      await ctx.resume();
-      this.levelTimer = setInterval(() => { this.level = this.levelRaw; }, 50);
+      this.syncProbe();
+      // None of these may wait forever: start() and stop() queue behind each other, so one that hangs
+      // (a stuck sound driver, a context that stays suspended) would block them all. A suspended
+      // context is woken again by onstatechange and the watchdog.
+      this.syncInput().catch(e => { this.error = `Microphone unavailable: ${(e as Error).message}`; });
+      ctx.resume().catch(() => {});
+      this.levelTimer = setInterval(() => this.tickLevel(), 50);
       this.watchdog = setInterval(() => this.checkInput(), 1000);
       this.running = true;
-      await this.refreshDevices();
+      this.refreshDevices().catch(() => {});
     } catch (e) {
       this.error = (e as Error).message;
-      await this.stop();
+      if (made && this.ctx !== made) made.close().catch(() => {});
+      await this.doStop();
     }
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    return this.queue(() => this.doStop());
+  }
+
+  private async doStop(): Promise<void> {
     this.endTransmission();
     if (this.levelTimer) clearInterval(this.levelTimer);
     this.levelTimer = null;
@@ -228,10 +295,23 @@ class VoiceEngine {
     this.decoders.clear();
     try { this.encoder?.close(); } catch { /* closed */ }
     this.encoder = null;
-    await this.ctx?.close().catch(() => {});
+    this.noiseSeq++;
+    this.probeSeq++;
+    this.probe?.destroy();
+    this.probe = null;
+    this.probeKind = null;
+    this.noise?.destroy();
+    this.noise = null;
+    this.noisePending = false;
+    // Let go of the context first, so nothing uses it while it closes
+    const ctx = this.ctx;
     this.ctx = null;
     this.capture = this.playback = null;
+    this.inputGainNode = this.outputGainNode = null;
+    this.source = null;
+    this.analyser = null;
     this.running = false;
+    await ctx?.close().catch(() => {});
     this.transmitting = false;
     this.talking = {};
     this.level = -100;
@@ -239,9 +319,16 @@ class VoiceEngine {
 
   // The microphone is not needed while we cannot talk anyway (muted or deafened, by us or the server)
   private micWanted(): boolean {
-    if (!this.settings.releaseMicMuted || this.testing) return true;
+    if (!this.settings.releaseMicMuted || this.testing || this.meterHolds > 0) return true;
     const self = this.client?.self;
     return !self || !(self.selfMute || self.mute || self.suppress || self.selfDeaf || self.deaf);
+  }
+
+  // The level meters on screen need the microphone even while muted: they ask for it here, and give it back
+  private meterHolds = 0;
+  holdMeter(on: boolean): void {
+    this.meterHolds = Math.max(0, this.meterHolds + (on ? 1 : -1));
+    this.syncInput();
   }
 
   // Opens or gives back the microphone as the mute state asks. restart: open it anew (settings changed).
@@ -261,7 +348,8 @@ class VoiceEngine {
   }
 
   private async restartInput(): Promise<void> {
-    if (!this.ctx || !this.inputGainNode) return;
+    const ctx = this.ctx;
+    if (!ctx || !this.inputGainNode) return;
     this.source?.disconnect();
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
@@ -274,7 +362,7 @@ class VoiceEngine {
       audio: plain ? { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } : {
         deviceId: deviceId ? { exact: deviceId } : undefined,
         echoCancellation: s.echoCancellation,
-        noiseSuppression: s.noiseSuppression,
+        noiseSuppression: false,
         autoGainControl: s.autoGainControl,
         channelCount: 1,
         sampleRate: SAMPLE_RATE
@@ -294,15 +382,23 @@ class VoiceEngine {
       this.error = `Microphone unavailable: ${(e as Error).message}`;
       return;
     }
-    // Muted again, or opened a second time, while the browser was getting the microphone
-    if (!this.ctx || this.stream || !this.micWanted()) return stream.getTracks().forEach(t => t.stop());
+    // Muted again, opened a second time, or the audio engine was stopped (and perhaps started anew)
+    // while the browser was getting the microphone
+    if (this.ctx !== ctx || this.stream || !this.micWanted()) return stream.getTracks().forEach(t => t.stop());
     this.stream = stream;
     this.micOpen = true;
     this.error = '';
     this.inputOpenedAt = this.lastFrameAt = performance.now();
     this.zeroFrames = 0;
-    this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.source.connect(this.inputGainNode);
+    this.source = ctx.createMediaStreamSource(this.stream);
+    // A second, independent listener on the microphone for the meter: it keeps working when the
+    // capture worklet or the noise engine does not deliver
+    try {
+      this.analyser = new AnalyserNode(ctx, { fftSize: 1024 });
+      this.analyserBuf = new Float32Array(this.analyser.fftSize);
+      this.source.connect(this.analyser);
+    } catch { this.analyser = null; }
+    this.applyNoise();
     for (const track of stream.getAudioTracks()) {
       // The driver or the system took the microphone away
       track.addEventListener('ended', () => { if (this.stream === stream) this.recoverInput('ended'); });
@@ -314,6 +410,58 @@ class VoiceEngine {
       track.addEventListener('unmute', () => { if (this.muteTimer) clearTimeout(this.muteTimer); this.muteTimer = null; });
     }
     this.refreshDevices();
+  }
+
+  // Puts the chosen noise engine (or none) between the microphone and the input gain. While an engine
+  // loads, the microphone is held back rather than sent unfiltered.
+  private async applyNoise(): Promise<void> {
+    const ctx = this.ctx, gain = this.inputGainNode;
+    if (!ctx || !gain) return;
+    const s = this.settings, seq = ++this.noiseSeq;
+    const engine = s.noiseSuppression ? s.noiseEngine : null;
+    if (engine !== (this.noise?.engine ?? null)) {
+      this.noisePending = true;
+      this.source?.disconnect();
+      this.noise?.destroy();
+      this.noise = null;
+      if (engine) {
+        try {
+          const node = await createNoise(ctx, engine, s);
+          if (seq !== this.noiseSeq) return node.destroy();
+          node.output.connect(gain);
+          this.noise = node;
+        } catch (e) {
+          if (seq === this.noiseSeq) this.error = `Noise suppression (${engine}) unavailable: ${(e as Error).message}`;
+        }
+      }
+      if (seq !== this.noiseSeq) return;
+    }
+    this.noisePending = false;
+    this.noise?.update(s);
+    this.source?.connect(this.noise?.input ?? gain);
+    if (this.analyser) this.source?.connect(this.analyser);   // the meter's own listener (disconnect() above drops it)
+  }
+
+  // Starts or stops the RNNoise / Silero detector as the settings ask. Until it is ready, the level decides.
+  private async syncProbe(): Promise<void> {
+    const ctx = this.ctx, gain = this.inputGainNode, s = this.settings;
+    const kind = s.mode === 'vad' && (s.detector === 'rnnoise' || s.detector === 'silero') ? s.detector : null;
+    if (kind === this.probeKind) return;
+    const seq = ++this.probeSeq;
+    this.probe?.destroy();
+    this.probe = null;
+    this.probeKind = kind;
+    if (!kind || !ctx || !gain) return;
+    try {
+      const { createSilero, createRnnoiseProbe } = await import('./detect.ts');
+      const probe = kind === 'silero' ? await createSilero() : await createRnnoiseProbe(ctx, gain);
+      if (seq !== this.probeSeq) return probe.destroy();
+      this.probe = probe;
+    } catch (e) {
+      if (seq !== this.probeSeq) return;
+      this.probeKind = null;
+      this.error = `Voice detection (${kind}) unavailable: ${(e as Error).message}`;
+    }
   }
 
   // Once a second: is sound still coming from the microphone?
@@ -359,7 +507,7 @@ class VoiceEngine {
       if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {});
       if (this.recoveries >= 3 && !this.degraded) {
         this.degraded = true;
-        this.notice = 'The microphone stopped responding and was reopened with basic settings (no echo cancellation or noise suppression). This points to a problem in the audio driver; changing the microphone in the settings above brings the normal settings back.';
+        this.notice = 'The microphone stopped responding and was reopened with basic settings (no echo cancellation or automatic gain control). This points to a problem in the audio driver; changing the microphone in the settings above brings the normal settings back.';
       }
       if (this.recoveries === 5) {
         // Rebuild the audio engine itself: a new audio context and a new microphone stream
@@ -388,6 +536,7 @@ class VoiceEngine {
   attach(client: MumbleClient): void {
     this.unsubscribe.forEach(off => off());
     this.client = client;
+    this.target = 0;
     this.stats = { sent: 0, received: 0, decoded: 0, lost: 0 };
     this.unsubscribe = [
       client.on('voice', raw => { if (this.client === client) this.receive(raw); }),
@@ -403,6 +552,7 @@ class VoiceEngine {
     this.unsubscribe.forEach(off => off());
     this.unsubscribe = [];
     this.client = null;
+    this.target = 0;
     for (const s of [...this.decoders.keys()]) this.dropSession(s);
     this.playback?.port.postMessage({ clear: true });
     this.talking = {};
@@ -458,23 +608,60 @@ class VoiceEngine {
     return !!self && this.client!.synced && !self.selfMute && !self.mute && !self.suppress && !self.selfDeaf && !self.deaf;
   }
 
+  // Every 50 ms: the level for the meter. The capture worklet's reading when frames arrive; otherwise
+  // the microphone is measured directly (with the input volume applied).
+  private tickLevel(): void {
+    const now = performance.now();
+    if (now - this.lastFrameAt < 300 && this.levelRaw > -100) this.level = this.levelRaw;
+    else if (this.analyser && this.analyserBuf && this.micOpen) {
+      this.analyser.getFloatTimeDomainData(this.analyserBuf);
+      let sum = 0;
+      for (const v of this.analyserBuf) sum += v * v;
+      const rms = Math.sqrt(sum / this.analyserBuf.length) * this.settings.inputGain;
+      this.level = rms > 0 ? Math.max(-100, 20 * Math.log10(rms)) : -100;
+    } else this.level = this.levelRaw;
+    if (now - this.diagAt >= 1000) {
+      const fps = Math.round((this.frameCount - this.diagFrames) * 1000 / (now - this.diagAt || 1));
+      this.diagFrames = this.frameCount;
+      this.diagAt = now;
+      const t = this.stream?.getAudioTracks()[0];
+      this.diag = `mic ${this.micOpen ? 'open' : 'closed'}${t ? ` (${t.readyState}${t.muted ? ', muted by system' : ''}${t.label ? ': ' + t.label : ''})` : ''}; audio clock ${this.ctx?.state ?? 'none'}; ${fps} frames/s (should be ~100)`;
+    }
+  }
+
   private onFrame(frame: Float32Array<ArrayBuffer>, rms: number): void {
     this.lastFrameAt = performance.now();
+    this.frameCount++;
     this.zeroFrames = rms === 0 ? this.zeroFrames + 1 : 0;
     const db = rms > 0 ? 20 * Math.log10(rms) : -100;
     this.levelRaw = Math.max(-100, db);
     const now = performance.now();
     const s = this.settings;
 
-    if (this.testing) this.playback?.port.postMessage({ session: -1, pcm: frame.slice() });
-
     let wanted: boolean;
     if (s.mode === 'continuous') wanted = true;
     else if (s.mode === 'ptt') wanted = this.pttDown;
     else {
-      if (db > s.vadThreshold) this.lastVoiceAt = now;
-      wanted = now - this.lastVoiceAt < s.vadHoldMs;
+      const probe = this.probe;
+      let voiced: boolean;
+      if (probe && s.detector === this.probeKind) {
+        probe.push?.(frame);
+        voiced = probe.prob * 100 > s.speechThreshold;
+      } else if (s.detector === 'gate') {
+        voiced = db > s.vadThreshold - (this.gateOpen ? GATE_HYSTERESIS : 0);
+      } else voiced = db > s.vadThreshold;
+      if (voiced) this.lastVoiceAt = now;
+      this.speech = voiced;
+      this.gateOpen = now - this.lastVoiceAt < s.vadHoldMs;
+      const gate = s.detector === 'gate';
+      if (gate) for (let i = 0; i < frame.length; i++) {
+        this.gateGain = this.gateOpen ? Math.min(1, this.gateGain + GATE_ATTACK) : Math.max(0, this.gateGain - GATE_RELEASE);
+        frame[i] *= this.gateGain;
+      }
+      // The gate's fade-out is sent too
+      wanted = now - this.lastVoiceAt < s.vadHoldMs + (gate ? GATE_RELEASE_MS : 0);
     }
+    if (this.testing) this.playback?.port.postMessage({ session: -1, pcm: frame.slice() });
     // Speaking into a muted microphone: remind, at most every 8 seconds
     const self = this.client?.self;
     if (wanted && s.mode === 'vad' && self && (self.selfMute || self.mute) && !self.selfDeaf && now - this.lastMutedReminder > 8000) {
@@ -512,7 +699,7 @@ class VoiceEngine {
   private sendPacket(opus: Uint8Array, last: boolean): void {
     const client = this.client;
     if (!client) return;
-    client.sendVoice(encodeVoice({ target: 0, frame: this.frameCounter, opus, last }, client.protobufVoice));
+    client.sendVoice(encodeVoice({ target: this.target, frame: this.frameCounter, opus, last }, client.protobufVoice));
     this.frameCounter += this.settings.frameMs / 10;
     this.stats.sent++;
   }

@@ -4,7 +4,6 @@ import { _electron as electron, type Page } from 'playwright-core';
 import electronPath from 'electron';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -51,7 +50,6 @@ async function join(page: Page, name: string) {
   await page.getByText(/Connected/).first().waitFor();
 }
 
-const cleanup: (() => void)[] = [];
 const alice = await launch();
 const bob = await launch();
 const aliceName = `share-a-${tag}`, bobName = `share-b-${tag}`;
@@ -253,23 +251,7 @@ try {
   assert.equal(await alice.page.locator('.stage .status').count(), 0);
   console.log('ok: stopping ends the stream for viewers');
 
-  // Camera instead of the screen, and a relay for networks without direct connections: both
-  // instances point at a Libertad proxy, and the viewer is limited to the relay over TCP
-  const relayPort = 19000 + Math.floor(Math.random() * 500);
-  const relay = spawn(process.execPath, ['server/main.ts'], {
-    cwd: root, stdio: ['ignore', 'pipe', 'inherit'],
-    env: { ...env, LIBERTAD_PORT: String(relayPort), LIBERTAD_ALLOW_ANY: '1', LIBERTAD_ALLOW_PRIVATE: '1', LIBERTAD_STUN_PORT: String(relayPort + 500), LIBERTAD_STUN_BIND: '127.0.0.1', LIBERTAD_TURN_IP: '127.0.0.1' }
-  });
-  cleanup.push(() => relay.kill());
-  await new Promise<void>((res, rej) => { relay.stdout.on('data', d => { if (String(d).includes('listening')) res(); }); relay.on('exit', c => rej(new Error(`proxy exited with ${c}`))); });
-  for (const p of [alice.page, bob.page]) {
-    await p.getByTitle('Settings').click();
-    await p.getByLabel('Relay').fill(`http://127.0.0.1:${relayPort}`);
-    await p.getByLabel('Relay').blur();
-    await p.getByRole('button', { name: 'Done', exact: true }).click();
-  }
-  await bob.page.evaluate(() => localStorage.setItem('libertad.iceDebug', 'relay-tcp'));
-
+  // Camera instead of the screen
   await shareBtn.click();
   await picker.getByRole('tab', { name: 'Camera' }).click();
   await alice.page.waitForFunction(() => (document.querySelector('.preview video') as HTMLVideoElement | null)?.videoWidth! > 0, null, { timeout: 15000 });
@@ -348,12 +330,11 @@ try {
   assert.equal(await alice.page.locator('.bar.bad').count(), 0);
   console.log(`ok: camera switched while sharing (${firstCamera} to ${secondCamera} and back), viewer kept the stream`);
 
-  // A click enlarges one camera; the statistics show it came through the relay
+  // A click enlarges one camera
   await bob.page.locator('.stage .tile', { hasText: aliceName }).click();
   await bob.page.waitForFunction(() => (document.querySelector('.spot video') as HTMLVideoElement | null)?.videoWidth! > 0, null, { timeout: 20000 });
   assert.equal(await bob.page.locator('.stage .tile', { hasText: aliceName }).locator('video').count(), 0, 'the enlarged camera is not also in its tile');
   assert.equal(await bob.page.locator('.stage .tile.self video').count(), 1, 'the other tiles keep theirs');
-  const camStats = await nerd(bob.page, [/^relayed \(TURN\), reached over TCP/, /^0 direct, 0 through STUN, [1-9]\d* relayed/]);
   await bob.page.getByRole('region', { name: 'Screen share' }).getByRole('button', { name: 'Back to tiles' }).click();
 
   // Everyone's cameras off at once keeps Bob's own camera on and drops the others; on again brings them back
@@ -366,8 +347,7 @@ try {
   await camsShown(alice.page, 1);
   await alice.page.locator('.me').getByRole('button', { name: 'Stop sharing your camera' }).click();
   await cam.waitFor({ state: 'detached' });
-  await bob.page.evaluate(() => localStorage.removeItem('libertad.iceDebug'));
-  console.log(`ok: cameras of several people at once, in the tiles, through the relay (${camStats.match(/Picture \| [^|]+/)?.[0]})`);
+  console.log('ok: cameras of several people at once, in the tiles');
   void liveCams;
 
   // A sharer who disconnects takes the stream with them
@@ -387,7 +367,6 @@ try {
 
   console.log('SHARE E2E PASSED');
 } finally {
-  for (const c of cleanup) c();
   await alice.app.close().catch(() => {});
   await bob.app.close().catch(() => {});
 }

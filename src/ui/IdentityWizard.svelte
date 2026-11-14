@@ -1,7 +1,7 @@
 <script lang="ts">
   import Modal from './Modal.svelte';
   import Icon from './Icon.svelte';
-  import { native, isWeb, type IdentitySummary } from '../lib/native.ts';
+  import { native, type IdentitySummary } from '../lib/native.ts';
   import { store } from '../lib/settings.svelte.ts';
   import { identities } from '../lib/identities.svelte.ts';
 
@@ -100,7 +100,6 @@
 <Modal {title} onclose={mode === 'setup' ? finish : onclose} width={560}>
   {#if step === 'welcome'}
     <p>Mumble recognizes you by a <strong>certificate</strong>, not by a password. Registered names, admin rights and friends lists on servers are tied to it, so it is worth setting up once and keeping a backup.</p>
-    {#if isWeb}<p class="dim">In the browser the certificate is kept in this browser's storage and passed to the proxy at {location.host} when you connect, which presents it to the Mumble server.</p>{/if}
     <div class="choices">
       <button class="choice" onclick={() => (step = 'create')}>
         <Icon name="plus" /><span><strong>Create a new identity</strong><small>Start fresh with a new certificate</small></span>
@@ -139,7 +138,7 @@
   {:else if step === 'backup' && result}
     <p>Identity <strong>{result.name}</strong> is ready.</p>
     <p class="mono">{result.fingerprint}</p>
-    <p>{isWeb ? 'If this browser\'s data is cleared' : 'If this computer dies'}, the certificate goes with it, and so do your registrations. Save a password-protected backup now; the desktop Mumble client can import it too.</p>
+    <p>If this computer dies, the certificate goes with it, and so do your registrations. Save a password-protected backup now; the desktop Mumble client can import it too.</p>
     <label for="w-bpass">Backup password <span class="opt">(at least 8 characters)</span></label>
     <input id="w-bpass" type="password" bind:value={backupPassword} autocomplete="new-password" />
     <label for="w-bconf">Repeat password</label>

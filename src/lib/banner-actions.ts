@@ -65,15 +65,6 @@ async function fileFromUrl(src: string): Promise<File> {
   return new File([blob], isGif ? 'picture.gif' : 'picture', { type: isGif ? 'image/gif' : blob.type });
 }
 
-// A picture or GIF from the chat (the address of the <img> that was right-clicked) as the profile background,
-// by the same steps. A problem is shown in a dialog.
-export async function useUrlAsProfileBackground(src: string): Promise<void> {
-  let problem = '';
-  try { problem = await useAsProfileBackground(await fileFromUrl(src)); }
-  catch { problem = 'This picture could not be loaded.'; }
-  if (problem) ui.prompt = { title: 'Profile background', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
-}
-
 // A picture or GIF as the user card (the picture behind your tile), by the same steps as "Add user card...":
 // the editor (crop, turn, darken, blur), then applied. Returns what went wrong, or ''.
 export async function useAsUserCard(file: File): Promise<string> {
@@ -82,14 +73,6 @@ export async function useAsUserCard(file: File): Promise<string> {
   // A picture the person did not change keeps the usual cut; a cropped one keeps its shape
   return setBannerFromFile('card', r.file, { keepShape: r.file !== file });
 }
-
-export async function useUrlAsUserCard(src: string): Promise<void> {
-  let problem = '';
-  try { problem = await useAsUserCard(await fileFromUrl(src)); }
-  catch { problem = 'This picture could not be loaded.'; }
-  if (problem) ui.prompt = { title: 'User card', label: problem, confirm: 'OK', input: 'none', onsubmit: () => {} };
-}
-
 
 // A picture or GIF as your avatar: cropped square in the editor, then applied. Returns what went wrong, or ''.
 export async function useAsAvatar(file: File): Promise<string> {

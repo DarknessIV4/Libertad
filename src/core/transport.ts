@@ -1,10 +1,10 @@
-// A reliable, ordered byte stream to a Mumble server (TLS in Electron, WebSocket proxy on the web).
+// A reliable, ordered byte stream to a Mumble server (TLS in the Electron main process).
 export interface Transport {
   send(bytes: Uint8Array): void;
   close(): void;
   onData: ((chunk: Uint8Array) => void) | null;
   onClose: ((reason: string) => void) | null;
-  // Encrypted UDP for voice, where the platform has it (desktop); absent on the web
+  // Encrypted UDP for voice
   udp?: UdpChannel;
 }
 
@@ -51,7 +51,4 @@ export interface ServerCertInfo {
   authorized: boolean;       // true if it chains to a trusted CA
   authError: string | null;  // why it is not trusted, e.g. DEPTH_ZERO_SELF_SIGNED_CERT
   chain: CertDetails[];      // leaf first
-  // Browser build only: this client's address as the web proxy saw it. The Mumble server
-  // sees the proxy's address instead and cannot be told the original one.
-  clientAddress?: string;
 }

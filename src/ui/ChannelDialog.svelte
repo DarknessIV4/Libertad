@@ -2,6 +2,7 @@
   import Modal from './Modal.svelte';
   import RichEditor from './RichEditor.svelte';
   import { session } from '../lib/session.svelte.ts';
+  import { roles } from '../lib/roles.svelte.ts';
   import { PERM, type ChannelAcl, type AclEntry, type AclGroup } from '../core/client.ts';
   import { sounds } from '../lib/audio/sounds.svelte.ts';
   import { isTextChannel, markText, stripMark } from '../core/text-signal.ts';
@@ -26,7 +27,9 @@
   const isRoot = channelId === 0;
 
   // svelte-ignore state_referenced_locally
-  let tab = $state<'general' | 'permissions' | 'groups'>(props.tab ?? 'general');
+  let tab = $state<'general' | 'permissions' | 'groups'>(roles.limited(session) ? 'general' : props.tab ?? 'general');
+  // Admins (see roles.ts) change the channel itself, not its permissions or groups
+  const limited = $derived(roles.limited(session));
   let error = $state('');
 
   // ─── General ────────────────────────────────────────────────────────────────
@@ -238,7 +241,7 @@
     if (position !== ch.position) fields.position = Number(position) || 0;
     if (maxUsers !== ch.maxUsers) fields.maxUsers = Number(maxUsers) || 0;
     if (Object.keys(fields).length) client.updateChannel(channelId, fields);
-    if (acl && aclDirty) client.saveAcl($state.snapshot(acl) as ChannelAcl);
+    if (acl && aclDirty && !limited) client.saveAcl($state.snapshot(acl) as ChannelAcl);
     if (Object.keys(fields).length || aclDirty) sounds.play('channelEdited');
     onclose();
   }
@@ -247,7 +250,7 @@
 </script>
 
 <Modal {title} {onclose} width={760}>
-  {#if mode === 'edit'}
+  {#if mode === 'edit' && !limited}
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected={tab === 'general'} class:active={tab === 'general'} onclick={() => (tab = 'general')}>General</button>
       <button role="tab" aria-selected={tab === 'permissions'} class:active={tab === 'permissions'} onclick={() => (tab = 'permissions')}>Permissions</button>

@@ -1,5 +1,4 @@
 import type { Transport, ServerCertInfo, CertDetails, UdpChannel } from '../core/transport.ts';
-import { webApi, openWebTransport } from './web.svelte.ts';
 import type { MediaInfo } from '../core/transcode.ts';
 import type { TorrentInfo, TorrentPlay, TorrentStats } from '../core/torrent-meta.ts';
 import type { FoundEpisodes } from '../core/episodes.ts';
@@ -12,13 +11,12 @@ import type { Cue, SubtitleOption } from '../core/subtitles.ts';
 export const torrentError = (e: unknown): string =>
   String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']*': (Error: )?/, '') || 'Something went wrong';
 
-// What both the desktop app and the browser build (through the web proxy) provide
 export type YoutubeAccountState = { signedIn: boolean; noHistory: boolean };
 
 export interface PlatformApi {
   platformInfo(): Promise<{ os: string; osVersion: string }>;
   describeCerts(ders: Uint8Array[]): Promise<CertDetails[]>;
-  // People on a server without connecting (UDP ping; in the browser the proxy sends it, for its own servers)
+  // People on a server without connecting (UDP ping)
   pingServer(host: string, port: number): Promise<PingResult | null>;
   identities: {
     list(): Promise<{ identities: IdentitySummary[]; setupDone: boolean }>;
@@ -40,10 +38,10 @@ export type FileExport = { ok: true; path: string } | { ok: false; reason: 'canc
 
 // The desktop app's preload API
 interface NativeApi extends PlatformApi {
-  // Other people's profile backgrounds in the app's data folder (user-profiles/<name>/<file>); bytes null deletes
+  // Other people's profile backgrounds and pictures in the app's data folder (user-profiles/<name>/<file>); bytes null deletes
   profiles: {
-    read(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile'): Promise<Uint8Array | null>;
-    write(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile', bytes: Uint8Array | null): Promise<boolean>;
+    read(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile' | 'avatar'): Promise<Uint8Array | null>;
+    write(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile' | 'avatar', bytes: Uint8Array | null): Promise<boolean>;
   };
   files: {
     // Asks where to save (a Save dialog) and creates the file there; nothing is fetched before this says ok
@@ -67,7 +65,7 @@ interface NativeApi extends PlatformApi {
     // Asks for a .torrent file on this computer; null when cancelled
     openFile(): Promise<TorrentInfo | null>;
     // Starts downloading the file and returns the local address to play it from
-    play(meta: { magnet: string; fileIdx: number }): Promise<TorrentPlay>;
+    play(meta: { magnet: string; fileIdx: number; fileName?: string; size?: number }): Promise<TorrentPlay>;
     // What the file holds, and where its converted form (H.264 + AAC, HLS) is served from. `info` is null when ffmpeg is
     // missing or the file can not be read; `hls` ends with a slash: add "<voice>/index.m3u8".
     probe(infoHash: string, fileIdx: number): Promise<{ info: MediaInfo | null; hls: string | null }>;
@@ -231,17 +229,13 @@ declare global {
   interface Window { libertadNative?: NativeApi }
 }
 
-// Desktop-only features (tray, UDP voice, public list, direct link previews) check `desktop`
+// Everything that needs the desktop app (identities, TLS and UDP to servers, tray, public list, link previews) checks `desktop`
 export const desktop: NativeApi | null = typeof window !== 'undefined' ? window.libertadNative ?? null : null;
-// The browser build (vite --mode web) talks to the web proxy instead
-export const isWeb = !desktop && import.meta.env?.MODE === 'web';
-export const native: PlatformApi | null = desktop ?? (isWeb ? webApi : null);
+export const native: PlatformApi | null = desktop;
 
-// A connection to a Mumble server: TLS in the desktop app, the proxy's WebSocket in the browser
+// A connection to a Mumble server: TLS in the desktop app's main process
 export async function openTransport(host: string, port: number, identityId?: string): Promise<(Transport & { secure: Promise<ServerCertInfo> }) | null> {
-  if (desktop) return new ElectronTransport(desktop, host, port, identityId);
-  if (isWeb) return openWebTransport(host, port, identityId);
-  return null;
+  return desktop ? new ElectronTransport(desktop, host, port, identityId) : null;
 }
 
 // Transport backed by a TLS socket in the Electron main process.

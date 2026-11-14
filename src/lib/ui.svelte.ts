@@ -23,6 +23,8 @@ export interface CertRequest {
 class Ui {
   prompt = $state<PromptRequest | null>(null);
   cert = $state<CertRequest | null>(null);
+  // Which room to enter, asked when connecting to a server that has several (the server's id)
+  roomPicker = $state<{ serverId: string } | null>(null);
   settingsOpen = $state(false);
   wizard = $state<'setup' | 'add' | null>(null);
   // Quick audio popover from right-clicking mute (input) or deafen (output)

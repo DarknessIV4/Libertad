@@ -65,9 +65,5 @@ class ImageEditorStore {
 
 export const imageEditor = new ImageEditorStore();
 
-// Pictures the editor can work on as a still. A GIF would lose its movement there, so callers that
-// only crop a still (app backgrounds) use a GIF as it is.
-export const EDITABLE = /^image\/(png|jpeg|webp)$/;
-
 // Pictures and GIFs: the editor keeps a GIF moving by editing every frame (lib/gif-edit.ts)
 export const EDITABLE_OR_GIF = /^image\/(png|jpeg|webp|gif)$/;

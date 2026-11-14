@@ -4,10 +4,11 @@
   import { session, sessions } from '../lib/session.svelte.ts';
   import { store, type SavedServer } from '../lib/settings.svelte.ts';
   import { ui } from '../lib/ui.svelte.ts';
-  import { desktop, isWeb } from '../lib/native.ts';
+  import { desktop } from '../lib/native.ts';
   import { serverStatus, peopleOn } from '../lib/server-status.svelte.ts';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
-  import { menu } from '../lib/menu.svelte.ts';
+  import { menu, type MenuItem } from '../lib/menu.svelte.ts';
+  import { defaultRooms } from '../lib/default-room.svelte.ts';
   import { homeBackgroundItems } from '../lib/custom-bg-menu.ts';
   import QuickMessage from './QuickMessage.svelte';
 
@@ -29,12 +30,26 @@
       return ping ? `${count}, ${ping}` : count;
     }
     if (!(s.id in serverStatus.counts)) return 'Checking...';
-    return isWeb ? 'No count from this site' : 'No answer';
+    return 'No answer';
   }
 
   const d = $derived(session.disconnectInfo);
   // The server whose message box is open (send to the main channel without joining)
   let messaging = $state<SavedServer | null>(null);
+
+  // Right-clicking a server: connect or leave it, forget its default room, edit it
+  function serverMenu(e: MouseEvent, s: SavedServer) {
+    const state = stateOf(s.id);
+    const items: MenuItem[] = [
+      { header: true, label: s.label },
+      { label: state === 'connected' ? 'Open' : 'Connect', action: () => sessions.open(s) },
+      ...(state !== 'idle' ? [{ label: 'Disconnect', action: () => sessions.close(s.id) }] : []),
+      { separator: true, label: '' },
+      { label: 'Clear Default room', disabled: !defaultRooms.has(s.id), action: () => defaultRooms.clear(s.id) },
+      { label: 'Edit...', action: () => onedit(s) }
+    ];
+    menu.show(e, items);
+  }
 
   // Right-clicking free space (not a server, a button or text being edited): the custom background menu
   function bgMenu(e: MouseEvent) {
@@ -82,7 +97,7 @@
         {#each store.servers as s (s.id)}
           {@const state = stateOf(s.id)}
           {@const people = peopleOn(s.id)}
-          <li class="server" class:live={state === 'connected'}>
+          <li class="server" class:live={state === 'connected'} oncontextmenu={e => serverMenu(e, s)}>
             <button class="main" onclick={() => sessions.open(s)} title="{s.label} ({s.host})">
               <span class="pic">{#if s.icon}<img src={s.icon} alt="" draggable="false" />{:else}{initials(s.label)}{/if}</span>
               <span class="text">

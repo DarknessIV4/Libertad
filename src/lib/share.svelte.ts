@@ -5,7 +5,7 @@
 import { SHARE, SHARE_DATA_ID, encodeShare, ShareAssembler, type ShareType } from '../core/share-signal.ts';
 import type { User } from '../core/client.ts';
 import type { Session } from './session.svelte.ts';
-import { desktop, isWeb } from './native.ts';
+import { desktop } from './native.ts';
 import { rtcConfig, gathered } from './ice.ts';
 import { store } from './settings.svelte.ts';
 import { ui } from './ui.svelte.ts';
