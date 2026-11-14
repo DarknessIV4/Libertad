@@ -170,7 +170,7 @@ const conns = new Map<string, Conn>();
 
 registerFileStore();
 registerProfiles();
-registerTorrent();
+registerTorrent(hardwareAcceleration);
 ipcMain.handle('identities:list', () => identities().list());
 ipcMain.handle('identities:create', (_e, name: string, email: string) => identities().create(String(name), String(email ?? '')));
 ipcMain.handle('identities:import', (_e, bytes: Uint8Array, password: string, name: string) =>

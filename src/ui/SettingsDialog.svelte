@@ -182,7 +182,7 @@
       {#if updMsg}<p class="help">{updMsg}</p>{/if}
     {/if}
     <label class="check"><input type="checkbox" bind:checked={hwAccel} onchange={setHwAccel} /> Use hardware acceleration</label>
-    <p class="help">Lets the graphics card draw the app and encode and decode shared screens, which takes load off the processor. Turn it off if the picture flickers, tears or streams glitch.</p>
+    <p class="help">Lets the graphics card draw the app, encode and decode shared screens, and convert videos for Torrent Together (HEVC, Blu-ray, DTS), which takes load off the processor. Turn it off if the picture flickers, tears or streams glitch.</p>
     {#if hwAccel !== hwStarted}
       <div class="row kept">
         <p class="help">Restart Libertad to apply this.</p>

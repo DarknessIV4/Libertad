@@ -157,6 +157,21 @@ export function buildPlaylist(duration: number, seg = SEGMENT_SECONDS): string {
   return lines.join('\n') + '\n';
 }
 
+// Hardware H.264 encoders ffmpeg can use instead of libx264 (only when the "hardware acceleration" setting is on)
+export type HwKind = 'nvenc' | 'qsv' | 'amf' | 'videotoolbox' | 'vaapi';
+export interface HwEncoder { kind: HwKind; device?: string }
+
+// Roughly the quality of libx264 -crf 22, for each encoder. Keyframes are forced on every segment boundary by the caller.
+export function hwVideoArgs(h: HwEncoder): string[] {
+  switch (h.kind) {
+    case 'nvenc': return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-profile:v', 'high', '-forced-idr', '1'];
+    case 'qsv': return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '23', '-profile:v', 'high'];
+    case 'amf': return ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24', '-profile:v', 'high'];
+    case 'videotoolbox': return ['-c:v', 'h264_videotoolbox', '-b:v', '10M', '-profile:v', 'high'];
+    case 'vaapi': return ['-c:v', 'h264_vaapi', '-qp', '22', '-profile:v', 'high'];
+  }
+}
+
 export interface FfmpegPlan {
   input: string;
   info: MediaInfo;
@@ -166,16 +181,19 @@ export interface FfmpegPlan {
   tonemap: boolean;     // this ffmpeg has the filters to turn HDR into SDR
   maxHeight?: number;
   segSeconds?: number;
+  hw?: HwEncoder | null;   // encode (and decode) on the graphics card; null/absent: the processor does it all
+  readrate?: number;       // read the input at most this many times faster than it plays, so the processor is not run flat out
 }
 
 // The filter that makes the picture what every screen shows: at most 1080 lines tall, 8-bit 4:2:0, and HDR brought down to SDR
-export function videoFilter(v: VideoStreamInfo | null, tonemap: boolean, maxHeight = MAX_HEIGHT): string {
+export function videoFilter(v: VideoStreamInfo | null, tonemap: boolean, maxHeight = MAX_HEIGHT, vaapi = false): string {
   const scale = `scale=w=-2:h='min(${maxHeight},ih)'`;
+  const tail = vaapi ? 'format=nv12,hwupload' : 'format=yuv420p';
   if (v?.hdr && tonemap) {
     return [scale, 'zscale=t=linear:npl=100', 'format=gbrpf32le', 'zscale=p=bt709', 'tonemap=tonemap=hable:desat=0',
-      'zscale=t=bt709:m=bt709:r=tv', 'format=yuv420p'].join(',');
+      'zscale=t=bt709:m=bt709:r=tv', tail].join(',');
   }
-  return `${scale},format=yuv420p`;
+  return `${scale},${tail}`;
 }
 
 // ffmpeg's arguments for making the segments from `start` on. Keyframes sit on every segment boundary, and the
@@ -184,17 +202,23 @@ export function videoFilter(v: VideoStreamInfo | null, tonemap: boolean, maxHeig
 export function ffmpegArgs(p: FfmpegPlan): string[] {
   const seg = p.segSeconds ?? SEGMENT_SECONDS;
   const at = p.start * seg;
+  const hw = p.hw ?? null;
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
+  if (hw?.device) args.push('-vaapi_device', hw.device);
+  // Decoding (HEVC above all) is the heaviest part: let the card do it. ffmpeg falls back to the processor by itself.
+  if (hw) args.push('-hwaccel', 'auto');
+  if (p.readrate && p.readrate > 0) args.push('-readrate', String(p.readrate));
   if (at > 0) args.push('-ss', at.toFixed(3));
   args.push('-i', p.input, '-map', '0:v:0?');
   const hasAudio = p.info.audio.length > 0;
   if (hasAudio) args.push('-map', `0:a:${Math.max(0, Math.min(p.audio, p.info.audio.length - 1))}`);
   args.push('-sn', '-dn', '-map_chapters', '-1', '-map_metadata', '-1');
   args.push(
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-profile:v', 'high', '-threads', '0',
-    '-vf', videoFilter(p.info.video, p.tonemap, p.maxHeight),
-    '-force_key_frames', `expr:gte(t,n_forced*${seg})`, '-sc_threshold', '0'
+    ...(hw ? hwVideoArgs(hw) : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-profile:v', 'high', '-threads', '0']),
+    '-vf', videoFilter(p.info.video, p.tonemap, p.maxHeight, hw?.kind === 'vaapi'),
+    '-force_key_frames', `expr:gte(t,n_forced*${seg})`
   );
+  if (!hw) args.push('-sc_threshold', '0');
   if (hasAudio) args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-af', 'aresample=async=1:first_pts=0');
   args.push(
     '-max_muxing_queue_size', '2048', '-muxdelay', '0', '-muxpreload', '0',
