@@ -2,6 +2,19 @@
  
 All notable changes to Libertad.
 
+
+## 0.4.5 - 2026-11-15
+
+### Fixed:
+
+- UI issues.
+- Youtube iframe remaining controls.
+
+### Added:
+
+- Throttle When hidden.
+- Open a watch together session beside screen share or camera
+
 ## 0.4.4 - 2026-11-14
 
 ### Fixed:
