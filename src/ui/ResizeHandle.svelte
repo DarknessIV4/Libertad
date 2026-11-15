@@ -6,8 +6,10 @@
   // height). The size is remembered.
   // inline: when true, the handle is a flex item instead of absolute; width still means
   // the full panel height, but the handle follows the pointer during drag.
-  let { width = $bindable(), edge, min, max, initial, storageKey, label, inline = false }:
-    { width: number; edge: 'left' | 'right' | 'top' | 'bottom'; min: number; max: () => number; initial: number; storageKey: string; label: string; inline?: boolean } = $props();
+  // snap: a size the drag sticks to for a moment (SNAP px of pointer travel) before it carries on, while dragging only
+  let { width = $bindable(), edge, min, max, initial, storageKey, label, inline = false, snap }:
+    { width: number; edge: 'left' | 'right' | 'top' | 'bottom'; min: number; max: () => number; initial: number; storageKey: string; label: string; inline?: boolean; snap?: () => number } = $props();
+  const SNAP = 18;
 
   let resizing = $state(false);
   // The size the user chose. A smaller window shows less of it, and it comes back when the
@@ -37,7 +39,12 @@
     const handleRect = handle.getBoundingClientRect();
     // For inline bottom handle, measure how much of the parent sits below the handle
     const below = inline && edge === 'bottom' ? box.bottom - handleRect.bottom : 0;
-    const move = (ev: PointerEvent) => setWidth(edge === 'left' ? box.right - ev.clientX : edge === 'top' ? box.bottom - ev.clientY : edge === 'bottom' ? ev.clientY - box.top + below : ev.clientX - box.left);
+    const move = (ev: PointerEvent) => {
+      let w = edge === 'left' ? box.right - ev.clientX : edge === 'top' ? box.bottom - ev.clientY : edge === 'bottom' ? ev.clientY - box.top + below : ev.clientX - box.left;
+      const at = snap?.();
+      if (at !== undefined && at >= min && at <= max() && Math.abs(w - at) <= SNAP) w = at;
+      setWidth(w);
+    };
     const up = () => {
       resizing = false;
       document.body.style.userSelect = '';

@@ -217,7 +217,13 @@ export async function setYoutubeQuality(level: string): Promise<QualityResult> {
 // code (and the quality menu code above) keeps finding its elements. The class names change now and
 // then, hence the broad rule next to the known names.
 const SELECTOR = '[class*="bezel"], .ytp-large-play-button, .ytp-pause-overlay, .html5-video-player > :not(.html5-video-container):not([class*="caption"]):not([class*="error"]):not(video)';
-const HIDE_CSS = SELECTOR + ' { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; animation: none !important; }';
+// Everything the page draws apart from the picture (the video and what holds it), the captions and the error message, however
+// deep and whatever it is called: the pause / play icon and the thin line that comes with it are not always under the player's
+// own container, and their class names change. The pieces that draw them on their own (::before, ::after) too. Only as a style
+// rule, which costs nothing while the player runs (the script below that hides what the rule misses stays on the known names).
+const KEEP = ':not(video):not(:has(video)):not([class*="caption"]):not([class*="caption"] *):not([class*="error"]):not([class*="error"] *)';
+const HIDDEN = ' { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; animation: none !important; transition: none !important; }';
+const HIDE_CSS = SELECTOR + HIDDEN + '\nbody *' + KEEP + HIDDEN + '\nbody *' + KEEP + '::before, body *' + KEEP + '::after { opacity: 0 !important; visibility: hidden !important; }';
 const hideScript = `(() => {
   const css = ${JSON.stringify(HIDE_CSS)};
   const add = () => {

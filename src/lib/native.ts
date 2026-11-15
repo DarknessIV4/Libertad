@@ -90,10 +90,15 @@ interface NativeApi extends PlatformApi {
   };
   updateTray(state: { icon: string; tooltip: string; connected: boolean; server: string; muted: boolean; deafened: boolean; mode: string }): void;
   onTrayAction(fn: (action: string) => void): void;
+  // The window is hidden or minimized (true) or back (false); the page then draws and fetches nothing but what the connection needs
+  onHidden(fn: (hidden: boolean) => void): () => void;
+  reportHidden(hidden: boolean, stats?: Record<string, number>): void;
   // Settings Chromium reads at start-up; changes apply after a restart
   system: {
-    get(): Promise<{ hardwareAcceleration: boolean; autoUpdate: boolean; launchOnStartup: boolean; platform: string }>;
+    get(): Promise<{ hardwareAcceleration: boolean; autoUpdate: boolean; throttleWhenHidden: boolean; launchOnStartup: boolean; platform: string }>;
     setAutoUpdate(on: boolean): Promise<void>;
+    // Takes effect at once, no restart
+    setThrottleWhenHidden(on: boolean): Promise<void>;
     setHardwareAcceleration(on: boolean): Promise<void>;
     // Starts Libertad when you sign in to the computer (takes effect at once, no restart)
     setLaunchOnStartup(on: boolean): Promise<void>;

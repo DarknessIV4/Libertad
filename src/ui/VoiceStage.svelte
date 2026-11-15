@@ -151,7 +151,8 @@ const self = $derived(session.self);
   // stream (also while its panel is closed, it is still running), and every other picture shown
   const allIds = $derived.by(() => {
     const ids: number[] = [];
-    if (isWatchingTogether) ids.push(WT);
+    // Also while the host has left it (it keeps running: the viewers and the button that ends it stay)
+    if (isWatchingTogether || (watchTogether.isHost && watchTogether.hasActiveParty)) ids.push(WT);
     if (mine && self) ids.push(self.session);
     for (const id of stack) if (!ids.includes(id)) ids.push(id);
     return ids;
@@ -234,34 +235,43 @@ const self = $derived(session.self);
   let stageEl = $state<HTMLElement>();
   let meetingEl = $state<HTMLElement>();
   let cardsEl = $state<HTMLElement>();
+  // How tall the picture really is: with more pictures open (each needs a bar and 200 px) it grows past the dragged height
+  let meetingActual = $state(0);
   let movingCards = $state(false);
   let sizingCards = $state(false);
   const MIN_CARDS = 70;
   const saveCards = () => {
     try { localStorage.setItem('libertad.cardsPos', cardsPos); localStorage.setItem('libertad.cardsHeight', String(cardsHeight)); } catch { /* storage unavailable */ }
   };
-  // Free room under the picture and the cards, down to the edge: the bottom of the stage when it fills its column (the voice
-  // screen and the docked chat, where the stage is always as tall as the column), else the bottom of the window.
-  // Negative when they already reach past it.
-  function roomBelow(): number {
+  // The cards' height as it is shown. cardsHeight is the size the user chose (and what is saved); when the picture is dragged
+  // down into the cards' room they shrink (down to MIN_CARDS) instead of being pushed out of the window, and grow back to
+  // cardsHeight when the picture is dragged up again. Only after that does dragging up pull the cards up with it.
+  let cardsShown = $state(cardsHeight);
+  // The room the picture and the cards share together: from where the first of them starts, down to the edge: the bottom of the
+  // stage when it fills its column (the voice screen and the docked chat, where the stage is always as tall as the column),
+  // else the bottom of the window. Where they start does not change when either is resized, so this stays the same while dragging.
+  function sharedRoom(): number {
     if (!stageEl) return 0;
-    const content = Math.max(...[meetingEl, cardsEl].map(e => e?.getBoundingClientRect().bottom ?? 0));
+    const tops = [meetingEl, cardsEl].filter((e): e is HTMLElement => !!e).map(e => e.getBoundingClientRect().top);
+    if (!tops.length) return 0;
     const edge = fill ? stageEl.getBoundingClientRect().bottom : window.innerHeight - 5;
-    return edge - content;
+    return edge - Math.min(...tops);
   }
-  // How tall the picture and the cards may be right now: no taller than what ends at the edge
-  const meetingRoom = () => Math.max(240, meetingHeight + roomBelow());
-  const cardsRoom = () => Math.max(MIN_CARDS, cardsHeight + roomBelow());
-  // A smaller window shows less of it
-  function fitCardsToWindow() {
+  // How tall the picture may be: the cards can give way down to their smallest size
+  const meetingRoom = () => Math.max(240, sharedRoom() - MIN_CARDS);
+  // The picture's height at which the cards are exactly as tall as they were given: dragging the picture's handle sticks here for a moment
+  const meetingSnap = () => sharedRoom() - cardsHeight;
+  // How tall the cards may be right now: what the picture leaves
+  const cardsRoom = () => Math.max(MIN_CARDS, sharedRoom() - Math.max(meetingHeight, meetingActual));
+  // The cards take the size they were given, less what the picture (or a smaller window) needs
+  function fitCards() {
     if (!meeting || !stageEl) return;
-    const room = cardsRoom();
-    if (cardsHeight > room) cardsHeight = room;
+    cardsShown = Math.round(Math.max(MIN_CARDS, Math.min(cardsHeight, sharedRoom() - Math.max(meetingHeight, meetingActual))));
   }
   $effect(() => {
     void meeting; void stackHeight; void collapsed;
-    const raf = requestAnimationFrame(fitCardsToWindow);
-    const onResize = () => fitCardsToWindow();
+    const raf = requestAnimationFrame(fitCards);
+    const onResize = () => fitCards();
     window.addEventListener('resize', onResize);
     return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); };
   });
@@ -295,7 +305,7 @@ const self = $derived(session.self);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
       saveCards();
-      fitCardsToWindow();
+      fitCards();
       setTimeout(() => { dragged = false; }, 0);
     };
     window.addEventListener('pointermove', move);
@@ -311,7 +321,7 @@ const self = $derived(session.self);
     handle.setPointerCapture(e.pointerId);
     sizingCards = true;
     document.body.style.userSelect = 'none';
-    const y0 = e.clientY, h0 = cardsHeight;
+    const y0 = e.clientY, h0 = cardsShown;
     const move = (ev: PointerEvent) => {
       const want = Math.max(MIN_CARDS, h0 + ev.clientY - y0);
       cardsHeight = Math.round(Math.min(want, cardsRoom()));
@@ -329,8 +339,8 @@ const self = $derived(session.self);
     handle.addEventListener('pointercancel', up);
   }
   function cardsKey(e: KeyboardEvent) {
-    if (e.key === 'ArrowDown') cardsHeight = Math.min(cardsHeight + 16, cardsRoom());
-    else if (e.key === 'ArrowUp') cardsHeight = Math.max(MIN_CARDS, cardsHeight - 16);
+    if (e.key === 'ArrowDown') cardsHeight = Math.min(cardsShown + 16, cardsRoom());
+    else if (e.key === 'ArrowUp') cardsHeight = Math.max(MIN_CARDS, cardsShown - 16);
     else return;
     e.preventDefault();
     saveCards();
@@ -372,6 +382,12 @@ const self = $derived(session.self);
 
   let folded = $state(load());
   const collapsed = $derived(folded && !fill);
+  // Runs as soon as it is declared, so it has to come after everything it reads (collapsed above all).
+  // Before the screen is drawn, so the cards give way in the same frame as the picture grows
+  $effect.pre(() => {
+    void meetingHeight; void meetingActual; void cardsHeight; void meeting; void collapsed; void cardsPos;
+    fitCards();
+  });
   function load(): boolean {
     try { return localStorage.getItem('libertad.stageCollapsed') === '1'; } catch { return false; }
   }
@@ -412,10 +428,63 @@ const self = $derived(session.self);
     } else if (session.sharing[session_] && session_ !== self?.session) {
       share.watch(sessions.active, session_);
     }
-    else if (session.watchTogether[session_] && session_ !== self?.session) watchTogether.join(session_);
-    // The host who left (not ended) goes back into their own session
-    else if (session_ === self?.session && watchTogether.isHost && watchTogether.hasActiveParty && !watchTogether.isWatching) watchTogether.join(session_);
+    // A card with only a watch together session: a click enters it, another leaves it (the host who left goes back into their own)
+    else if (session_ !== self?.session && session.watchTogether[session_]) openWatch(session_, true);
+    else if (session_ === self?.session && watchTogether.isHost && (watchTogether.isWatching || watchTogether.hasActiveParty)) openWatch(session_, true);
     else openProfile(session_, at ?? { x: window.innerWidth / 2, y: window.innerHeight / 3 });
+  }
+
+  // The share indicator of a tile: its screen is shown or closed, its camera enlarged or put back, or the stream is asked for
+  // The picture on the watch together half of our own tile (a YouTube video's preview picture; a file has none)
+  let wtThumb = $state<string | null>(null);
+  $effect(() => {
+    const id = watchTogether.mode === 1 && watchTogether.isHost ? watchTogether.currentVideo?.id : null;
+    if (!id || typeof desktop?.youtubeThumbnail !== 'function') { wtThumb = null; return; }
+    let alive = true;
+    desktop.youtubeThumbnail(id).then(url => { if (alive) wtThumb = url; }).catch(() => { if (alive) wtThumb = null; });
+    return () => { alive = false; };
+  });
+  // Brings the panel of a session into view once it is drawn (several are stacked one under the other)
+  function reveal(id: number) {
+    requestAnimationFrame(() => stageEl?.querySelector<HTMLElement>(`[data-spot="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  }
+  // When an indicator was last used: opening a session moves the cards, and the second click of a double click must not land on the tile under it
+  let badgeAt = 0;
+  // toggle: a click on a half of the tile also closes what is open (the indicators beside the name only open)
+  function openShare(id: number, toggle = false) {
+    badgeAt = Date.now();
+    // Your own indicator opens your own screen or camera, and only that one: it does not close it (the door on the panel does)
+    // and it does not touch the other sessions you host
+    if (self && id === self.session && streamOf(id)) {
+      if (session.sharing[id] === 'camera') focus = toggle && focus === id ? null : id;
+      else hidden[id] = toggle ? !hidden[id] : false;
+      if (inStack(id) || !toggle) reveal(id);
+      return;
+    }
+    if (streamOf(id) || (watchOf(id) && session.sharing[id] !== 'camera')) {
+      if (session.sharing[id] === 'camera') focus = focus === id ? null : id;
+      else hidden[id] = !hidden[id];
+    } else if (id !== self?.session) share.watch(sessions.active, id);
+  }
+  // The indicator next to your name in the channel list or the members list opens your own screen or camera here
+  $effect(() => {
+    const on = (e: Event) => { if (self) openShare((e as CustomEvent<number>).detail); };
+    window.addEventListener('libertad-open-share', on);
+    return () => window.removeEventListener('libertad-open-share', on);
+  });
+  // The watch together indicator: the session is joined, or shown or closed when we are in it already; the host goes back into their own
+  function openWatch(id: number, toggle = false) {
+    badgeAt = Date.now();
+    if (id === self?.session) {
+      if (watchTogether.isHost && watchTogether.hasActiveParty && !watchTogether.isWatching) watchTogether.join(id);
+      else if (toggle && inStack(WT)) watchTogether.leave();
+      else { hidden[WT] = false; watchTogether.focus(); reveal(WT); }
+    } else if (watchTogether.isWatching && watchTogether.party?.hostSession === id) {
+      if (!toggle) hidden[WT] = !hidden[WT];
+      else if (inStack(WT)) watchTogether.leave();
+      else hidden[WT] = false;
+    }
+    else watchTogether.join(id);
   }
 
   // Right-click on the picture
@@ -825,7 +894,7 @@ const self = $derived(session.self);
       <button use:tip class="icon-btn" title="Toggle picture-in-picture" aria-label="Toggle picture-in-picture" onclick={() => togglePip(id)}><Icon name="popout" size={16} /></button>
       <button use:tip class="icon-btn" title="Full screen" aria-label="Full screen" onclick={() => fullscreen(id)}><Icon name="expand" size={16} /></button>
     {/if}
-    {#if isWT || !isMine || open}
+    {#if isWT ? isWatchingTogether : (!isMine || open)}
       <button use:tip class="icon-btn" title={isWT ? 'Leave watch together' : isMine ? `Close your ${kind} (it keeps being shared)` : 'Stop watching'}
         aria-label={isWT ? 'Leave watch together' : isMine ? `Close your ${kind}` : 'Stop watching'} onclick={() => leave(id)}><Icon name="door" size={16} /></button>
     {/if}
@@ -842,7 +911,7 @@ const self = $derived(session.self);
   {@const kind = kindOf(id)}
   {@const w = isWT ? undefined : watchOf(id)}
   {#if self}
-    <div class="spot" class:fullscreen={fsId === id} class:yt={isWT && watchTogether.mode === 1} class:multi={stack.length > 1}
+    <div class="spot" data-spot={id} class:fullscreen={fsId === id} class:yt={isWT && watchTogether.mode === 1} class:multi={stack.length > 1}
       role="region" aria-label={isWT ? 'Watch together' : kind === 'camera' ? 'Camera' : 'Screen share'}>
       <!-- Several pictures: each has its own bar above it. One picture is served by the bar on top. -->
       {#if stack.length > 1 && fsId !== id}
@@ -899,15 +968,39 @@ const self = $derived(session.self);
           <!-- While a camera is shown large, its tile goes back to the avatar: one picture, not two -->
           {@const cam = focus === u.session ? null : camOf(u.session)}
           {@const w = watchOf(u.session)}
-          <button class="tile" class:dragging={movingCards} class:talking={talking(u.session)} class:self={isSelf} class:focused={inStack(u.session)}
+          <!-- Two sessions hosted (a screen and a watch together): the tile shows both, a half each, and each half opens or closes its own -->
+          {@const split = !cam && sharing === 'screen' && !!effectiveWatchTogether}
+          <button class="tile" class:split class:dragging={movingCards} class:talking={talking(u.session)} class:self={isSelf} class:focused={inStack(u.session)}
             onpointerdown={cardDrag}
-            onclick={e => { if (dragged) { e.preventDefault(); return; } tileClick(u.session, e.currentTarget); }}
+            onclick={e => { if (dragged || Date.now() - badgeAt < 600) { e.preventDefault(); return; } tileClick(u.session, e.currentTarget); }}
             oncontextmenu={e => menu.show(e, userMenu(u))}
-            title={stream ? (inStack(u.session) ? 'Hide the stream' : 'Show the stream') : sharing && !isSelf ? `Sharing their ${sharing}. Click to watch` : effectiveWatchTogether && !isSelf ? `Watching together: ${effectiveWatchTogether.title}. Click to join` : isSelf && hostWatchTogether ? `Hosting watch together: ${hostWatchTogether.title}` : store.displayName(u)}
+            title={stream ? (inStack(u.session) ? 'Hide the stream' : 'Show the stream') : sharing && !isSelf ? `Sharing their ${sharing}. Click to watch` : effectiveWatchTogether && !isSelf ? `Watching together: ${effectiveWatchTogether.title}. Click to ${inStack(WT) && watchTogether.party?.hostSession === u.session ? 'leave' : 'join'}` : isSelf && hostWatchTogether ? `Hosting watch together: ${hostWatchTogether.title}. Click to ${inStack(WT) ? 'leave' : 'enter'}` : store.displayName(u)}
             aria-label={stream ? `${inStack(u.session) ? 'Hide' : 'Show'} the ${sharing || 'stream'} of ${store.displayName(u)}` : sharing && !isSelf ? `Watch the ${sharing} of ${store.displayName(u)}` : effectiveWatchTogether && !isSelf ? `Join watch together: ${effectiveWatchTogether.title}` : isSelf && hostWatchTogether ? `Hosting watch together: ${hostWatchTogether.title}` : store.displayName(u)}>
             {#if cam}
               <!-- svelte-ignore a11y_media_has_caption -->
               <video class:mirror={isSelf && share.mirror} use:media={cam} autoplay playsinline muted></video>
+            {:else if split}
+              {@const scrFrame = session.frame(u.session)}
+              {@const scrOpen = inStack(u.session)}
+              {@const wtOpen = inStack(WT) && (isSelf || watchTogether.party?.hostSession === u.session)}
+              <span class="half left" class:off={!scrOpen} role="button" tabindex="0"
+                title={isSelf ? (scrOpen ? `Close your screen` : `Open your screen`) : scrOpen ? `Hide the screen of ${store.displayName(u)}` : `Watch the screen of ${store.displayName(u)}`}
+                aria-label={isSelf ? `Your screen` : `Screen of ${store.displayName(u)}`}
+                onclick={e => { e.stopPropagation(); if (dragged) return; openShare(u.session, true); }}
+                onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openShare(u.session, true); } }}>
+                {#if scrFrame}<img src={scrFrame} alt="" draggable="false" />{/if}
+                <span class="half-ico"><Icon name="screen" size={16} /></span>
+              </span>
+              <span class="half right" class:off={!wtOpen} role="button" tabindex="0"
+                title={isSelf ? (wtOpen ? `Close your watch together` : `Open your watch together`) : wtOpen ? `Hide watch together: ${effectiveWatchTogether.title}` : `Join watch together: ${effectiveWatchTogether.title}`}
+                aria-label={isSelf ? `Your watch together` : `Watch together of ${store.displayName(u)}`}
+                onclick={e => { e.stopPropagation(); if (dragged) return; openWatch(u.session, true); }}
+                onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openWatch(u.session, true); } }}>
+                {#if isSelf && wtThumb}<img src={wtThumb} alt="" draggable="false" />{/if}
+                <span class="half-ico"><Icon name="watch" size={16} /><em>{effectiveWatchTogether.title}</em></span>
+              </span>
+              <span class="split-line" aria-hidden="true"></span>
+              <Avatar name={u.name} size={avatar} speaking={talking(u.session)} src={session.avatar(u.session)} />
             {:else}
               <!-- Hosting: a frame of the share or the watch together session instead of the avatar -->
               {@const frame = sharing === 'screen' || (isSelf && !!mine && share.kind === 'screen') || effectiveWatchTogether ? session.frame(u.session) : null}
@@ -921,8 +1014,22 @@ const self = $derived(session.self);
             {#if w && w.state !== 'live'}
               <span class="note">{w.state === 'connecting' ? 'Connecting...' : 'Could not connect'}</span>
             {/if}
-            {#if sharing}<span class="badge live"><Icon name={sharing} size={13} /></span>
-            {:else if effectiveWatchTogether}<span class="badge live"><Icon name="watch" size={13} /></span>
+            {#if sharing || effectiveWatchTogether}
+              <!-- Each indicator opens its own session (a button cannot sit inside the tile's button) -->
+              <span class="badges">
+                {#if sharing}
+                  <span class="badge live click" role="button" tabindex="0" title={isSelf ? `Your ${sharing}` : `Sharing their ${sharing}. Click to watch`} aria-label={isSelf ? `Your ${sharing}` : `Watch the ${sharing} of ${store.displayName(u)}`}
+                    onpointerdown={e => e.stopPropagation()}
+                    onclick={e => { e.stopPropagation(); if (dragged) return; openShare(u.session); }}
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openShare(u.session); } }}><Icon name={sharing} size={13} /></span>
+                {/if}
+                {#if effectiveWatchTogether}
+                  <span class="badge live click" role="button" tabindex="0" title={isSelf ? `Hosting watch together: ${effectiveWatchTogether.title}` : `Watching together: ${effectiveWatchTogether.title}. Click to join`} aria-label={isSelf ? `Hosting watch together: ${effectiveWatchTogether.title}` : `Join watch together: ${effectiveWatchTogether.title}`}
+                    onpointerdown={e => e.stopPropagation()}
+                    onclick={e => { e.stopPropagation(); if (dragged) return; openWatch(u.session); }}
+                    onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openWatch(u.session); } }}><Icon name="watch" size={13} /></span>
+                {/if}
+              </span>
             {:else if u.deaf || u.selfDeaf}
               <span class="badge" class:admin={u.deaf}><Icon name="headphones-off" size={13} /></span>
             {:else if u.mute || u.selfMute || u.suppress}
@@ -952,7 +1059,7 @@ const self = $derived(session.self);
           </span>
         {/if}
       </button>
-      {#each barIds as id (id)}{@render controls(id)}{/each}
+      {#each barIds as id, i (id)}{#if i > 0}<span class="gsep" aria-hidden="true"></span>{/if}{@render controls(id)}{/each}
     </header>
     {#if !collapsed && !fill && !(meeting && popped)}
       {#if !meeting}
@@ -963,11 +1070,11 @@ const self = $derived(session.self);
 
     {#if meeting}
       <!-- Meeting view: the panels + their resize handle as a unit, separate from tiles -->
-      <div class="meeting-view" bind:this={meetingEl} style:height="{stackHeight}px">
+      <div class="meeting-view" bind:this={meetingEl} bind:clientHeight={meetingActual} style:height="{stackHeight}px">
         <div class="panels" class:multi={stack.length > 1}>
           {#each stack as id (id)}{@render spot(id)}{/each}
         </div>
-        <ResizeHandle inline bind:width={meetingHeight} edge="bottom" min={240} max={meetingRoom} initial={460} storageKey="libertad.stageHeightMeeting" label="Resize the meeting view" />
+        <ResizeHandle inline bind:width={meetingHeight} edge="bottom" min={240} max={meetingRoom} snap={meetingSnap} initial={460} storageKey="libertad.stageHeightMeeting" label="Resize the meeting view" />
       </div>
     {/if}
 
@@ -976,11 +1083,11 @@ const self = $derived(session.self);
     {#if !collapsed}
       {#if meeting}
         <!-- The cards fill the room above or under the picture. Always the same place in the markup (the order is CSS), so a card dragged across the picture keeps being the same element -->
-        <div class="cards" bind:this={cardsEl} class:above={cardsPos === 'above'} style:height="{cardsHeight}px">
+        <div class="cards" bind:this={cardsEl} class:above={cardsPos === 'above'} style:height="{cardsShown}px">
           {@render tiles()}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-          <div class="cards-resize" class:active={sizingCards} role="separator" aria-orientation="horizontal" aria-label="Resize the cards" aria-valuenow={cardsHeight} tabindex="0"
-            title="Drag down to make the cards taller, double-click to reset" onpointerdown={sizeCards} ondblclick={() => { cardsHeight = Math.min(150, cardsRoom()); saveCards(); }} onkeydown={cardsKey}></div>
+          <div class="cards-resize" class:active={sizingCards} role="separator" aria-orientation="horizontal" aria-label="Resize the cards" aria-valuenow={cardsShown} tabindex="0"
+            title="Drag down to make the cards taller, double-click to reset" onpointerdown={sizeCards} ondblclick={() => { cardsHeight = 150; saveCards(); }} onkeydown={cardsKey}></div>
         </div>
       {:else}
         {@render tiles()}
@@ -1032,6 +1139,19 @@ const self = $derived(session.self);
   /* Hosting: the share / watch together frame fills the whole tile, half blurred, behind the avatar and tags.
      The scale hides the soft edges the blur leaves. */
   .tile :global(.card-bg) { position: absolute; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; pointer-events: none; }
+  /* A tile with two sessions: the screen on the left half, the watch together on the right */
+  .half { position: absolute; top: 0; bottom: 0; width: 50%; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; box-sizing: border-box; overflow: hidden; cursor: pointer; background: #000; }
+  .tile.split :global(.avatar) { z-index: 2; }
+  .half.left { left: 0; }
+  .half.right { right: 0; }
+  /* One still frame per half, blurred like the frame on a hosting tile */
+  .half img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(5px); transform: scale(1.05); pointer-events: none; }
+  .half.off img { filter: blur(5px) grayscale(0.7) brightness(0.55); }
+  .half:hover::after, .half:focus-visible::after { content: ''; position: absolute; inset: 0; background: rgb(255 255 255 / 0.1); }
+  .half:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .half-ico { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; max-width: calc(100% - 12px); padding: 4px 8px; color: #fff; background: rgb(0 0 0 / 0.55); pointer-events: none; }
+  .half-ico em { max-width: 100%; font-style: normal; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .split-line { position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: #000; z-index: 1; pointer-events: none; }
   .tile .frame-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(5px); transform: scale(1.05); pointer-events: none; }
   .tile :global(.avatar) { position: relative; }
   /* Name tag over the lower left corner */
@@ -1042,6 +1162,13 @@ const self = $derived(session.self);
   .badge { position: absolute; top: 4px; right: 4px; display: inline-flex; padding: 2px; color: #fff; background: rgb(0 0 0 / 0.6); }
   .badge.admin { color: var(--danger); }
   .badge.live { color: var(--speaking); }
+  .badges { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; z-index: 2; }
+  .badges .badge { position: static; }
+  .badges .badge.click { position: relative; }
+  .badge.click { cursor: pointer; position: relative; }
+  /* The click area reaches past the small icon, so a click next to it does not open the profile card of the tile */
+  .badge.click::after { content: ''; position: absolute; inset: -8px -2px; }
+  .badge.click:hover { background: rgb(0 0 0 / 0.85); }
   .host-tag { position: absolute; top: 4px; left: 4px; padding: 1px 5px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; background: var(--accent); color: var(--accent-text); }
   .failed { flex: none; margin: 0; padding: 0 12px 8px; font-size: 12px; color: var(--danger); }
 
@@ -1051,6 +1178,8 @@ const self = $derived(session.self);
   .bar .btn { padding: 4px 10px; font-size: 12px; flex: none; }
   .viewers { position: relative; display: inline-flex; align-items: center; outline: none; }
   .viewers .status { cursor: default; }
+  /* Between the control groups of two sessions in the bar on top: a little wider than the one inside a group, with room on both sides */
+  .gsep { width: 2px; height: 18px; margin: 0 10px 0 6px; background: var(--line-strong, var(--line)); flex: none; }
   .vsep { width: 1px; height: 14px; margin: 0 6px 0 2px; background: var(--line); flex: none; }
   .pop { display: none; position: absolute; left: 100%; top: 50%; transform: translateY(-50%); margin-left: 8px; z-index: 30; flex-direction: column; gap: 6px; padding: 8px 10px; min-width: 140px; max-height: 260px; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.4); }
   .viewers:hover .pop, .viewers:focus-visible .pop, .viewers:focus-within .pop { display: flex; }
@@ -1086,8 +1215,10 @@ const self = $derived(session.self);
   .meeting-view .pic { contain: size; min-height: 200px; }
   /* Several panels one under the other, sharing the view's height */
   .panels { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .panels.multi { gap: 2px; }
+  /* Several panels: the view is never smaller than all of them need (a bar and 200 px of picture each). Otherwise their pictures
+     spill over the next panel's bar and the handle sits in the middle of them; the view grows instead, the handle on its bottom edge */
+  .panels.multi { gap: 2px; min-height: min-content; }
   /* Each of several panels takes an equal share of the view */
-  .spot.multi { flex: 1 1 0 !important; min-height: 0; }
+  .spot.multi { flex: 1 1 0 !important; min-height: min-content; }
   .spot-bar { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: 32px; padding: 0 8px; background: var(--bg-1); }
 </style>

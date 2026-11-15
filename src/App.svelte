@@ -44,7 +44,8 @@
   import { onMount } from 'svelte';
 
   // Connect on start: once per launch, back to the server and channel you were last in
-  onMount(() => { if (store.settings.connectOnStart) sessions.restoreLast(); });
+  // (not when the page was only woken up after sleeping in the tray: that is not a launch)
+  onMount(() => { if (store.settings.connectOnStart && location.hash !== '#woke') sessions.restoreLast(); });
 
   let width = $state(window.innerWidth);
   // wide: rail + sidebar + chat + panel; medium: panel as an overlay; narrow: everything but chat in drawers
@@ -184,6 +185,9 @@
 {/snippet}
 
 <TitleBar />
+<!-- Hidden window (Settings > System > Throttle when hidden): nothing of the main view is kept, so its pictures, GIFs, videos
+     and blurred layers are freed. Dialogs below stay, so nothing open in them is lost. The session carries on in the background. -->
+{#if !ui.hidden}
 {#if store.settings.interface === 'rooms'}
 <div class="framed"><Shell onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} /></div>
 {:else}
@@ -217,6 +221,7 @@
     {/if}
   {/if}
 </div>
+{/if}
 {/if}
 
 {#if editing}<ConnectDialog server={editing.server} onclose={() => (editing = null)} />{/if}

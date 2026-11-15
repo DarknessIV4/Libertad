@@ -297,8 +297,14 @@ class Sounds {
     const now = performance.now();
     if (!force && now - (this.lastPlayed.get(ev) ?? 0) < 150) return;
     this.lastPlayed.set(ev, now);
+    type El = HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+    let el: El | null = null;
+    // A finished (or failed) element lets go of its decoder and source
+    const release = () => { if (!el) return; const e = el; el = null; e.onended = e.onerror = null; try { e.pause(); e.removeAttribute('src'); e.load(); } catch { /* gone */ } };
     try {
-      const el = new Audio(await this.source(ev)) as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+      el = new Audio(await this.source(ev)) as El;
+      el.onended = release;
+      el.onerror = release;
       el.volume = Math.max(0, Math.min(1, this.settings.volume));
       const sink = voice.settings.outputDevice;
       if (sink && sink !== 'default' && el.setSinkId) await el.setSinkId(sink).catch(() => {});
@@ -308,6 +314,7 @@ class Sounds {
       log.push(ev);
       if (log.length > 50) log.shift();
     } catch (e) {
+      release();
       // Shown in the Sounds settings, so a broken file does not fail silently
       const msg = `${SOUND_EVENTS.find(x => x.id === ev)?.name}: ${(e as Error).message}`;
       if (!this.errors.includes(msg)) this.errors = [...this.errors.slice(-4), msg];

@@ -48,6 +48,8 @@
   let hwStarted = $state(true);
   let hwError = $state('');
   let autoUpdate = $state(true);
+  let throttle = $state(true);
+  let throttleError = $state('');
   let updBusy = $state(false);
   let updMsg = $state('');
   async function setAutoUpdate() {
@@ -70,12 +72,17 @@
   let startupError = $state('');
   $effect(() => { if (tab === 'system') yt.refresh(); });
   $effect(() => {
-    if (tab === 'system' && desktop) desktop.system.get().then(i => { hwAccel = hwStarted = i.hardwareAcceleration; autoUpdate = i.autoUpdate; startup = i.launchOnStartup; }).catch(() => {});
+    if (tab === 'system' && desktop) desktop.system.get().then(i => { hwAccel = hwStarted = i.hardwareAcceleration; autoUpdate = i.autoUpdate; throttle = i.throttleWhenHidden; startup = i.launchOnStartup; }).catch(() => {});
   });
   async function setStartup() {
     startupError = '';
     try { await desktop!.system.setLaunchOnStartup(startup); }
     catch (e) { startup = !startup; startupError = `Could not save: ${(e as Error).message}`; }
+  }
+  async function setThrottle() {
+    throttleError = '';
+    try { await desktop!.system.setThrottleWhenHidden(throttle); }
+    catch (e) { throttle = !throttle; throttleError = `Could not save: ${(e as Error).message}`; }
   }
   async function setHwAccel() {
     hwError = '';
@@ -190,6 +197,11 @@
       </div>
     {/if}
     {#if hwError}<p class="help warn">{hwError}</p>{/if}
+    {#if desktop}
+      <label class="check"><input type="checkbox" bind:checked={throttle} onchange={setThrottle} /> Throttle when hidden</label>
+      <p class="help">While Libertad is minimized or hidden to the tray, it stops drawing the app and frees the pictures, GIFs and videos it held, which takes a good part of the memory it uses. Voice, the connection, chat messages and other people's profile changes carry on, and files that others send are not downloaded (even under the automatic download limit) until the window is back. Audio of shared streams and Watch Together pauses meanwhile. Applies at once.</p>
+      {#if throttleError}<p class="help warn">{throttleError}</p>{/if}
+    {/if}
     {#if desktop}
       <label class="check"><input type="checkbox" bind:checked={startup} onchange={setStartup} /> Run on system startup</label>
       <p class="help">Starts Libertad when you sign in to your computer.</p>

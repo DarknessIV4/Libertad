@@ -17,13 +17,18 @@ let tray: Tray | null = null;
 let state: TrayState | null = null;
 let closeToTray = true;
 let quitting = false;
+const images = new Map<string, Electron.NativeImage>();
+let shownIcon = '';
+let shownTip = '';
+let menuKey = '';
 const prefsFile = () => path.join(app.getPath('userData'), 'tray.json');
 
-export async function setupTray(getWindow: () => BrowserWindow | null, send: (action: string) => void): Promise<void> {
+// `revive` makes the window again when the app let it go to save memory (only asked for when the person wants it back)
+export async function setupTray(getWindow: () => BrowserWindow | null, send: (action: string) => void, revive?: () => BrowserWindow | null): Promise<void> {
   try { closeToTray = JSON.parse(await fs.readFile(prefsFile(), 'utf8')).closeToTray !== false; } catch { /* defaults */ }
 
   const show = () => {
-    const win = getWindow();
+    const win = getWindow() ?? revive?.() ?? null;
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.show();
@@ -63,6 +68,7 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
       { label: 'Quit Libertad', click: () => { quitting = true; app.quit(); } }
     ]);
     tray.setContextMenu(menu);
+    menuKey = [s.connected, s.server, s.muted, s.deafened, s.mode].join('|');
     // Inspection hook for the end-to-end tests (tray menus cannot be clicked by automation)
     (globalThis as any).__libertadTray = {
       state: { ...s, icon: s.icon.slice(0, 22) },
@@ -77,7 +83,17 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
   // Called for every state change from the renderer
   update = (next: TrayState) => {
     state = next;
-    const image = nativeImage.createFromDataURL(next.icon);
+    // The same picture is decoded once, and the icon, tooltip and menu are only touched when they differ
+    let image = images.get(next.icon);
+    if (!image) {
+      image = nativeImage.createFromDataURL(next.icon);
+      if (images.size >= 16) images.clear();
+      images.set(next.icon, image);
+    }
+    const iconChanged = next.icon !== shownIcon;
+    const tipChanged = next.tooltip !== shownTip;
+    shownIcon = next.icon;
+    shownTip = next.tooltip;
     if (!tray) {
       tray = new Tray(image);
       // Click on the icon: hide the window if it is showing, else bring it back
@@ -85,11 +101,16 @@ export async function setupTray(getWindow: () => BrowserWindow | null, send: (ac
         const win = getWindow();
         if (win && win.isVisible() && !win.isMinimized()) win.hide(); else show();
       });
-    } else {
+    } else if (iconChanged) {
       tray.setImage(image);
     }
-    tray.setToolTip(next.tooltip);
-    rebuild();
+    if (tipChanged) tray.setToolTip(next.tooltip);
+    const key = [next.connected, next.server, next.muted, next.deafened, next.mode].join('|');
+    if (key !== menuKey) rebuild();
+    else {
+      const hook = (globalThis as any).__libertadTray;
+      if (hook) { hook.state = { ...next, icon: next.icon.slice(0, 22) }; hook.tooltip = next.tooltip; }
+    }
   };
 
   // Keep the menu right (the Linux Show item follows the window)

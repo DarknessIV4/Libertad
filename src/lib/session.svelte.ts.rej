@@ -1,0 +1,34 @@
+--- src/lib/session.svelte.ts	2026-11-14 12:20:54.000000000 +0000
++++ src/lib/session.svelte.ts	2026-11-14 15:06:04.113803036 +0000
+@@ -16,6 +16,7 @@
+ import { parseBanner, withBanners, stripBanner, dataMime, bannerSignature, SLOTS, isVideoMime, type Banner, type BannerView, type Slot } from '../core/banner.ts';
+ import type { FileMeta } from '../core/file-transfer.ts';
+ import { files, fileKind } from './files.svelte.ts';
++import { ui } from './ui.svelte.ts';
+ import { announce, isPiece } from '../core/file-transfer.ts';
+ import { voice } from './audio/voice.svelte.ts';
+ import { sounds } from './audio/sounds.svelte.ts';
+@@ -458,6 +459,9 @@
+           }
+         }
+       }
++      // Profiles are asked for when a tile or card is drawn; a hidden window draws none. So keep the direct channels
++      // to the people in our channel open meanwhile, which is how their new avatar, banner or card reaches us.
++      if (ui.hidden && client.synced && (isNew || changed.includes('channelId'))) this.warmProfiles();
+       bump();
+     });
+ 
+@@ -618,6 +622,13 @@
+     return media(this.profiles[session]?.avatar ?? null);
+   }
+ 
++  // Opens the profile channel to everybody in our channel (what drawing their tiles would do), for the hidden window
++  private warmProfiles(): void {
++    const client = this.client, self = client?.self;
++    if (!client || !self) return;
++    for (const u of client.users.values()) if (u.session !== self.session && u.channelId === self.channelId) this.ensureProfile(u);
++  }
++
+   // The frame of what someone hosts, for their tile
+   frame(session: number): string | null {
+     return this.frames[session] ?? null;

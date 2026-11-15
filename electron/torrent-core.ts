@@ -24,6 +24,7 @@ export interface WtFile {
 }
 export interface WtTorrent {
   infoHash: string; name: string; ready: boolean; torrentFile?: Uint8Array; private?: boolean; files: WtFile[]; announce: string[];
+  wires?: { removeAllListeners(ev: string): unknown; destroy(): void }[];
   numPeers: number; downloadSpeed: number; uploadSpeed: number; downloaded: number;
   once(ev: string, fn: (...a: any[]) => void): void;
   destroy(opts?: { destroyStore?: boolean }, cb?: () => void): void;
@@ -32,6 +33,12 @@ export interface WtClient {
   add(id: string | Uint8Array, opts: object): WtTorrent;
   on(ev: string, fn: (...a: any[]) => void): void;
   destroy(cb?: () => void): void;
+}
+// WebTorrent empties the torrent's store on destroy, but a peer request that is already buffered
+// is still handled afterwards and crashes with "Cannot read properties of null (reading 'get')".
+// Stop listening to the peers before destroying.
+export function silencePeers(t: WtTorrent) {
+  for (const w of t.wires ?? []) { try { w.removeAllListeners('request'); w.destroy(); } catch { /* already gone */ } }
 }
 export type WtConstructor = new (opts?: object) => WtClient;
 
@@ -136,7 +143,25 @@ export function createTorrentEngine(opts: EngineOptions) {
   const scans = new Map<string, { cancel(): void }>();
   const heads = new Map<string, Promise<{ head: MkvHead; tracks: EmbeddedTrack[]; codecs: Map<number, string> } | null>>();
 
+  // With no torrent left the client (DHT, tracker and peer sockets, buffers) only costs memory: close it after a quiet minute.
+  // The next torrent makes a new one.
+  let idle: ReturnType<typeof setTimeout> | null = null;
+  let closing: Promise<void> = Promise.resolve();
+  function armIdle() {
+    if (idle || !clientP) return;
+    idle = setTimeout(() => {
+      idle = null;
+      if (torrents.size || !clientP) return;
+      const p = clientP;
+      clientP = null;
+      closing = p.then(c => new Promise<void>(res => c.destroy(() => res())), () => {}).catch(() => {});
+    }, 60000);
+    idle.unref?.();
+  }
+
   async function getClient(): Promise<WtClient> {
+    if (idle) { clearTimeout(idle); idle = null; }
+    await closing;
     clientP ??= (async () => {
       // The name is not a literal, so a bundler leaves it alone and Node loads the package at run time
       const spec = 'webtorrent';
@@ -174,7 +199,8 @@ export function createTorrentEngine(opts: EngineOptions) {
     for (const k of heads.keys()) if (k.startsWith(`${entry.t.infoHash}:`)) heads.delete(k);
     for (const [k, v] of torrents) if (v === entry) torrents.delete(k);
     opts.transcoder?.release(`${entry.t.infoHash}:`);
-    try { entry.t.destroy({ destroyStore: !keepFiles }); } catch { /* already gone */ }
+    try { silencePeers(entry.t); entry.t.destroy({ destroyStore: !keepFiles }); } catch { /* already gone */ }
+    if (!torrents.size) armIdle();
   }
 
   // Waits for the torrent's metadata. Fails, and forgets the torrent, when nobody answers in time
@@ -222,7 +248,7 @@ export function createTorrentEngine(opts: EngineOptions) {
           };
           // Let go of the old one first (its files are closed when the callback runs), then add it again
           setTimeout(go, 3000);
-          try { cur.destroy({ destroyStore: false }, go); } catch { go(); }
+          try { silencePeers(cur); cur.destroy({ destroyStore: false }, go); } catch { go(); }
         }, STALL_MS);
       }
     });
@@ -266,7 +292,7 @@ export function createTorrentEngine(opts: EngineOptions) {
         } catch { finish(); }
       };
       setTimeout(go, 3000);
-      try { old.destroy({ destroyStore: false }, go); } catch { go(); }
+      try { silencePeers(old); old.destroy({ destroyStore: false }, go); } catch { go(); }
     });
   }
 
@@ -543,6 +569,8 @@ export function createTorrentEngine(opts: EngineOptions) {
   }
 
   async function shutdown() {
+    if (idle) { clearTimeout(idle); idle = null; }
+    await closing;
     const client = clientP ? await clientP.catch(() => null) : null;
     const server = serverP ? await serverP.catch(() => null) : null;
     await opts.transcoder?.shutdown().catch(() => {});

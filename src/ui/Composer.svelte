@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { drafts } from '../lib/drafts.ts';
   import Icon from './Icon.svelte';
   import FormatToolbar from './FormatToolbar.svelte';
   import GifPicker from './GifPicker.svelte';
@@ -195,6 +197,20 @@
     };
   }
 
+  // Back from a hidden window: what was typed when the view was taken down
+  onMount(() => {
+    const draft = drafts.take(target);
+    if (!draft) return;
+    input.innerHTML = draft;
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    sync();
+  });
+
   $effect(() => {
     void target;
     if (autofocus && !disabled && matchMedia('(pointer: fine)').matches) input.focus();
@@ -251,7 +267,7 @@
         onchange={() => { session.sendFiles([...(picker.files ?? [])], target); picker.value = ''; }} />
       <input bind:this={imagePicker} type="file" accept="image/*" hidden
         onchange={() => { session.sendFiles([...(imagePicker.files ?? [])], target); imagePicker.value = ''; }} />
-      <div class="input" class:blank={empty} bind:this={input} contenteditable={!disabled}
+      <div class="input" class:blank={empty} bind:this={input} data-draft={target} contenteditable={!disabled}
         role="textbox" aria-multiline="true" aria-label="Message" tabindex="0" data-placeholder={placeholder}
         oninput={sync} onkeyup={sync} onmouseup={sync} {onkeydown} {onpaste}></div>
       <button class="icon-btn gif-btn" title="GIFs" aria-label="GIFs" aria-expanded={gifOpen} {disabled}

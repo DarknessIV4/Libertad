@@ -49,6 +49,9 @@ class Ui {
   profile = $state<{ session: number; anchor: { left: number; top: number; right: number; bottom: number }; el?: Element } | null>(null);
   // Set when a panel was opened on a layout where it is an overlay
   panelOpen = $state(false);
+  // The window is hidden or minimized and Settings > System > Throttle when hidden is on: the main view is not
+  // drawn, files are not fetched by themselves. Voice, chat and profiles carry on (see lib/background.ts)
+  hidden = $state(false);
 }
 
 export const ui = new Ui();

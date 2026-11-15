@@ -701,7 +701,9 @@ class ScreenShare {
     switch (msg.type) {
       case SHARE.on:
         if (!s.sharing[sender] && this.inMyChannel(s, sender) && Date.now() - (this.enteredAt.get(s) ?? 0) > 3000) sounds.play('shareStarted');
-        s.setSharing(sender, msg.text === 'camera' ? 'camera' : 'screen');
+        // Only a kind we know shows an indicator; anything else (a watch together host, an unknown client) shows none
+        if (msg.text !== 'camera' && msg.text !== 'screen') break;
+        s.setSharing(sender, msg.text);
         this.autoWatch(s, sender);
         break;
       case SHARE.off:
@@ -755,7 +757,13 @@ class ScreenShare {
     this.enteredAt.set(s, Date.now());
     for (const w of this.watches) if (w.host === s && w.auto && !this.inMyChannel(s, w.session)) this.unwatch(w.session);
     if (this.host === s) this.announce(s);
-    for (const session of Object.keys(s.sharing)) if (Number(session) !== s.client?.session) this.autoWatch(s, Number(session));
+    // What others share is asked for again: an indicator that is no longer true (a sharer who stopped while we could not
+    // hear it) goes, and the ones that are come back with the answers
+    const mine = s.client?.session;
+    const known = Object.keys(s.sharing).map(Number).filter(id => id !== mine);
+    for (const id of known) s.setSharing(id, false);
+    if (this.host === s && mine != null) s.setSharing(mine, this.kind);
+    this.send(s, this.everyone(s), SHARE.who);
   }
 
   // Someone else connected, moved or left

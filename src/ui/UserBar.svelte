@@ -19,8 +19,8 @@
   const muted = $derived(self ? self.selfMute : sessions.mute);
   const deafened = $derived(self ? self.selfDeaf : sessions.deaf);
 
-  // One session at a time (a screen, a camera or a watch together, on one server): its button stops it from
-  // anywhere, and opening another of the three ends the first when the new one starts.
+  // A screen or a camera can run beside a YouTube or torrent watch together (not beside one streamed from a file,
+  // which replaces it). Each button stops its own from anywhere.
   const hostingWatch = $derived(watchTogether.isHostWithParty);
   const screenOn = $derived(!!share.stream && share.kind === 'screen');
   const cameraOn = $derived(!!share.stream && share.kind === 'camera');

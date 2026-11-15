@@ -19,7 +19,9 @@ import { desktop, type FileBegin } from './native.ts';
 import { formatBytes } from './html.ts';
 import { setRateLimits } from '../core/client.ts';
 import { store } from './settings.svelte.ts';
+import { ui } from './ui.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
+import { stills } from './still.svelte.ts';
 
 export interface Transfer {
   state: 'idle' | 'finding' | 'loading' | 'ready' | 'failed';
@@ -169,6 +171,36 @@ class Files {
   // sent through the server, and not asked about there
   p2pOnly = new Set<string>();
 
+  // Files other people's profiles show, counted per holder. The last one to let go frees the bytes and the object URL.
+  private holds = new Map<string, number>();
+  hold(id: string): void { this.holds.set(id, (this.holds.get(id) ?? 0) + 1); }
+  release(id: string): void {
+    const n = (this.holds.get(id) ?? 0) - 1;
+    if (n > 0) { this.holds.set(id, n); return; }
+    this.holds.delete(id);
+    this.drop(id);
+  }
+
+  // Lets go of the copy this run holds in memory (the Blob and its object URL, which pins it). What was kept in storage
+  // stays, so a card that is drawn again gets the file back through check().
+  private drop(id: string): void {
+    const t = this.transfers[id];
+    if (!t || t.state !== 'ready' || this.downloads.has(id) || this.choosing.has(id) || t.sending) return;
+    if (t.url) { URL.revokeObjectURL(t.url); stills.forget(t.url); }
+    this.local.delete(id);
+    this.checked.delete(id);
+    delete this.transfers[id];
+  }
+
+  // The window is hidden and its view taken down: the pictures and videos it showed are let go of, but only those that are
+  // safely in storage (so they can come back) and not held by a profile
+  suspend(): void {
+    const stored = new Set((this.index ?? []).map(k => k.i));
+    for (const id of Object.keys(this.transfers)) {
+      if (!this.holds.has(id) && stored.has(id) && this.transfers[id]?.url) this.drop(id);
+    }
+  }
+
   // The direct channel to this person: made when missing, and used for their profile
   profileLink(s: Session, peer: number): void {
     void this.runtime(s).p2p.connect(peer, 'bprofile');
@@ -315,8 +347,23 @@ class Files {
 
   // ─── Downloading ────────────────────────────────────────────────────────────
 
+  // Files announced while the window was hidden: nothing is fetched then, whatever the size limit says
+  private deferred: { s: Session; meta: FileMeta; author: number | null }[] = [];
+
+  // The window is back: what was announced meanwhile goes through the usual rule now
+  resume(): void {
+    const list = this.deferred;
+    this.deferred = [];
+    for (const d of list) if (d.s.client) this.offered(d.s, d.meta, d.author);
+  }
+
   // A file was announced live: fetch it right away when it is small enough
   offered(s: Session, meta: FileMeta, author: number | null): void {
+    if (ui.hidden) {
+      // The message is in the chat already; the card shows when the window is back. Past the cap the rest wait for a click.
+      if (this.deferred.length < 200 && !this.deferred.some(d => d.meta.i === meta.i)) this.deferred.push({ s, meta, author });
+      return;
+    }
     const limit = store.settings.autoDownload * 1024 * 1024;
     this.check(meta).then(() => {
       const t = this.transfers[meta.i];

@@ -2,8 +2,10 @@ import { registerFileStore } from './filestore.ts';
 import { registerTorrent } from './torrent.ts';
 import { registerProfiles } from './profiles.ts';
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, shell, session, systemPreferences, type WebContents } from 'electron';
-import { promises as fs, readFileSync, existsSync, readdirSync, cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { promises as fs, createReadStream, readFileSync, existsSync, readdirSync, cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { IdentityStore } from './identity-store.ts';
@@ -39,9 +41,20 @@ function serveDist(): Promise<string> {
       const rel = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
       const file = path.resolve(root, '.' + (rel === '/' ? '/index.html' : rel));
       if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
-      const body = await fs.readFile(file);
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream' }).end(body);
-    } catch { res.writeHead(404).end(); }
+      const st = await fs.stat(file);
+      if (!st.isFile()) { res.writeHead(404).end(); return; }
+      // Streamed, so a big file (the speech models, the wasm) is not read into the main process whole; the hashed build files never change
+      res.writeHead(200, {
+        'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
+        'Content-Length': st.size,
+        'Cache-Control': rel.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'
+      });
+      if (req.method === 'HEAD') { res.end(); return; }
+      const stream = createReadStream(file);
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+    } catch { if (!res.headersSent) res.writeHead(404).end(); else res.destroy(); }
   });
   const listen = (port: number) => new Promise<string>((resolve, reject) => {
     server.once('error', reject);
@@ -57,6 +70,12 @@ function serveDist(): Promise<string> {
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 // Lets the page list and switch the audio tracks of a video (the voice-over menu of Torrent Together)
 app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
+// Timers and process priority stay at full speed in the background through these switches, not through
+// backgroundThrottling:false. That option also stops Chromium from ever marking the page hidden, so the compositor and
+// the GPU process keep every tile and texture of a window nobody sees (the "Throttle when hidden" saving never happened).
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 // Libertad used to be called mumh5, and its data folder was named after it. On the first start with the new
 // name, copy what is in the old folder (identities, kept files, settings) into the new one. Each top-level
@@ -81,7 +100,7 @@ app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
 // System settings live in a file of their own: Chromium decides about the graphics card before
 // the window exists, long before the page (and its localStorage) can be asked.
 const systemFile = path.join(app.getPath('userData'), 'system.json');
-const readSystem = (): { hardwareAcceleration?: boolean; autoUpdate?: boolean } => {
+const readSystem = (): { hardwareAcceleration?: boolean; autoUpdate?: boolean; throttleWhenHidden?: boolean; deepSleep?: boolean } => {
   try { return JSON.parse(readFileSync(systemFile, 'utf8')); } catch { return {}; }
 };
 const hardwareAcceleration = readSystem().hardwareAcceleration !== false;
@@ -113,7 +132,124 @@ async function setLaunchOnStartup(on: boolean): Promise<void> {
     `Exec=${exec}`, 'Icon=Libertad', 'Terminal=false', 'X-GNOME-Autostart-enabled=true', ''
   ].join('\n'));
 }
-ipcMain.handle('system:get', () => ({ hardwareAcceleration, autoUpdate: readSystem().autoUpdate !== false, launchOnStartup: launchOnStartup(), platform: process.platform }));
+// While the window is hidden (to the tray, or minimized) the page stops drawing and fetching, and keeps only what the
+// connection needs (voice, chat, profiles). Unlike the settings above this takes effect at once, no restart.
+let throttleWhenHidden = readSystem().throttleWhenHidden !== false;
+let pageHidden = false;
+// Whether each window is out of sight, from the events themselves: asking isVisible() inside a 'hide' handler can still
+// answer true on some Linux desktops, which would leave the page drawing.
+const gone = new WeakMap<BrowserWindow, boolean>();
+const trackVisibility = (w: BrowserWindow, onChange: (why: string) => void) => {
+  const on = (why: string, away: boolean) => w.on(why as 'show', () => { gone.set(w, away); onChange(why); });
+  on('show', false); on('restore', false); on('hide', true); on('minimize', true);
+};
+// Development only (npm run dev): what the throttle decides, and what each process holds
+const dev = () => !app.isPackaged;
+// A full garbage collection of this process on demand (the flag is switched on at run time, no launch option needed)
+let collectMain: (() => void) | null = null;
+try { v8.setFlagsFromString('--expose-gc'); collectMain = vm.runInNewContext('gc') as () => void; } catch { /* not available */ }
+const mainHeap = () => { const m = process.memoryUsage(); const mb = (n: number) => Math.round(n / 1048576); return `main heap ${mb(m.heapUsed)}/${mb(m.heapTotal)}MB, external ${mb(m.external)}MB, buffers ${mb(m.arrayBuffers)}MB, rss ${mb(m.rss)}MB`; };
+// On Linux the working set counts every shared library once per process; PSS splits shared pages between the processes
+// that use them, which is what a task manager that adds things up would show
+const pssMB = (pid: number): number | null => {
+  try { const m = /Pss:\s+(\d+) kB/.exec(readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8')); return m ? Number(m[1]) / 1024 : null; } catch { return null; }
+};
+const memory = () => app.getAppMetrics().map(m => `${m.type} ${Math.round((process.platform === 'linux' ? pssMB(m.pid) : null) ?? (m.memory.privateBytes ?? m.memory.workingSetSize) / 1024)}MB`).join(' | ') + (process.platform === 'linux' ? ' (PSS)' : '');
+// The page is told when it is hidden. Chromium's own timer throttling stays off on purpose (see createWindow): the
+// Mumble ping and the voice timers must keep their rhythm, so the saving comes from the page doing less, not from slower timers.
+function applyHidden(why = 'check'): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  const away = gone.get(win) ?? false;
+  // A pop-out window (stream, camera, Watch Together) is drawn by the page: while one is on screen the page is in use
+  const popupShown = [...popups.values()].some(p => !p.isDestroyed() && !(gone.get(p) ?? false));
+  const hidden = throttleWhenHidden && away && !popupShown;
+  if (dev()) console.log(`[throttle] ${why}: window ${away ? 'out of sight' : 'shown'}, pop-out ${popupShown ? 'shown' : 'none'}, setting ${throttleWhenHidden ? 'on' : 'off'} -> ${hidden === pageHidden ? `no change (${hidden ? 'hidden' : 'shown'})` : hidden ? 'HIDDEN' : 'SHOWN'}`);
+  if (hidden === pageHidden) return;
+  pageHidden = hidden;
+  // Let Chromium treat the page as hidden (frees compositor tiles and GPU textures, stops frames) only while we want that.
+  // Timers are unaffected, see the switches near the top.
+  win.webContents.setBackgroundThrottling(hidden);
+  win.webContents.send('window:hidden', hidden);
+  if (hidden) armSleep(); else { if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; } if (asleep) wake(win); }
+}
+// Hidden for 15 seconds with no server connected (and no pop-out): nothing needs the page, so let go of it altogether. Its
+// renderer process, audio service and every cache go; showing the window loads the app again (a few moments, and it opens on
+// the start screen). While connected the page stays, because voice is captured, mixed and played there.
+const SLEEP_AFTER_MS = 15_000;
+let sleepTimer: ReturnType<typeof setTimeout> | null = null;
+let asleep = false;
+// Deep sleep: the window itself is destroyed. Remembered so the next one opens where this one was.
+let deepSleeping = false;
+let savedBounds: { bounds: Electron.Rectangle; maximized: boolean } | null = null;
+// Off unless "deepSleep": true is in system.json: measured, destroying the window freed nothing more (the graphics process stays)
+const deepSleepEnabled = () => readSystem().deepSleep === true;
+function reviveWindow(): BrowserWindow | null {
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+  return deepSleeping ? createWindow(true) : null;
+}
+const appUrl = () => devUrl || appOrigin;
+function armSleep(): void {
+  if (sleepTimer || asleep) return;
+  sleepTimer = setTimeout(() => {
+    sleepTimer = null;
+    const win = mainWindow;
+    if (!win || win.isDestroyed() || !pageHidden || asleep || conns.size || popups.size || !appUrl()) return;
+    if (dev()) console.log('[throttle] nothing connected: the page goes to sleep');
+    asleep = true;
+    torrentEngine.release(win.webContents);
+    if (deepSleepEnabled()) {
+      // Deep sleep: the window goes too, so the graphics process has nothing to serve either. The tray makes it again (same
+      // size and place) when asked to show it. Without "deepSleep": true in system.json the window stays and only its page ends.
+      savedBounds = { bounds: win.getBounds(), maximized: win.isMaximized() };
+      deepSleeping = true;
+      win.destroy();
+      tray.onWindowVisibility();
+    } else {
+      // Loading about:blank alone keeps the same renderer process (measured: Tab stayed at ~105MB), so end the process itself.
+      // Showing the window loads the app into a fresh one.
+      try { win.webContents.forcefullyCrashRenderer(); } catch { /* already gone */ }
+    }
+    if (dev()) for (const sec of [4, 20, 45]) setTimeout(() => { if (asleep || deepSleeping) console.log(`[throttle] ${deepSleeping ? 'window gone' : 'asleep'} for ${sec}s | ${memory()} | ${mainHeap()}`); }, sec * 1000);
+  }, SLEEP_AFTER_MS);
+  sleepTimer.unref?.();
+}
+function wake(win: BrowserWindow): void {
+  asleep = false;
+  if (dev()) console.log('[throttle] window shown: the page wakes up');
+  // #woke: the page knows this is not a launch, so it does not connect to the last server on its own
+  void win.webContents.loadURL(`${appUrl()}#woke`).catch(() => {});
+}
+// The page says it has drawn (or taken down) the main view
+ipcMain.on('window:hiddenApplied', (e, hidden: boolean, stats?: Record<string, number>) => {
+  if (dev()) console.log(`[throttle] page ${hidden ? 'took the main view down' : 'drew the main view again'} | ${memory()}`);
+  if (!hidden) return;
+  if (dev() && stats) console.log(`[throttle] page holds: ${Object.entries(stats).map(([k, v]) => `${k} ${v}`).join(', ')}`);
+  // The page has let go of its view: ask Chromium to hand back what it only keeps for speed. A memory-pressure signal makes
+  // every process trim its caches (decoded images, glyphs, compositor and GPU resources); the page's JS engine and this
+  // process then collect garbage. All of it refills by itself when the window is shown again.
+  const wc = e.sender;
+  void (async () => {
+    const heap = async () => { const h = await wc.debugger.sendCommand('Runtime.getHeapUsage') as { usedSize: number; totalSize: number }; return `${Math.round(h.usedSize / 1048576)}/${Math.round(h.totalSize / 1048576)}MB used/total`; };
+    try {
+      if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
+      const before = await heap();
+      await wc.debugger.sendCommand('HeapProfiler.collectGarbage');
+      await wc.debugger.sendCommand('Memory.simulatePressureNotification', { level: 'critical' }).catch(() => {});
+      if (dev()) console.log(`[throttle] page JS heap ${before} -> ${await heap()} after garbage collection and a memory-pressure signal`);
+    } catch (err) { if (dev()) console.log('[throttle] could not trim the page:', (err as Error).message); }
+    finally { try { if (wc.debugger.isAttached()) wc.debugger.detach(); } catch { /* gone */ } }
+    if (dev()) console.log(`[throttle] ${mainHeap()} (before collecting)`);
+    collectMain?.();
+    setTimeout(() => { if (pageHidden) { collectMain?.(); if (dev()) console.log(`[throttle] after trimming | ${memory()} | ${mainHeap()}`); } }, 3000);
+  })();
+});
+ipcMain.handle('system:get', () => ({ hardwareAcceleration, autoUpdate: readSystem().autoUpdate !== false, throttleWhenHidden, launchOnStartup: launchOnStartup(), platform: process.platform }));
+ipcMain.handle('system:setThrottleWhenHidden', async (_e, on: boolean) => {
+  await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), throttleWhenHidden: !!on }));
+  throttleWhenHidden = !!on;
+  applyHidden('setting changed');
+});
 ipcMain.handle('system:setLaunchOnStartup', async (_e, on: boolean) => {
   // A development run would register Electron itself, not the app
   if (!app.isPackaged) throw new Error('only the installed app can do this');
@@ -170,7 +306,7 @@ const conns = new Map<string, Conn>();
 
 registerFileStore();
 registerProfiles();
-registerTorrent(hardwareAcceleration);
+const torrentEngine = registerTorrent(hardwareAcceleration);
 ipcMain.handle('identities:list', () => identities().list());
 ipcMain.handle('identities:create', (_e, name: string, email: string) => identities().create(String(name), String(email ?? '')));
 ipcMain.handle('identities:import', (_e, bytes: Uint8Array, password: string, name: string) =>
@@ -216,10 +352,12 @@ ipcMain.handle('mumble:open', async (e, connId: string, host: string, port: numb
       emit('mumble:secure', info);
     },
     onData: chunk => emit('mumble:data', chunk),
-    onClose: reason => { conns.get(connId)?.udp?.close(); conns.delete(connId); emit('mumble:close', reason); }
+    onClose: reason => { owner.removeListener('destroyed', onGone); conns.get(connId)?.udp?.close(); conns.delete(connId); emit('mumble:close', reason); }
   });
+  // A listener per connection must not pile up on the window over many reconnects: it is removed when the connection ends
+  const onGone = () => conn.close();
   conns.set(connId, Object.assign(conn, { owner }));
-  owner.once('destroyed', () => conn.close());
+  owner.once('destroyed', onGone);
 });
 
 ipcMain.on('mumble:send', (e, connId: string, bytes: Uint8Array) => {
@@ -400,10 +538,14 @@ ipcMain.handle('popout:isFullScreen', (_e, name: string) => {
 
 let mainWindow: BrowserWindow | null = null;
 
-function createWindow() {
+function createWindow(woke = false): BrowserWindow {
+  deepSleeping = false;
+  const restored = savedBounds;
+  savedBounds = null;
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    ...(restored && !restored.maximized ? restored.bounds : {}),
     minWidth: 360,
     minHeight: 480,
     backgroundColor: '#111214',
@@ -420,7 +562,8 @@ function createWindow() {
       nodeIntegration: false,
       // Voice must play without a click first
       autoplayPolicy: 'no-user-gesture-required',
-      // Keep audio and timers running at full speed when the window is in the background
+      // Shown: render normally. Hidden: applyHidden() turns this on so the page really goes to sleep. Timers and audio are
+      // kept at full speed by the command line switches instead.
       backgroundThrottling: false,
       // Off until it can work without fetching dictionaries (see session-created)
       spellcheck: false
@@ -443,7 +586,9 @@ function createWindow() {
   win.webContents.on('did-create-window', (child, { frameName }) => {
     if (!frameName) return;
     popups.set(frameName, child);
-    child.on('closed', () => { if (popups.get(frameName) === child) popups.delete(frameName); });
+    child.on('closed', () => { if (popups.get(frameName) === child) popups.delete(frameName); applyHidden('pop-out closed'); });
+    trackVisibility(child, why => applyHidden(`pop-out ${why}`));
+    applyHidden('pop-out opened');
   });
   win.webContents.on('will-navigate', (e, url) => {
     if (devUrl && url.startsWith(devUrl)) return;
@@ -479,10 +624,18 @@ function createWindow() {
   });
   win.on('show', () => tray.onWindowVisibility());
   win.on('hide', () => tray.onWindowVisibility());
-  win.on('closed', () => { if (mainWindow === win) mainWindow = null; });
+  trackVisibility(win, why => applyHidden(`window ${why}`));
+  // A reloaded page starts out shown; tell it if that is not so
+  win.webContents.on('did-finish-load', () => { if (pageHidden) { win.webContents.setBackgroundThrottling(true); win.webContents.send('window:hidden', true); } });
+  win.on('closed', () => { if (mainWindow === win) mainWindow = null; pageHidden = false; asleep = false; if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; } });
 
-  if (devUrl) win.loadURL(devUrl);
-  else serveDist().then(url => { appOrigin = url; return win.loadURL(url); }).catch(err => console.error('could not start the app server:', err));
+  if (restored?.maximized) win.maximize();
+  // #woke: the page knows this is not a launch, so it does not connect to the last server on its own
+  const suffix = woke ? '#woke' : '';
+  if (devUrl) void win.loadURL(devUrl + suffix);
+  else if (appOrigin) void win.loadURL(appOrigin + suffix);
+  else serveDist().then(url => { appOrigin = url; return win.loadURL(url + suffix); }).catch(err => console.error('could not start the app server:', err));
+  return win;
 }
 
 // YouTube's bot check ("Sign in to confirm you're not a bot") looks at who is asking: the default user
@@ -513,10 +666,12 @@ app.whenReady().then(async () => {
   });
   createWindow();
   if (readSystem().autoUpdate !== false) setTimeout(() => { void checkOnStartup(() => mainWindow, updateProgress); }, 4000);
-  await tray.setupTray(() => mainWindow, action => mainWindow?.webContents.send('tray:action', action));
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  await tray.setupTray(() => mainWindow, action => mainWindow?.webContents.send('tray:action', action), reviveWindow);
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(deepSleeping); });
 });
 
 app.on('window-all-closed', () => {
+  // Deep sleep closes the window on purpose; the app keeps running in the tray
+  if (deepSleeping) return;
   if (process.platform !== 'darwin') app.quit();
 });

@@ -1,6 +1,7 @@
 import { WasmEncoder, WasmDecoder, type Opus } from './opus-wasm.ts';
 import { loadOpus } from './opus-load.ts';
-import { createNoise, type NoiseEngine, type NoiseNode } from './noise.ts';
+// The engines (worklet sources, wasm glue) load when voice first needs one, not when the app starts
+import type { NoiseEngine, NoiseNode } from './noise.ts';
 import type { Probe } from './detect.ts';
 import captureUrl from './capture.worklet.ts?worker&url';
 import playbackUrl from './playback.worklet.ts?worker&url';
@@ -159,6 +160,18 @@ class VoiceEngine {
   private diagFrames = 0;
   private diagAt = 0;
   private levelTimer: ReturnType<typeof setInterval> | null = null;
+  // The window is hidden: no meter is drawn, so the level is read rarely, and a microphone nobody can talk into is let go
+  private hidden = false;
+  private levelEvery(): number { return this.hidden ? 1000 : 50; }
+  setHidden(hidden: boolean): void {
+    if (this.hidden === hidden) return;
+    this.hidden = hidden;
+    if (this.levelTimer) {
+      clearInterval(this.levelTimer);
+      this.levelTimer = setInterval(() => this.tickLevel(), this.levelEvery());
+    }
+    this.syncInput().catch(() => {});
+  }
 
   constructor() {
     if (typeof window === 'undefined') return;
@@ -265,7 +278,7 @@ class VoiceEngine {
       // context is woken again by onstatechange and the watchdog.
       this.syncInput().catch(e => { this.error = `Microphone unavailable: ${(e as Error).message}`; });
       ctx.resume().catch(() => {});
-      this.levelTimer = setInterval(() => this.tickLevel(), 50);
+      this.levelTimer = setInterval(() => this.tickLevel(), this.levelEvery());
       this.watchdog = setInterval(() => this.checkInput(), 1000);
       this.running = true;
       this.refreshDevices().catch(() => {});
@@ -319,8 +332,11 @@ class VoiceEngine {
 
   // The microphone is not needed while we cannot talk anyway (muted or deafened, by us or the server)
   private micWanted(): boolean {
-    if (!this.settings.releaseMicMuted || this.testing || this.meterHolds > 0) return true;
+    if (this.testing) return true;
     const self = this.client?.self;
+    // Hidden and deafened: nothing can be said, and nothing shows the level
+    if (this.hidden && self && (self.selfDeaf || self.deaf)) return false;
+    if (!this.settings.releaseMicMuted || this.meterHolds > 0) return true;
     return !self || !(self.selfMute || self.mute || self.suppress || self.selfDeaf || self.deaf);
   }
 
@@ -426,6 +442,7 @@ class VoiceEngine {
       this.noise = null;
       if (engine) {
         try {
+          const { createNoise } = await import('./noise.ts');
           const node = await createNoise(ctx, engine, s);
           if (seq !== this.noiseSeq) return node.destroy();
           node.output.connect(gain);

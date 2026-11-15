@@ -1,0 +1,20 @@
+--- src/App.svelte	2026-11-14 12:20:54.000000000 +0000
++++ src/App.svelte	2026-11-14 15:05:44.064568692 +0000
+@@ -184,6 +184,9 @@
+ {/snippet}
+ 
+ <TitleBar />
++<!-- Hidden window (Settings > System > Throttle when hidden): nothing of the main view is kept, so its pictures, GIFs, videos
++     and blurred layers are freed. Dialogs below stay, so nothing open in them is lost. The session carries on in the background. -->
++{#if !ui.hidden}
+ {#if store.settings.interface === 'rooms'}
+ <div class="framed"><Shell onadd={() => (editing = { server: null })} onedit={s => (editing = { server: s })} onbrowse={() => (ui.publicServers = true)} /></div>
+ {:else}
+@@ -218,6 +221,7 @@
+   {/if}
+ </div>
+ {/if}
++{/if}
+ 
+ {#if editing}<ConnectDialog server={editing.server} onclose={() => (editing = null)} />{/if}
+ {#if ui.addServer}<ConnectDialog server={null} prefill={ui.addServer} onclose={() => (ui.addServer = null)} />{/if}

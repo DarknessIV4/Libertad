@@ -13,6 +13,7 @@ interface Speaker {
 
 class PlaybackProcessor extends AudioWorkletProcessor {
   private speakers = new Map<number, Speaker>();
+  private report = false;
   private jitter = Math.round(sampleRate * 0.06);
   private maxQueue = Math.round(sampleRate * 0.4);
   private gains = new Map<number, number>();
@@ -30,6 +31,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       } else if (m.jitterMs !== undefined) this.jitter = Math.round(sampleRate * m.jitterMs / 1000);
       else if (m.drop !== undefined) this.speakers.delete(m.drop);
       else if (m.clear) this.speakers.clear();
+      else if (m.report !== undefined) this.report = !!m.report;
     };
   }
 
@@ -83,9 +85,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
     this.sinceReport += n;
     if (this.sinceReport >= sampleRate / 10) {
-      const levels: Record<number, number> = {};
-      for (const [id, s] of this.speakers) { levels[id] = s.peak; s.peak = 0; }
-      this.port.postMessage({ levels });
+      // Per-speaker peaks are only sent when somebody asked for them (nothing does by default)
+      if (this.report) {
+        const levels: Record<number, number> = {};
+        for (const [id, s] of this.speakers) { levels[id] = s.peak; s.peak = 0; }
+        this.port.postMessage({ levels });
+      }
       this.sinceReport = 0;
     }
     return true;

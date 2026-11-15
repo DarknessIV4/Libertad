@@ -609,7 +609,8 @@
       return;
     }
     // One session at a time: a Watch Together we host ends when a screen or camera starts
-    if (watchTogether.isHostWithParty) await watchTogether.end();
+    // Only a file streamed from here is a picture like a share, so only that one makes way for it
+    if (watchTogether.isHostWithParty && watchTogether.mode === 2) await watchTogether.end();
     handedOver = true;
     share.go(target, preview, usesVirtualMic, kind);
     onclose();
@@ -675,8 +676,9 @@
 
       console.log('[ShareDialog] Calling watchTogether.start');
 
-      // One session at a time: what we share or host makes way for this one
-      if (share.stream) share.stop();
+      // A screen or camera can go on beside a YouTube or torrent session; a file streamed from here is a picture
+      // like a share, so it replaces it. Another session of our own always makes way.
+      if (share.stream && watchMode === 2) share.stop();
       if (watchTogether.isHostWithParty) await watchTogether.end();
 
       // Start the watch party

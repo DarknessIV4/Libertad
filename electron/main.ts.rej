@@ -1,0 +1,82 @@
+--- electron/main.ts	2026-11-14 13:23:52.000000000 +0000
++++ electron/main.ts	2026-11-14 15:15:21.135521051 +0000
+@@ -81,7 +81,7 @@
+ // System settings live in a file of their own: Chromium decides about the graphics card before
+ // the window exists, long before the page (and its localStorage) can be asked.
+ const systemFile = path.join(app.getPath('userData'), 'system.json');
+-const readSystem = (): { hardwareAcceleration?: boolean; autoUpdate?: boolean } => {
++const readSystem = (): { hardwareAcceleration?: boolean; autoUpdate?: boolean; throttleWhenHidden?: boolean } => {
+   try { return JSON.parse(readFileSync(systemFile, 'utf8')); } catch { return {}; }
+ };
+ const hardwareAcceleration = readSystem().hardwareAcceleration !== false;
+@@ -113,7 +113,46 @@
+     `Exec=${exec}`, 'Icon=Libertad', 'Terminal=false', 'X-GNOME-Autostart-enabled=true', ''
+   ].join('\n'));
+ }
+-ipcMain.handle('system:get', () => ({ hardwareAcceleration, autoUpdate: readSystem().autoUpdate !== false, launchOnStartup: launchOnStartup(), platform: process.platform }));
++// While the window is hidden (to the tray, or minimized) the page stops drawing and fetching, and keeps only what the
++// connection needs (voice, chat, profiles). Unlike the settings above this takes effect at once, no restart.
++let throttleWhenHidden = readSystem().throttleWhenHidden !== false;
++let pageHidden = false;
++// Whether each window is out of sight, from the events themselves: asking isVisible() inside a 'hide' handler can still
++// answer true on some Linux desktops, which would leave the page drawing.
++const gone = new WeakMap<BrowserWindow, boolean>();
++const trackVisibility = (w: BrowserWindow, onChange: (why: string) => void) => {
++  const on = (why: string, away: boolean) => w.on(why as 'show', () => { gone.set(w, away); onChange(why); });
++  on('show', false); on('restore', false); on('hide', true); on('minimize', true);
++};
++// Development only (npm run dev): what the throttle decides, and what each process holds
++const dev = () => !app.isPackaged;
++const memory = () => app.getAppMetrics().map(m => `${m.type} ${Math.round((m.memory.privateBytes ?? m.memory.workingSetSize) / 1024)}MB`).join(' | ');
++// The page is told when it is hidden. Chromium's own timer throttling stays off on purpose (see createWindow): the
++// Mumble ping and the voice timers must keep their rhythm, so the saving comes from the page doing less, not from slower timers.
++function applyHidden(why = 'check'): void {
++  const win = mainWindow;
++  if (!win || win.isDestroyed()) return;
++  const away = gone.get(win) ?? false;
++  // A pop-out window (stream, camera, Watch Together) is drawn by the page: while one is on screen the page is in use
++  const popupShown = [...popups.values()].some(p => !p.isDestroyed() && !(gone.get(p) ?? false));
++  const hidden = throttleWhenHidden && away && !popupShown;
++  if (dev()) console.log(`[throttle] ${why}: window ${away ? 'out of sight' : 'shown'}, pop-out ${popupShown ? 'shown' : 'none'}, setting ${throttleWhenHidden ? 'on' : 'off'} -> ${hidden === pageHidden ? `no change (${hidden ? 'hidden' : 'shown'})` : hidden ? 'HIDDEN' : 'SHOWN'}`);
++  if (hidden === pageHidden) return;
++  pageHidden = hidden;
++  win.webContents.send('window:hidden', hidden);
++}
++// The page says it has drawn (or taken down) the main view
++ipcMain.on('window:hiddenApplied', (_e, hidden: boolean) => {
++  if (!dev()) return;
++  console.log(`[throttle] page ${hidden ? 'took the main view down' : 'drew the main view again'} | ${memory()}`);
++  if (hidden) setTimeout(() => { if (pageHidden) console.log(`[throttle] 5 s later | ${memory()}`); }, 5000);
++});
++ipcMain.handle('system:get', () => ({ hardwareAcceleration, autoUpdate: readSystem().autoUpdate !== false, throttleWhenHidden, launchOnStartup: launchOnStartup(), platform: process.platform }));
++ipcMain.handle('system:setThrottleWhenHidden', async (_e, on: boolean) => {
++  await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), throttleWhenHidden: !!on }));
++  throttleWhenHidden = !!on;
++  applyHidden('setting changed');
++});
+ ipcMain.handle('system:setLaunchOnStartup', async (_e, on: boolean) => {
+   // A development run would register Electron itself, not the app
+   if (!app.isPackaged) throw new Error('only the installed app can do this');
+@@ -443,7 +482,9 @@
+   win.webContents.on('did-create-window', (child, { frameName }) => {
+     if (!frameName) return;
+     popups.set(frameName, child);
+-    child.on('closed', () => { if (popups.get(frameName) === child) popups.delete(frameName); });
++    child.on('closed', () => { if (popups.get(frameName) === child) popups.delete(frameName); applyHidden('pop-out closed'); });
++    trackVisibility(child, why => applyHidden(`pop-out ${why}`));
++    applyHidden('pop-out opened');
+   });
+   win.webContents.on('will-navigate', (e, url) => {
+     if (devUrl && url.startsWith(devUrl)) return;
+@@ -479,7 +520,10 @@
+   });
+   win.on('show', () => tray.onWindowVisibility());
+   win.on('hide', () => tray.onWindowVisibility());
+-  win.on('closed', () => { if (mainWindow === win) mainWindow = null; });
++  trackVisibility(win, why => applyHidden(`window ${why}`));
++  // A reloaded page starts out shown; tell it if that is not so
++  win.webContents.on('did-finish-load', () => { if (pageHidden) win.webContents.send('window:hidden', true); });
++  win.on('closed', () => { if (mainWindow === win) mainWindow = null; pageHidden = false; });
+ 
+   if (devUrl) win.loadURL(devUrl);
+   else serveDist().then(url => { appOrigin = url; return win.loadURL(url); }).catch(err => console.error('could not start the app server:', err));

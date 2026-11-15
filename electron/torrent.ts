@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { createTorrentEngine } from './torrent-core.ts';
+import { createTorrentEngine, type TorrentEngine } from './torrent-core.ts';
 import { createTranscoder, findBinaries, type Transcoder } from './transcode.ts';
 import { fetchLimited, fetchSubtitle, findSubtitles } from './subtitles.ts';
 import { normalizeMagnet, MAX_MAGNET, MAX_QUEUE } from '../src/core/torrent-meta.ts';
@@ -14,7 +14,7 @@ const okIdx = (v: unknown): v is number => typeof v === 'number' && Number.isInt
 const okHash = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
 
 // Torrent Together: the desktop app downloads the torrent itself and plays it from a local address
-export function registerTorrent(hardware = true): void {
+export function registerTorrent(hardware = true): TorrentEngine {
   // ffmpeg is looked for once, at start-up; without it only what the page plays by itself works
   const engineOpts = { root: path.join(app.getPath('userData'), 'torrents'), transcoder: null as Transcoder | null };
   const transcoderReady = findBinaries().then(
@@ -136,4 +136,5 @@ export function registerTorrent(hardware = true): void {
   });
 
   app.on('will-quit', () => { void engine.shutdown(); });
+  return engine;
 }

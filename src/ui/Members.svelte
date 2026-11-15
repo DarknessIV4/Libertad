@@ -34,14 +34,18 @@
               {#if session.sharing[u.session]}
               {@const kind = session.sharing[u.session]}
               {#if isSelf}
-                <span class="state sharing" title="You are sharing your {kind}"><Icon name={kind} size={14} /></span>
+                <span class="state sharing" role="button" tabindex="0" title="Your {kind}. Click to open it" aria-label="Open your {kind}"
+                  onclick={e => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('libertad-open-share', { detail: u.session })); }}
+                  ondblclick={e => e.stopPropagation()}
+                  onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); window.dispatchEvent(new CustomEvent('libertad-open-share', { detail: u.session })); } }}><Icon name={kind} size={14} /></span>
               {:else}
                 <!-- From any room: the stream comes to wherever you are -->
                 <span class="state sharing" role="button" tabindex="0" title="Sharing their {kind}. Click to watch" aria-label="Watch the {kind} of {store.displayName(u)}"
                   onclick={e => { e.stopPropagation(); share.watch(sessions.active, u.session); }}
                   onkeydown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); share.watch(sessions.active, u.session); } }}><Icon name={kind} size={14} /></span>
               {/if}
-            {:else if session.watchTogether[u.session]}
+            {/if}
+            {#if session.watchTogether[u.session]}
               {@const wt = session.watchTogether[u.session]}
               {#if isSelf}
                 <span class="state watch-together host" role="button" tabindex="0" title="Hosting watch together: {wt.title}. Click to open controls, double-click to rejoin" aria-label="Hosting watch together: {wt.title}"
@@ -78,4 +82,6 @@
   .state.watch-together { color: var(--speaking); }
   .state.watch-together.host { color: var(--success); }
   .state.watch-together:hover, .state.sharing[role=button]:hover { background: var(--bg-active); }
+  .state.watch-together[role=button] { padding: 3px; margin: -3px; }
+  .state.sharing[role=button] { margin: -3px; }
 </style>

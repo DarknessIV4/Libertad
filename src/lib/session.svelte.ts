@@ -16,6 +16,8 @@ import { profileCache, type CachedSlot, type CachedProfile } from './profile-cac
 import { parseBanner, withBanners, stripBanner, dataMime, bannerSignature, SLOTS, isVideoMime, type Banner, type BannerView, type Slot } from '../core/banner.ts';
 import type { FileMeta } from '../core/file-transfer.ts';
 import { files, fileKind } from './files.svelte.ts';
+import { stills } from './still.svelte.ts';
+import { ui } from './ui.svelte.ts';
 import { announce, isPiece } from '../core/file-transfer.ts';
 import { voice } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
@@ -66,6 +68,9 @@ export type Panel =
   | { kind: 'user'; session: number };
 
 let nextId = 1;
+// A chat keeps its newest messages. Without a limit the log, and the page that draws every entry of it, grow for as long as
+// the app stays connected (it is made to sit in the tray for days).
+const MAX_LOG = 1000;
 
 export class Session {
   status = $state<'idle' | 'connecting' | 'connected'>('idle');
@@ -458,6 +463,9 @@ export class Session {
           }
         }
       }
+      // Profiles are asked for when a tile or card is drawn; a hidden window draws none. So keep the direct channels
+      // to the people in our channel open meanwhile, which is how their new avatar, banner or card reaches us.
+      if (ui.hidden && client.synced && (isNew || changed.includes('channelId'))) this.warmProfiles();
       bump();
     });
 
@@ -618,6 +626,13 @@ export class Session {
     return media(this.profiles[session]?.avatar ?? null);
   }
 
+  // Opens the profile channel to everybody in our channel (what drawing their tiles would do), for the hidden window
+  private warmProfiles(): void {
+    const client = this.client, self = client?.self;
+    if (!client || !self) return;
+    for (const u of client.users.values()) if (u.session !== self.session && u.channelId === self.channelId) this.ensureProfile(u);
+  }
+
   // The frame of what someone hosts, for their tile
   frame(session: number): string | null {
     return this.frames[session] ?? null;
@@ -662,6 +677,8 @@ export class Session {
   profiles = $state<Record<number, Record<Slot, BannerView | null>>>({});
   private profileKey = new Map<number, string>();
   private profileUrls = new Map<number, string[]>();
+  // The files (see files.svelte.ts) whose bytes a person's profile shows, held while it does
+  private profileFileIds = new Map<number, string[]>();
 
   // Someone's banner (or card background) as the card draws it; null: none, not here yet, or too large to fetch
   banner(session: number | null | undefined, slot: Slot = 'banner'): BannerView | null {
@@ -717,31 +734,48 @@ export class Session {
     if (stale()) return;
     const sig = text === undefined ? '' : bannerSignature(text);
     const urls: string[] = [];
+    const ids: string[] = [];
     if (text === undefined || (cached && cached.commentHash === sig)) {
       if (!cached) return;
       for (const slot of SLOTS) {
         const c = cached[slot];
         const view = c ? await this.cachedView(name, slot, c, urls) : null;
-        if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
+        if (stale()) return this.discard(urls, ids);
         this.setProfile(session, key, slot, view);
       }
-      this.keepUrls(session, urls);
+      this.keepUrls(session, urls, ids);
       return;
     }
-    const results = await Promise.all(SLOTS.map(async slot => {
-      const r = await this.resolveSlot(session, name, slot, parseBanner(text, slot), cached, urls);
-      this.setProfile(session, key, slot, r.view);
-      return r;
-    }));
-    if (stale()) { for (const u of urls) URL.revokeObjectURL(u); return; }
-    this.keepUrls(session, urls);
+    let results: Awaited<ReturnType<Session['resolveSlot']>>[];
+    try {
+      results = await Promise.all(SLOTS.map(async slot => {
+        const r = await this.resolveSlot(session, name, slot, parseBanner(text, slot), cached, urls, ids);
+        this.setProfile(session, key, slot, r.view);
+        return r;
+      }));
+    } catch (e) {
+      this.discard(urls, ids);
+      throw e;
+    }
+    if (stale()) return this.discard(urls, ids);
+    this.keepUrls(session, urls, ids);
     const meta: CachedProfile = { v: 1, commentHash: sig, banner: results[0].saved, card: results[1].saved, profile: results[2].saved, avatar: results[3].saved };
     await profileCache.write(name, meta, { banner: results[0].blob, card: results[1].blob, profile: results[2].blob, avatar: results[3].blob });
   }
 
-  private keepUrls(session: number, urls: string[]): void {
-    for (const u of this.profileUrls.get(session) ?? []) URL.revokeObjectURL(u);
+  // A profile that was built but is no longer wanted lets go of what it made
+  private discard(urls: string[], ids: string[]): void {
+    for (const u of urls) { URL.revokeObjectURL(u); stills.forget(u); }
+    for (const id of ids) files.release(id);
+  }
+
+  // The profile of this person is now `urls` and `ids`; what the one before it held is let go of (after the new one took its
+  // hold, so a picture that is in both is never dropped in between)
+  private keepUrls(session: number, urls: string[], ids: string[] = []): void {
+    for (const u of this.profileUrls.get(session) ?? []) { URL.revokeObjectURL(u); stills.forget(u); }
     if (urls.length) this.profileUrls.set(session, urls); else this.profileUrls.delete(session);
+    for (const id of this.profileFileIds.get(session) ?? []) files.release(id);
+    if (ids.length) this.profileFileIds.set(session, ids); else this.profileFileIds.delete(session);
   }
 
   private async cachedView(name: string, slot: Slot, c: CachedSlot, urls: string[]): Promise<BannerView | null> {
@@ -755,7 +789,7 @@ export class Session {
   }
 
   private async resolveSlot(session: number, name: string, slot: Slot, wire: Banner | null, cached: CachedProfile | null,
-    urls: string[]): Promise<{ view: BannerView | null; saved: CachedSlot | null; blob: Blob | null }> {
+    urls: string[], ids: string[]): Promise<{ view: BannerView | null; saved: CachedSlot | null; blob: Blob | null }> {
     const none = { view: null, saved: null, blob: null };
     if (!wire) return none;
     if (wire.kind === 'color') return { view: wire, saved: { kind: 'color', color: wire.color, ...(wire.scope && { scope: wire.scope }) }, blob: null };
@@ -778,6 +812,9 @@ export class Session {
     await files.check(meta);
     const t = files.transfers[meta.i];
     files.p2pOnly.add(meta.i);
+    // Held from here on: when this profile goes (the person left, or changed it) the bytes go with it
+    files.hold(meta.i);
+    ids.push(meta.i);
     if (!t || t.state === 'idle' || t.state === 'failed') files.download(this, meta, session);
     const url = await this.waitReady(meta.i);
     const blob = url ? await files.blobOf(meta.i) : null;
@@ -811,8 +848,10 @@ export class Session {
     }
   }
   private dropProfiles(): void {
-    for (const urls of this.profileUrls.values()) for (const u of urls) URL.revokeObjectURL(u);
+    for (const urls of this.profileUrls.values()) for (const u of urls) { URL.revokeObjectURL(u); stills.forget(u); }
     this.profileUrls.clear();
+    for (const ids of this.profileFileIds.values()) for (const id of ids) files.release(id);
+    this.profileFileIds.clear();
     this.profileKey.clear();
     this.manifests.clear();
     this.profiles = {};
@@ -876,6 +915,7 @@ export class Session {
     let at = log.length;
     while (at > 0 && log[at - 1].time > time) at--;
     log.splice(at, 0, { ...entry, id: nextId++, time, key });
+    if (log.length > MAX_LOG) log.splice(0, log.length - MAX_LOG);
     if (!opts.quiet && (sessions.active !== this || !this.visibleKeys().includes(key))) this.unread[key] = (this.unread[key] ?? 0) + 1;
     // Files announced just now; ones from earlier wait for a click
     if (!opts.quiet && !entry.self) for (const e of entry.embeds) if (e.file) files.offered(this, e.file, entry.authorSession);
@@ -1125,6 +1165,9 @@ export class Session {
   setWatchTogether(session: number, info: { mode: WatchMode; title: string } | false): void {
     if (info) {
       this.watchTogether = { ...this.watchTogether, [session]: info };
+      // A file streamed from the host is a picture like a share, so it replaces it: an icon left from a share that was
+      // switched to it without its end reaching us goes. YouTube and torrent sessions run beside a share.
+      if (info.mode === 2 && this.sharing[session]) delete this.sharing[session];
     } else {
       const { [session]: _, ...rest } = this.watchTogether;
       this.watchTogether = rest;

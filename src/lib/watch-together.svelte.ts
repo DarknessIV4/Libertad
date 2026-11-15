@@ -1017,13 +1017,15 @@ class WatchTogether {
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s)) return;
 
-    // Stop WebRTC file streaming if active
-    if (party.meta.mode === 2) {
-      await watchFileStream.stopStream(s);
-    }
-
-    // Send end signal with priority to bypass the rate limit queue
-    await this.sendWatchSignal(WATCH.end, {}, s, this.everyone(s), true);
+    // The end goes out first and whatever fails while stopping the stream cannot keep it from reaching
+    // everybody: a missed end leaves the indicator on other people's screens for good
+    try {
+      await this.sendWatchSignal(WATCH.end, {}, s, this.everyone(s), true);
+    } catch { /* the cleanup below still runs */ }
+    try {
+      // Stop WebRTC file streaming if active
+      if (party.meta.mode === 2) await watchFileStream.stopStream(s);
+    } catch { /* gone anyway */ }
 
     // Clear watch together announcement
     const self = s.self;

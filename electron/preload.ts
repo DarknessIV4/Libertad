@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webFrame } from 'electron';
 
 type Listener = (connId: string, ...args: any[]) => void;
 const listeners = {
@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('libertadNative', {
     setHardwareAcceleration: (on: boolean) => ipcRenderer.invoke('system:setHardwareAcceleration', !!on),
     setLaunchOnStartup: (on: boolean) => ipcRenderer.invoke('system:setLaunchOnStartup', !!on),
     setAutoUpdate: (on: boolean) => ipcRenderer.invoke('system:setAutoUpdate', !!on),
+    setThrottleWhenHidden: (on: boolean) => ipcRenderer.invoke('system:setThrottleWhenHidden', !!on),
     relaunch: () => ipcRenderer.invoke('system:relaunch'),
     quit: () => ipcRenderer.invoke('system:quit')
   },
@@ -124,6 +125,19 @@ contextBridge.exposeInMainWorld('libertadNative', {
   onContextMenu: (fn: (params: unknown) => void) => { ipcRenderer.on('context-menu', (_e, p) => fn(p)); },
   editAction: (action: string, arg?: unknown) => ipcRenderer.send('edit:action', action, arg),
   onTrayAction: (fn: (action: string) => void) => { ipcRenderer.on('tray:action', (_e, a: string) => fn(a)); },
+  // The window was hidden (to the tray, minimized) or is back; only sent while "Throttle when hidden" is on
+  // Tells the main process the page has acted on it (development logging)
+  reportHidden: (hidden: boolean, stats?: Record<string, number>) => {
+    ipcRenderer.send('window:hiddenApplied', !!hidden, stats);
+    // The view is down: Blink still keeps the decoded pictures and GIF frames it showed in its own cache until memory is
+    // tight. Drop them now, once the page has let go of its references.
+    if (hidden) setTimeout(() => { try { webFrame.clearCache(); } catch { /* gone */ } }, 1500);
+  },
+  onHidden: (fn: (hidden: boolean) => void) => {
+    const on = (_e: unknown, hidden: boolean) => fn(!!hidden);
+    ipcRenderer.on('window:hidden', on);
+    return () => { ipcRenderer.removeListener('window:hidden', on); };
+  },
   screenSources: (thumbnails: boolean) => ipcRenderer.invoke('share:sources', !!thumbnails),
   pickScreenSource: (id: string) => ipcRenderer.send('share:pick', id),
   shareInfo: () => ipcRenderer.invoke('share:info'),

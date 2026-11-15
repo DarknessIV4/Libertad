@@ -40,6 +40,14 @@ class Stills {
   private frames = $state<Record<string, string>>({});
   private started = new Set<string>();
 
+  // The object URL behind a view was revoked: what was made from it goes too
+  forget(src: string): void {
+    delete this.frames[src];
+    delete this.crops[src];
+    this.started.delete(src);
+    this.scanning.delete(src);
+  }
+
   // The picture for a view: the source itself, or for a GIF its first frame (null until it is ready)
   of(view: BannerView | null): string | null {
     if (!view || view.kind !== 'image') return null;

@@ -143,7 +143,12 @@
   <h3>Processing</h3>
   <label class="check"><input type="checkbox" checked={s.releaseMicMuted} onchange={e => voice.update({ releaseMicMuted: e.currentTarget.checked })} /> Give the microphone back while muted</label>
   <p class="help">For Bluetooth headsets: with the microphone open, a headset switches to its telephone mode and everything sounds like a phone call. Muted, you then hear in full quality. To talk in full quality too, choose the phone's own microphone above instead of the headset's. No reminder when you speak while muted.{#if s.releaseMicMuted && voice.running} <strong>{voice.micOpen ? 'The microphone is open now.' : 'The microphone is given back now.'}</strong>{/if}</p>
-  <label class="check"><input type="checkbox" checked={s.noiseSuppression} onchange={e => voice.update({ noiseSuppression: e.currentTarget.checked })} /> Noise suppression</label>
+  <div class="ns-row">
+    <label class="check"><input type="checkbox" checked={s.noiseSuppression} onchange={e => voice.update({ noiseSuppression: e.currentTarget.checked })} /> Noise suppression</label>
+    <!-- A loaded engine cannot be unloaded, only dropped by loading the page again (settings are saved already) -->
+    <button class="btn" type="button" onclick={() => location.reload()}>Reload</button>
+    <span class="ns-note">(Disconnects from servers, Clears old module)</span>
+  </div>
   <label for="v-ns">Noise suppression engine</label>
   <select id="v-ns" value={s.noiseEngine} disabled={!s.noiseSuppression} onchange={e => voice.update({ noiseEngine: e.currentTarget.value as NoiseEngine })}>
     <option value="speex">Speex: Lightest</option>
@@ -224,6 +229,10 @@
   input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
   .test { margin-top: 14px; }
   .check { display: flex; align-items: center; gap: 8px; text-transform: none; font-weight: 400; letter-spacing: 0; font-size: 14px; color: var(--text); margin-top: 10px; }
+  .ns-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .ns-row .check { margin-top: 0; }
+  .ns-row .btn { margin-left: auto; }
+  .ns-note { font-size: 12px; color: var(--text-dim); }
   .help { margin: 6px 0 0; font-size: 13px; color: var(--text-dim); }
   .warn { color: var(--warn); }
   .error { color: var(--danger); margin: 8px 0 0; }
