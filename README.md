@@ -191,11 +191,10 @@ For the Mumble server fallback, servers can raise the limits for faster transfer
 
 - System-wide push to talk
 - Whisper and shout
-- Text channels: private ones, and history while nobody is online (needs a helper on the server)
-- Rooms interface: moving channels and people without dragging, gestures, more polish
 - Rich chat between Libertad users: replies, reactions, edits, typing indicators
-- Screen sharing: a media server for large rounds (today every sender uploads once per viewer, up to 8)
-- Release builds for all platforms
+- Better Screen sharing soemhow, FIle sharing, currently every additional user splits your upload by the total recievers.
+- Group calls and chats independent from Mumble servers, like Friends currenly.
+- More polishing and QOL edits, trying to make it as user friendly as possible.
 
 ## For developers
 

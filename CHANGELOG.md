@@ -8,14 +8,15 @@ All notable changes to Libertad.
 ### Added:
 
 - **Friends and private calls.** A server-less friend network over HyperDHT: your friend code (from your identity, the same on every computer), add friends by code, accept or decline requests (declining blocks the code), turn requests off, search your friends, rename or remove them, and see who is online. Calls are peer to peer and end-to-end encrypted: ring, answer, decline, cancel, mute and deafen state, and a call timer.
-- **Friend requests from a server.** Press the friend request button on someone's profile card; the request travels over a direct WebRTC channel, so the Mumble server and its admin do not see the code or the request.
+- **Friend requests from a server.** Press the friend request button on someone's profile card.
+- **Drag actions.**: Drag the friend call bar, or Share preview, outside the app, and it leaves the app as a separate windows, drop it back inside to snap it inside the app again, Call bar overlays over your desktop apps.
 - **Screen share, camera and Watch Together inside a friend call**, with the same controls as in a channel and in draggable windows.
 - **Call chat**: messages during a call with three styles (bubbles, lines, compact), GIF support, kept only until the call ends.
 - **Friend profiles** (picture, banner, description) exchanged between friends and kept on your computer so they show while offline.
 - **Mentions**: `@name` and `@all` (or `@everyone`) with autocomplete and their own sound; other Mumble clients see plain text.
 - **Zoom on streams**: Ctrl and the mouse wheel zooms any screen, camera or Watch Together picture, drag to move, one click to reset.
 - **Per-viewer stream cap**: a viewer can limit the FPS and resolution they receive, independently of the host.
-- **Hardware video encoding** is tried first for screen and camera sharing when your GPU has an encoder.
+- **Hardware video decoding** didn't test windows, Linux lets you choose the GPU for decoding (Preferred to use the rendering GPU)
 - **Pause background** on a profile card, for one person or everybody, so GIF and video backgrounds stand on their first frame (kept only on your computer).
 - **Dock the chat on the right** by dragging an empty spot of the chat to the right side.
 - **Quick audio popover** from the user bar: change devices, transmit mode and levels without opening Settings.
