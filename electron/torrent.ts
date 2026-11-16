@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'el
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createTorrentEngine, type TorrentEngine } from './torrent-core.ts';
-import { createTranscoder, findBinaries, type Transcoder } from './transcode.ts';
+import { createTranscoder, findAllBinaries, findHardware, type Binaries, type Transcoder } from './transcode.ts';
 import { fetchLimited, fetchSubtitle, findSubtitles } from './subtitles.ts';
 import { normalizeMagnet, MAX_MAGNET, MAX_QUEUE } from '../src/core/torrent-meta.ts';
 import { findEpisodes } from './episodes.ts';
@@ -17,7 +17,13 @@ const okHash = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{
 export function registerTorrent(hardware = true): TorrentEngine {
   // ffmpeg is looked for once, at start-up; without it only what the page plays by itself works
   const engineOpts = { root: path.join(app.getPath('userData'), 'torrents'), transcoder: null as Transcoder | null };
-  const transcoderReady = findBinaries().then(
+  // With hardware acceleration on, the ffmpeg that can really encode on the graphics card is the one used
+  const pick = async (): Promise<Binaries | null> => {
+    const all = await findAllBinaries();
+    if (hardware) for (const b of all) if (await findHardware(b).catch(() => null)) return b;
+    return all[0] ?? null;
+  };
+  const transcoderReady = pick().then(
     bin => { if (bin) engineOpts.transcoder = createTranscoder({ bin, root: path.join(app.getPath('userData'), 'transcode'), hardware }); },
     () => {});
   const engine = createTorrentEngine(engineOpts);

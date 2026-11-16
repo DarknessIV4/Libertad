@@ -2,19 +2,21 @@
 
 **Voice chat with your friends on Mumble, in an app that feels like the apps you already know.**
 
-Libertad works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It runs on Windows and Linux.
+Libertad works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It also has a server-less side: add friends by a code and call them directly, with no Mumble server at all. It runs on Windows and Linux.
 
 https://github.com/user-attachments/assets/832434a1-2b63-4d36-b25f-2f67f1e0feed
 
 ## Why Libertad
 
-- **Talk.** Clear, low-delay voice, with push to talk, voice activity or always on, and noise suppression.
-- **Chat like you are used to.** Messages, pictures, files, link previews and YouTube cards, in every channel and in private.
-- **Share your screen or your camera** with the people in your channel.
-- **Watch with your friends in several ways**, watch youtube together, torrents, or stream your files, everyone controls the stream live.
+- **Talk.** Clear, low-delay voice with push to talk, voice activity or always on. Three noise suppression engines (Speex, RNNoise, DeepFilterNet3), four ways to detect speech (down to Silero VAD), echo cancellation, and per-person volume up to 300%.
+- **Chat like you are used to.** Messages, pictures, GIFs, files, link previews and YouTube cards, in every channel and in private. Rich text, `@name` and `@all` mentions, edit and delete your own messages, and half-typed messages survive the window being hidden.
+- **Call friends directly.** Add a friend by their code and call them peer to peer, with chat, screen share, camera and Watch Together inside the call. No server, no account, no IP address to swap.
+- **Share your screen or your camera** with the people in your channel, with per-viewer quality caps, stats for nerds, zoom, and a save-frame button.
+- **Watch with your friends**: YouTube, local files or torrents, in sync. Everyone controls playback live, with subtitles, playback speed and a memo of what you watched last.
 - **Send files**, up to 100 GB, straight from computer to computer through WebRTC. No upload sites.
-- **See who is who.** Profile pictures and profile cards, and banners.
-- **Make it yours.** Custom color schemes to your liking, add a background image or video, change how corners look, and control transparency, darkness, and blur effects.
+- **See who is who.** Profile pictures, banners and profile cards (pictures, GIFs or video), with a live preview while you crop.
+- **Make it yours.** Seven color schemes (including Windows 95) or fully custom colors, a background image, GIF or video, adjustable rounded corners, and transparency, darkness and blur for windows, buttons and panels. Two interfaces: Standard and Rooms.
+- **Know what is happening.** About 45 notification sounds you can replace one by one or with a whole TeamSpeak sound pack, plus a tray icon that shows whether you are talking, muted or deafened.
 - **No account, no tracking.** Your identity is a file on your computer; chats load nothing from sites you did not choose, unless you choose to log in with your YouTube account in settings.
 
 ## Share your screen
@@ -28,6 +30,18 @@ Stream a game, show a bug, watch something together. Pick a screen or a window, 
 Host a YouTube Watch Together session (it supports search), a file Watch Together session, or even paste a torrent link to start a session. Everyone can control the playback of the video: pause, resume, and seek.
 
 ![watching with friends](docs/screenshots/watch-together.png)
+
+## Friends and private calls
+
+Libertad has a friend network that does not touch Mumble at all. Open **Friends** on the start screen, choose **View Code**, and send your friend code to someone; they paste it into **Add a Friend**, you accept, and you can see when each other is online and call with one click.
+
+- **Peer to peer.** Friends and calls run over [HyperDHT](https://github.com/holepunchto/hyperdht), encrypted end to end between your identity keys. Nobody needs to know an IP address, and no server stores anything.
+- **One identity, one code.** Your code comes from your identity, so the same identity gives the same code on any computer. Back it up.
+- **Only requests from strangers.** Someone who is not your friend can send a request and nothing else. Declining blocks that code. You can turn requests off completely.
+- **Add someone you meet on a server.** Open their profile card and press the friend request button.
+- **Inside a call:** mute and deafen, a call chat (bubbles, lines or compact, with GIFs; messages are kept only until the call ends), and **screen share, camera and Watch Together**, the same ones as in a channel. Each can be dragged out into its own window.
+- **Friend profiles.** Pictures, banners and descriptions are exchanged between friends and kept on your computer, so they show even while the friend is offline.
+- **Online on Startup** makes you reachable as soon as the app starts. Go offline any time.
 
 ## Get started
 
@@ -58,10 +72,87 @@ Pick a color scheme, or customize it yourself:
 |---|---|
 | ![Appearance cards](docs/screenshots/settings-appearance.png) | ![Appearance settings](docs/screenshots/settings-appearance-2.png) |
 
+## Everything else it does
+
+<details>
+<summary><b>Voice and audio</b></summary>
+
+- Transmit modes: voice activity, push to talk, always on. Detectors: standard, noise gate, RNNoise probability, Silero VAD.
+- Noise suppression engines: Speex (lightest), RNNoise (medium), DeepFilterNet3 (heaviest), each with its own strength.
+- Bitrate and audio-per-packet (10 to 60 ms), a microphone test, an input level meter, and a quick audio popover from the user bar.
+- **Give the microphone back while muted**, so a Bluetooth headset stays out of its telephone mode.
+- **Deafen for me** on a person: they stop hearing you while everyone else still does.
+- **Mute for me**, per-person volume (0 to 300%, double-click resets), and local nicknames only you see.
+- Force TCP voice when UDP is blocked. Statistics for the voice connection in Settings, Voice.
+- Notification sounds for about 45 events (connection, channels, chat, mentions, files, screen sharing, microphone), each replaceable, or import a whole TeamSpeak 3 sound pack.
+
+</details>
+
+<details>
+<summary><b>Chat</b></summary>
+
+- Rich text with a formatting toolbar, `@name` and `@all` mentions with autocomplete, edit or delete your own messages, and clear the chat for yourself.
+- Images, GIFs (search built in, edit and set as a background from the right-click menu), videos, audio and files, with previews.
+- Link previews (off by default) and YouTube cards that are click to play, with thumbnail, or off.
+- Typing `!` shows the command list of the common Mumble music bots.
+- **Text channels** between Libertad users: read and write without joining the voice channel.
+- **Quick message:** send a message to a saved server without opening it; Libertad connects for a moment, sends, and leaves.
+- The chat can be docked in the middle or dragged to the right side.
+
+</details>
+
+<details>
+<summary><b>Screen share, camera and Watch Together</b></summary>
+
+- Screen, window or camera as the source, with sound from one program or the whole system (Linux: PipeWire).
+- Host limits for bitrate, height and FPS; each viewer can lower their own quality, FPS or resolution further. Dynamic FPS drops to 1 FPS when nothing moves.
+- Watch several screen shares at once, each with its own controls. Pop out any stream into its own window, drag it back to dock it.
+- Zoom with Ctrl and the mouse wheel, drag to move, save the current frame as a PNG, stats for nerds on any stream.
+- Hardware video encoding when your GPU has an encoder.
+- Cross-room watching: people in other rooms can join your session (the host can turn this off).
+- **Watch Together** sources: YouTube (with search and sign-in), local files, torrents (search across Torrentio providers, magnet links, info hashes or .torrent addresses, several links queued at once, the next episodes found for you). Files the browser can not play are converted on the fly with ffmpeg, hardware assisted when possible.
+- Subtitles from OpenSubtitles, picked automatically or by hand, with size, position, opacity and background adjustable. Playback speed, a memo of the last shows watched, and Space and the arrow keys (5 seconds) on every player.
+
+</details>
+
+<details>
+<summary><b>Servers, channels and admins</b></summary>
+
+- Saved servers with icons, live "people online" counts and ping, a public server list, per-server identity and password.
+- Choose a channel when joining and set a default channel per server. Optionally reconnect to your last channel at app start.
+- Channels can be dragged into, before or after another channel, linked, and given text-channel mode. Permissions and ACL editing are in the channel dialog.
+- **Admin role** (Libertad users only): the SuperUser can give registered users a role that allows creating, moving and deleting channels, moving people, and muting or deafening them.
+- Register users, kick, ban, priority speaker, server mute and deafen, all from the user menu.
+
+</details>
+
+<details>
+<summary><b>Look and feel</b></summary>
+
+- Color schemes: Dark, Light, Midnight, High contrast, Abyss, Windows 95 Light and Dark, and a fully custom scheme with a color for each part and each panel.
+- Custom backgrounds (picture, GIF or video) for the app, the connect screen, your profile card and member cards, with a crop editor and live preview. Pause a GIF background for one person or everyone.
+- Rounded corners with adjustable roundness; transparency, darkness and blur for windows, buttons and panels, optionally linked together.
+- Two interfaces: **Standard** (channels, chat and members side by side) and **Rooms** (one screen at a time, made for small windows).
+- A custom title bar that follows your theme, an optional tooltip hints toggle, and a hide-member-card option for bots.
+
+</details>
+
+<details>
+<summary><b>The desktop app</b></summary>
+
+- Tray icon with live status (offline, idle, talking, muted, deafened), a menu to mute, deafen and disconnect, and close-to-tray.
+- Keyboard shortcuts for mute, deafen, disconnect, full screen, pop-out and quit; they can work system-wide while Libertad is in the background (not on every Wayland desktop).
+- Run on system startup, throttle when hidden to save resources, hardware acceleration and GPU choice, and X11 or Wayland selection on Linux.
+- Auto-update with a progress bar (Windows installer and AppImage); other formats only tell you a new version exists.
+- Identities: create, import, back up, or reuse your Mumble desktop identity, with a password-protected backup.
+
+</details>
+
 ## Good to know
 
 - **It is still Mumble.** Any Mumble server works, and people on other Mumble apps are part of the same channels and chats.
-- **A few extras only work between Libertad users**, because Mumble itself has no such thing: screen and camera sharing, text channels, and players for shared files. Everyone else sees a normal channel, a normal link, or nothing.
+- **A few extras only work between Libertad users**, because Mumble itself has no such thing: screen and camera sharing, Watch Together, text channels, profile cards with backgrounds, `@all` mentions, and players for shared files. Everyone else sees a normal channel, a normal link, or nothing.
+- **Friends are separate from servers.** The friend network works with no Mumble server, and a friend does not need to be on any server you use.
 - **Not in Libertad yet:** push to talk while Libertad is in the background, whisper and shout, positional audio, the in-game overlay, recording, and the ban list and registered-user editors. The Mumble desktop app has these.
 - **Back up your identity.** It is how servers recognize you. Libertad offers a password-protected backup right after you create it, and in Settings, Identities.
 

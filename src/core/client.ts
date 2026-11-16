@@ -2,7 +2,7 @@ import { Emitter } from './emitter.ts';
 import { FrameReader, frame, type Codec, type MessageName } from './proto.ts';
 import type { Transport } from './transport.ts';
 
-export const CLIENT_RELEASE = 'Libertad 0.2.0';
+export const CLIENT_RELEASE = 'Libertad 0.5.0';
 const VERSION = { major: 1, minor: 5, patch: 0 };
 const PING_INTERVAL_MS = 15000;
 

@@ -47,9 +47,18 @@
   let hwAccel = $state(true);
   let hwStarted = $state(true);
   let hwError = $state('');
+  let gpu = $state('auto');
+  let gpuStarted = $state('auto');
+  let gpuReverted = $state('');
+  let gpus = $state<{ id: string; label: string; kind: string }[]>([]);
   let autoUpdate = $state(true);
   let throttle = $state(true);
   let throttleError = $state('');
+  // Linux on a Wayland desktop only (null elsewhere): the window system the app runs on; a change applies after a restart
+  let display = $state<'x11' | 'wayland'>('x11');
+  let displayStarted = $state<'x11' | 'wayland'>('x11');
+  let displayChoice = $state(false);
+  let displayError = $state('');
   let updBusy = $state(false);
   let updMsg = $state('');
   async function setAutoUpdate() {
@@ -72,7 +81,7 @@
   let startupError = $state('');
   $effect(() => { if (tab === 'system') yt.refresh(); });
   $effect(() => {
-    if (tab === 'system' && desktop) desktop.system.get().then(i => { hwAccel = hwStarted = i.hardwareAcceleration; autoUpdate = i.autoUpdate; throttle = i.throttleWhenHidden; startup = i.launchOnStartup; }).catch(() => {});
+    if (tab === 'system' && desktop) desktop.system.get().then(i => { hwAccel = hwStarted = i.hardwareAcceleration; gpu = gpuStarted = i.gpu ?? 'auto'; gpus = i.gpus ?? []; gpuReverted = i.gpuReverted ?? ''; autoUpdate = i.autoUpdate; throttle = i.throttleWhenHidden; startup = i.launchOnStartup; displayChoice = !!i.displayServer; if (i.displayServer) { display = i.displayServer.choice; displayStarted = i.displayServer.running; } }).catch(() => {});
   });
   async function setStartup() {
     startupError = '';
@@ -84,10 +93,20 @@
     try { await desktop!.system.setThrottleWhenHidden(throttle); }
     catch (e) { throttle = !throttle; throttleError = `Could not save: ${(e as Error).message}`; }
   }
+  async function setDisplay() {
+    displayError = '';
+    try { await desktop!.system.setDisplayServer(display); }
+    catch (e) { display = displayStarted; displayError = `Could not save: ${(e as Error).message}`; }
+  }
   async function setHwAccel() {
     hwError = '';
     try { await desktop!.system.setHardwareAcceleration(hwAccel); }
     catch (e) { hwAccel = !hwAccel; hwError = `Could not save: ${(e as Error).message}`; }
+  }
+  async function setGpu() {
+    hwError = '';
+    try { await desktop!.system.setGpu(gpu); }
+    catch (e) { gpu = gpuStarted; hwError = `Could not save: ${(e as Error).message}`; }
   }
   // How much the kept files take, once the tab is open
   $effect(() => { if (tab === 'files') files.measure(); });
@@ -190,7 +209,17 @@
     {/if}
     <label class="check"><input type="checkbox" bind:checked={hwAccel} onchange={setHwAccel} /> Use hardware acceleration</label>
     <p class="help">Lets the graphics card draw the app, encode and decode shared screens, and convert videos for Torrent Together (HEVC, Blu-ray, DTS), which takes load off the processor. Turn it off if the picture flickers, tears or streams glitch.</p>
-    {#if hwAccel !== hwStarted}
+    {#if hwAccel && gpus.length > 1}
+      <label for="s-gpu">Video encoding and decoding</label>
+      <select id="s-gpu" bind:value={gpu} onchange={setGpu}>
+        <option value="auto">Automatic</option>
+        <option value="software">Software (processor only)</option>
+        {#each gpus as g (g.id)}<option value={g.id}>{g.label}</option>{/each}
+      </select>
+      <p class="help">This computer has more than one graphics chip. On Linux the separate card (NVIDIA) has no video encoder the app can use, while the integrated chip (AMD, Intel) usually has, so streams and calls with video then cost far less processor. Only the video work moves: the window is still drawn by the card that draws your desktop. Choosing the NVIDIA card uses its decoder (needs the nvidia-vaapi-driver package, and it can decode but not encode). Software keeps all video work on the processor, whatever graphics chips the computer has. Screen sharing and calls with video are encoded by the chip chosen here when it has an encoder (the integrated AMD or Intel chip does, NVIDIA does not on Linux); otherwise by the processor.</p>
+    {/if}
+    {#if gpuReverted}<p class="help warn">The graphics card you chose did not show a picture (the window stayed black), so Automatic was restored.</p>{/if}
+    {#if hwAccel !== hwStarted || gpu !== gpuStarted}
       <div class="row kept">
         <p class="help">Restart Libertad to apply this.</p>
         <button class="btn primary" onclick={() => desktop!.system.relaunch()}>Restart now</button>
@@ -201,6 +230,21 @@
       <label class="check"><input type="checkbox" bind:checked={throttle} onchange={setThrottle} /> Throttle when hidden</label>
       <p class="help">While Libertad is minimized or hidden to the tray, it stops drawing the app and frees the pictures, GIFs and videos it held, which takes a good part of the memory it uses. Voice, the connection, chat messages and other people's profile changes carry on, and files that others send are not downloaded (even under the automatic download limit) until the window is back. Audio of shared streams and Watch Together pauses meanwhile. Applies at once.</p>
       {#if throttleError}<p class="help warn">{throttleError}</p>{/if}
+    {/if}
+    {#if desktop && displayChoice}
+      <label for="s-display">Window system</label>
+      <select id="s-display" bind:value={display} onchange={setDisplay}>
+        <option value="x11">X11 (recommended)</option>
+        <option value="wayland">Wayland</option>
+      </select>
+      <p class="help">Your desktop runs Wayland. X11 runs Libertad through XWayland. On Wayland the call bar can not do three things: it does not stay on top of other windows when you drag it out of the app, it does not follow the mouse while you drag it, and it does not pop back into the app when you drop it on the app.</p>
+      {#if display !== displayStarted}
+        <div class="row kept">
+          <p class="help">Restart Libertad to apply this.</p>
+          <button class="btn primary" onclick={() => desktop!.system.relaunch()}>Restart now</button>
+        </div>
+      {/if}
+      {#if displayError}<p class="help warn">{displayError}</p>{/if}
     {/if}
     {#if desktop}
       <label class="check"><input type="checkbox" bind:checked={startup} onchange={setStartup} /> Run on system startup</label>

@@ -3,6 +3,30 @@
 All notable changes to Libertad.
 
 
+## 0.5.0 - 2026-11-16
+
+### Added:
+
+- **Friends and private calls.** A server-less friend network over HyperDHT: your friend code (from your identity, the same on every computer), add friends by code, accept or decline requests (declining blocks the code), turn requests off, search your friends, rename or remove them, and see who is online. Calls are peer to peer and end-to-end encrypted: ring, answer, decline, cancel, mute and deafen state, and a call timer.
+- **Friend requests from a server.** Press the friend request button on someone's profile card; the request travels over a direct WebRTC channel, so the Mumble server and its admin do not see the code or the request.
+- **Screen share, camera and Watch Together inside a friend call**, with the same controls as in a channel and in draggable windows.
+- **Call chat**: messages during a call with three styles (bubbles, lines, compact), GIF support, kept only until the call ends.
+- **Friend profiles** (picture, banner, description) exchanged between friends and kept on your computer so they show while offline.
+- **Mentions**: `@name` and `@all` (or `@everyone`) with autocomplete and their own sound; other Mumble clients see plain text.
+- **Zoom on streams**: Ctrl and the mouse wheel zooms any screen, camera or Watch Together picture, drag to move, one click to reset.
+- **Per-viewer stream cap**: a viewer can limit the FPS and resolution they receive, independently of the host.
+- **Hardware video encoding** is tried first for screen and camera sharing when your GPU has an encoder.
+- **Pause background** on a profile card, for one person or everybody, so GIF and video backgrounds stand on their first frame (kept only on your computer).
+- **Dock the chat on the right** by dragging an empty spot of the chat to the right side.
+- **Quick audio popover** from the user bar: change devices, transmit mode and levels without opening Settings.
+- **Local nicknames** for other users, visible only to you.
+- **Tray icon status**: the icon shows offline, idle, talking, muted or deafened.
+
+
+### Changed:
+
+- README.
+
 ## 0.4.5 - 2026-11-15
 
 ### Fixed:

@@ -9,19 +9,24 @@
   import { userMenu, changeNamePrompt } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { share } from '../lib/share.svelte.ts';
+  import { p2p } from '../lib/p2p.svelte.ts';
   import { renderIncoming, textToHtml } from '../lib/html.ts';
   import { setBannerFromFile, useAsProfileBackground } from '../lib/banner-actions.ts';
   import { colorPicker } from '../lib/colorpicker.svelte.ts';
   import { stripBanner, type BannerView } from '../core/banner.ts';
-  import { ownBanner, ownProfile, ownAvatar } from '../lib/banner.svelte.ts';
+  import { ownBanner, ownProfile, ownAvatar, OWN } from '../lib/banner.svelte.ts';
+  import { OFFLINE_SESSION, offlineUser, offlineAvatar } from '../lib/offline-self.ts';
   import MediaFill from './MediaFill.svelte';
   import { bgPause } from '../lib/still.svelte.ts';
   import { imageEditor, EDITABLE_OR_GIF } from '../lib/image-editor.svelte.ts';
 
   // A person's card, next to what was clicked (a sheet at the bottom on phones)
   const open = $derived(ui.profile);
-  const user = $derived(open ? session.user(open.session) : undefined);
-  const isSelf = $derived(!!user && user.session === session.self?.session);
+  // Opened from the start screen, before any server: your own card from what this device keeps
+  const offline = $derived(open?.session === OFFLINE_SESSION && session.status !== 'connected');
+  const user = $derived(offline ? offlineUser() : open ? session.user(open.session) : undefined);
+  const isSelf = $derived(offline || (!!user && user.session === session.self?.session));
+  const bannerOf = (slot: 'banner' | 'profile') => (!user ? null : offline ? OWN[slot].view() : session.banner(user.session, slot));
   const name = $derived(user ? store.displayName(user) : '');
   const talking = $derived(!!user && (voice.talking[user.session] || (isSelf && voice.transmitting)));
   const channelName = $derived(user ? session.channel(user.channelId)?.name || 'Root' : '');
@@ -42,19 +47,19 @@
 
   // The banner behind the picture: theirs, or a color of their name until it arrives
   let previewColor = $state<string | null>(null);
-  const banner = $derived<BannerView | null>(previewColor && isSelf ? { kind: 'color', color: previewColor } : user ? session.banner(user.session, 'banner') : null);
+  const banner = $derived<BannerView | null>(previewColor && isSelf ? { kind: 'color', color: previewColor } : user ? bannerOf('banner') : null);
   // Without a banner of one's own the banner area is left plain: the card's own background shows, as after removing the profile card
   const bannerStyle = $derived(banner?.kind === 'image' ? undefined : `background-color: ${banner?.kind === 'color' ? banner.color : 'transparent'}`);
   const still = $derived(!!user && bgPause.paused(user));
 
   // A card background picture that covers the card too: under the banner, or all of it (banner included)
   const skin = $derived.by(() => {
-    const v = user ? session.banner(user.session, 'profile') : null;
+    const v = bannerOf('profile');
     return (v?.kind === 'image' || v?.kind === 'color') && v.scope ? v : null;
   });
 
   // Gone when the person left or the connection ended
-  $effect(() => { if (open && (!user || session.status !== 'connected')) close(); });
+  $effect(() => { if (open && (!user || (!offline && session.status !== 'connected'))) close(); });
 
   let el = $state<HTMLDivElement>();
   let pos = $state({ x: 0, y: 0 });
@@ -131,7 +136,7 @@
   function outside(e: MouseEvent) {
     if (editingDesc && !(e.target as Element).closest?.('.desc-area')) editingDesc = false;
     // The right-click menu (and the click that dismisses it) belongs to this card: its choices need the card to stay
-    if (imageEditor.state || (e.target as Element).closest?.('[data-colorpicker], .menu[role="menu"], .catcher')) return;
+    if (imageEditor.state || (e.target as Element).closest?.('[data-colorpicker], .menu[role="menu"], .catcher, .backdrop')) return;
     if (open && el && !el.contains(e.target as Node)) close();
     else if (bannerMenu && !(e.target as Element).closest?.('.bmenu, .banner-edit')) bannerMenu = false;
   }
@@ -255,6 +260,7 @@
     // A picture, GIF or video: the editor (or a menu for a video) asks where it goes
     background: () => { bannerMenu = false; target = 'choose'; bannerPicker?.click(); },
     color: askColorPlace,
+    removeAvatar: () => sessions.setBanner('avatar', null),
     // Read when the menu opens: only offered while there is a profile card to remove
     // It takes the banner (also its color) and the card picture away, so the card is plain again
     get remove() {
@@ -262,10 +268,41 @@
     }
   };
 
+  // Without a server the menu has only what works here
+  function offlineMenu() {
+    return [
+      { header: true, label: user?.name ?? '' },
+      { label: 'Change avatar...', action: cardChoices.avatar },
+      { label: 'Add a background', action: cardChoices.background },
+      { label: 'Add a color', action: cardChoices.color },
+      ...(ownAvatar.value ? [{ label: 'Remove avatar', action: cardChoices.removeAvatar }] : []),
+      ...(cardChoices.remove ? [{ label: 'Remove profile card', danger: true, action: cardChoices.remove }] : [])
+    ];
+  }
+
   async function removeBanner() {
     bannerMenu = false;
     previewColor = null;
     await sessions.setBanner('banner', null);
+  }
+
+  // Only for someone who is not a friend yet; sending is a private message with my friend code, nothing else
+  const canAddFriend = $derived(!!user && !isSelf && p2p.supported && !p2p.isFriend(user.hash));
+  const requested = $derived(!!user && p2p.isRequested(user.hash));
+  let friendBusy = $state(false);
+  // Asks first: the request goes through the server, so the server's operator can read it
+  function addFriend() {
+    if (!user || friendBusy) return;
+    const target = user.session;
+    ui.prompt = {
+      title: 'Send friend request?', label: '', input: 'none', confirm: 'Yes', cancel: 'No',
+      text: 'The request goes through this Mumble server, so its operator can see your friend code and who you are adding. If the operator is malicious, they could link your identity across servers, or swap the code and sit between you and this person. Safer: send your friend code to them privately, some other way you trust (Friends > View Code), and let them add you with it. Send the request through this server anyway?',
+      onsubmit: async () => {
+        friendBusy = true;
+        error = await session.sendFriendRequest(target);
+        friendBusy = false;
+      }
+    };
   }
 
   function message() {
@@ -297,7 +334,7 @@
   {#if sheet}<button class="scrim" aria-label="Close" onclick={close}></button>{/if}
   <div class="card {side}" class:sheet class:skinned={skin?.scope === 'whole'} role="dialog" tabindex="-1" aria-label="Profile of {name}" bind:this={el}
     style:left={sheet ? undefined : `${pos.x}px`} style:top={sheet ? undefined : `${pos.y}px`}
-    oncontextmenu={e => menu.show(e, userMenu(user, cardChoices))}>
+    oncontextmenu={e => menu.show(e, offline ? offlineMenu() : userMenu(user, cardChoices))}>
     {#if skin?.scope === 'whole'}{#if skin.kind === 'color'}<div class="fill" style:background-color={skin.color}></div>{:else}<MediaFill class="fill" view={skin} paused={still} />{/if}{/if}
     <div class="banner" style={skin?.scope === 'whole' ? undefined : bannerStyle}>
       {#if skin?.scope !== 'whole' && banner?.kind === 'image'}<MediaFill class="fill" view={banner} paused={still} />{/if}
@@ -308,7 +345,7 @@
     <div class="lower" class:skinned={skin?.scope === 'under'}>
     {#if skin?.scope === 'under'}{#if skin.kind === 'color'}<div class="fill" style:background-color={skin.color}></div>{:else}<MediaFill class="fill" view={skin} paused={still} />{/if}{/if}
     <div class="top">
-      <span class="pic"><Avatar name={user.name} size={80} speaking={talking} src={session.avatar(user.session)} /></span>
+      <span class="pic"><Avatar name={user.name} size={80} speaking={talking} src={offline ? offlineAvatar() : session.avatar(user.session)} /></span>
       {#if isSelf}
         <input bind:this={picker} type="file" accept="image/*,video/mp4,video/webm" hidden onchange={pickPicture} />
       {/if}
@@ -317,7 +354,8 @@
       <h3>{name}</h3>
       <p class="sub">
         {#if name !== user.name}<span>{user.name}</span>{/if}
-        <span>{user.userId != null ? 'Registered' : 'Guest'}</span>
+        {#if offline}<span>Not connected</span>
+        {:else}<span>{user.userId != null ? 'Registered' : 'Guest'}</span>{/if}
         {#if isSelf}<span>You</span>{/if}
       </p>
       {#if user.selfMute || user.mute || user.selfDeaf || user.deaf || user.prioritySpeaker || user.recording}
@@ -330,6 +368,9 @@
       {/if}
 
       <div class="box">
+        {#if offline}
+          <p class="dim">Your description is kept by each server. Connect to one to edit it. Your picture and banner are saved here and shown wherever you connect.</p>
+        {:else}
         <h4>In channel</h4>
         <p class="where"><Icon name="channel" size={14} /><span>{channelName}</span></p>
         {#if sharing}
@@ -360,17 +401,20 @@
             <p class="dim">{isSelf ? 'You have no description yet.' : 'No description.'}</p>
           {/if}
         </div>
+        {/if}
       </div>
 
       {#if error}<p class="error">{error}</p>{/if}
 
+      {#if !offline}
       <div class="actions">
         {#if isSelf}
-          <button class="btn" disabled={busy} onclick={() => picker?.click()}>{busy ? 'Preparing...' : 'Add avatar'}</button>
-          {#if ownAvatar.value}<button class="btn" disabled={busy} onclick={() => sessions.setBanner('avatar', null)}>Remove avatar</button>{/if}
-          <button class="btn" onclick={() => { const u = user; close(); changeNamePrompt(u); }}>Change name</button>
+          {#if !offline}<button class="btn" onclick={() => { const u = user; close(); changeNamePrompt(u); }}>Change name</button>{/if}
         {:else}
           <button class="btn primary" onclick={message}>Send message</button>
+          {#if canAddFriend}
+            <button class="btn" disabled={requested || friendBusy} title={requested ? 'Waiting for them to accept in their Friends window' : 'Send a friend request'} onclick={addFriend}>{requested ? 'Request sent' : 'Add Friend'}</button>
+          {/if}
           {#if sharing}
             {#if share.watchOf(user.session)}<button class="btn" onclick={() => share.unwatch(user.session)}>Stop watching</button>
             {:else}<button class="btn" onclick={() => share.watch(sessions.active, user.session)}>Watch</button>{/if}
@@ -378,6 +422,7 @@
           <button class="btn icon" title="More" aria-label="More" onclick={e => menu.show(e, userMenu(user))}><Icon name="more" size={16} /></button>
         {/if}
       </div>
+      {/if}
     </div>
     </div>
   </div>

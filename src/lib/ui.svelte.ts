@@ -4,6 +4,8 @@ export interface PromptRequest {
   title: string;
   label: string;
   confirm: string;
+  // The label of the button that closes without confirming (default "Cancel")
+  cancel?: string;
   danger?: boolean;
   input?: 'text' | 'password' | 'none';
   initial?: string;

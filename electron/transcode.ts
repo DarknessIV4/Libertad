@@ -19,6 +19,12 @@ const run = (file: string, args: string[], timeout = 8000, maxBuffer = 8 * 1024 
 // ffmpeg and ffprobe: the ones named in LIBERTAD_FFMPEG / LIBERTAD_FFPROBE, the ones that ship with the app
 // (the ffmpeg-static and ffprobe-static packages), or the ones on the PATH. null when there are none.
 export async function findBinaries(): Promise<Binaries | null> {
+  return (await findAllBinaries())[0] ?? null;
+}
+
+// Every working ffmpeg/ffprobe pair, in the order above. The one that ships with the app is often built without the
+// graphics card's encoders that the computer's own ffmpeg has, so the choice can depend on what each can really use.
+export async function findAllBinaries(): Promise<Binaries[]> {
   const unpacked = (p: string) => p.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
   const works = (f: string) => run(f, ['-version'], 5000).then(() => true, () => false);
   const candidates: { ffmpeg: string; ffprobe: string }[] = [];
@@ -31,24 +37,26 @@ export async function findBinaries(): Promise<Binaries | null> {
     if (ff && fp) candidates.push({ ffmpeg: unpacked(ff), ffprobe: unpacked(fp) });
   } catch { /* not installed */ }
   candidates.push({ ffmpeg: 'ffmpeg', ffprobe: 'ffprobe' });
-  for (const c of candidates) if (await works(c.ffmpeg) && await works(c.ffprobe)) return c;
-  return null;
+  const found: Binaries[] = [];
+  for (const c of candidates) if (await works(c.ffmpeg) && await works(c.ffprobe)) found.push(c);
+  return found;
 }
 
 // Which hardware H.264 encoder this computer really has. Being listed by ffmpeg proves nothing (a build lists nvenc on
 // a machine without an NVIDIA card), so each candidate encodes a few seconds of test picture, and must also put its
 // keyframes where they are asked for, because the playlist assumes every segment is exactly as long as it says.
 export async function findHardware(bin: Binaries, platform: NodeJS.Platform = process.platform): Promise<HwEncoder | null> {
-  const renderNode = ['/dev/dri/renderD128', '/dev/dri/renderD129'].find(d => existsSync(d));
+  // A laptop with two graphics chips has two render nodes, and either may be the one that can encode
+  const renderNodes = ['/dev/dri/renderD128', '/dev/dri/renderD129', '/dev/dri/renderD130'].filter(d => existsSync(d));
   const candidates: HwEncoder[] =
     platform === 'win32' ? [{ kind: 'nvenc' }, { kind: 'qsv' }, { kind: 'amf' }] :
     platform === 'darwin' ? [{ kind: 'videotoolbox' }] :
-    [{ kind: 'nvenc' }, ...(renderNode ? [{ kind: 'vaapi' as HwKind, device: renderNode }] : []), { kind: 'qsv' }];
+    [{ kind: 'nvenc' }, ...renderNodes.map(device => ({ kind: 'vaapi' as HwKind, device })), { kind: 'qsv' }];
   let listed = '';
   try { listed = await run(bin.ffmpeg, ['-hide_banner', '-encoders'], 8000); } catch { return null; }
   for (const h of candidates) {
     if (!new RegExp(`\\bh264_${h.kind}\\b`).test(listed)) continue;
-    const tmp = path.join(os.tmpdir(), `libertad-hwtest-${process.pid}-${h.kind}.ts`);
+    const tmp = path.join(os.tmpdir(), `libertad-hwtest-${process.pid}-${h.kind}-${path.basename(h.device ?? '')}.ts`);
     try {
       await run(bin.ffmpeg, [
         '-hide_banner', '-loglevel', 'error', '-nostdin', ...(h.device ? ['-vaapi_device', h.device] : []),
@@ -60,7 +68,8 @@ export async function findHardware(bin: Binaries, platform: NodeJS.Platform = pr
       const keys = out.split('\n').filter(l => /,K/.test(l)).map(l => Number(l.split(',')[0])).filter(Number.isFinite);
       // Keyframes at about 0, 1, 2 and 3 seconds
       if (keys.length >= 3 && keys.length <= 6 && keys.slice(1).every((t, i) => Math.abs(t - keys[i] - 1) < 0.25)) return h;
-    } catch { /* not usable here: try the next */ } finally { void fs.rm(tmp, { force: true }); }
+      console.warn(`[transcode] ${h.kind}${h.device ? ' ' + h.device : ''}: keyframes are not where they were asked for`);
+    } catch (e) { console.warn(`[transcode] ${h.kind}${h.device ? ' ' + h.device : ''} not usable:`, String((e as Error).message).split('\n').slice(0, 2).join(' ')); } finally { void fs.rm(tmp, { force: true }); }
   }
   return null;
 }
@@ -85,6 +94,7 @@ interface Session {
   exited: boolean;
   failed: string;
   hw: boolean;                  // this run encodes on the graphics card
+  killed: boolean;              // stopped by us (far enough ahead, a seek): not a failure of the card
   last: number;                 // the newest segment the viewer asked for
   timer: ReturnType<typeof setInterval>;
 }
@@ -100,7 +110,10 @@ export function createTranscoder(opts: TranscoderOptions) {
   let hwP: Promise<HwEncoder | null> | null = null;
   let hwBroken = false;
   const hardware = (): Promise<HwEncoder | null> =>
-    opts.hardware === false || hwBroken ? Promise.resolve(null) : (hwP ??= findHardware(opts.bin).catch(() => null));
+    opts.hardware === false || hwBroken ? Promise.resolve(null) : (hwP ??= findHardware(opts.bin).catch(() => null).then(h => {
+      console.log(`[transcode] hardware acceleration is on: ${h ? `encoding with ${h.kind}${h.device ? ' on ' + h.device : ''}` : 'no usable encoder found, the processor will encode'}`);
+      return h;
+    }));
   // -readrate arrived in ffmpeg 5: an older ffmpeg would refuse to start with it
   let rate: Promise<boolean> | null = null;
   const canPace = () => (rate ??= run(opts.bin.ffmpeg, ['-hide_banner', '-h', 'full'], 15000, 32 * 1024 * 1024).then(out => /-readrate\b/.test(out), () => false));
@@ -135,6 +148,7 @@ export function createTranscoder(opts: TranscoderOptions) {
   }
 
   function kill(s: Session) {
+    s.killed = true;
     clearInterval(s.timer);
     if (!s.exited) { try { s.proc.kill('SIGKILL'); } catch { /* already gone */ } }
   }
@@ -156,7 +170,7 @@ export function createTranscoder(opts: TranscoderOptions) {
     try { if (proc.pid) os.setPriority(proc.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not allowed here */ }
     let err = '';
     proc.stderr?.on('data', (d: Buffer) => { err = (err + d.toString()).slice(-1500); });
-    const s: Session = { dir, start, proc, exited: false, failed: '', hw: !!hw, last: start, timer: setInterval(() => {}, 1 << 30) };
+    const s: Session = { dir, start, proc, exited: false, failed: '', hw: !!hw, killed: false, last: start, timer: setInterval(() => {}, 1 << 30) };
     clearInterval(s.timer);
     proc.once('error', e => { s.exited = true; s.failed = e.message; });
     proc.once('exit', code => { s.exited = true; if (code && !s.failed) s.failed = err.trim().split('\n').pop() || `ffmpeg stopped (${code})`; });
@@ -188,7 +202,7 @@ export function createTranscoder(opts: TranscoderOptions) {
         await sleep(150); // a segment may have been renamed just as the process ended
         if (existsSync(file)) return file;
         // The graphics card could not do it (a driver, a picture it can not take): the processor does
-        if (s.hw && !hwBroken) { hwBroken = true; s = await begin(skey, input, info, voice, n); s.last = n; continue; }
+        if (s.hw && !hwBroken && !s.killed) { hwBroken = true; console.warn('[transcode] the graphics card failed, the processor takes over:', s.failed); s = await begin(skey, input, info, voice, n); s.last = n; continue; }
         throw new Error(s.failed || 'The video could not be converted');
       }
       await sleep(100);

@@ -22,6 +22,7 @@
   import { sessions } from '../lib/session.svelte.ts';
   import { native } from '../lib/native.ts';
   import { systemAudioTrack } from '../lib/audio/system-feed.ts';
+  import { callMedia } from '../lib/call-media.svelte.ts';
 
   // Everything is chosen here, with a preview, before anything is sent: what to show, which
   // sound goes with it and the quality. In a browser, and on Wayland, the system's own dialog
@@ -36,6 +37,16 @@
   type DialogKind = ShareKind | 'watch';
   // Each kind has its own menu (the buttons next to the microphone open them); there are no tabs
   let kind = $state<DialogKind>(share.dialogKind === 'screen' && !canScreen ? 'camera' : share.dialogKind);
+  // In a friend call the one share button opens this with two tabs, Screen share and Camera
+  const inCall = target === callMedia.session;
+  function pickKind(next: 'screen' | 'camera') {
+    if (kind === next || busy) return;
+    dropPreview();
+    error = '';
+    selected = '';
+    kind = next;
+    if (next === 'camera') void showCamera();
+  }
   let cameras = $state<MediaDeviceInfo[]>([]);
   let camera = $state('');
   // The system (Windows privacy setting, macOS permission) blocks the camera: offer to open its settings
@@ -704,7 +715,7 @@
   onDestroy(() => { if (!handedOver) dropPreview(); });
 </script>
 
-<Modal title={kind === 'camera' ? 'Share your camera' : kind === 'watch' ? 'Watch together' : 'Share your screen'} {onclose} width={760}>
+<Modal title={inCall && kind !== 'watch' ? 'Share your screen or camera' : kind === 'camera' ? 'Share your camera' : kind === 'watch' ? 'Watch together' : 'Share your screen'} {onclose} width={760}>
   <p class="help">Libertad users in your channel can watch (and, with Cross-Room Watching on, other rooms too). Nothing is sent until you press Start sharing.</p>
 
   <div class="kinds">
@@ -713,6 +724,13 @@
       Enable Cross-Room Watching
     </label>
   </div>
+
+  {#if inCall && kind !== 'watch'}
+    <div class="watch-modes" role="tablist" aria-label="What to share">
+      {#if canScreen}<button role="tab" aria-selected={kind === 'screen'} class:active={kind === 'screen'} onclick={() => pickKind('screen')}>Screen share</button>{/if}
+      <button role="tab" aria-selected={kind === 'camera'} class:active={kind === 'camera'} onclick={() => pickKind('camera')}>Camera</button>
+    </div>
+  {/if}
 
   {#if !canScreen && kind === 'screen'}<p class="help">This browser cannot capture the screen (no browser on Android or iOS can). Watching other people's screens works.</p>{/if}
   {#if kind === 'camera'}

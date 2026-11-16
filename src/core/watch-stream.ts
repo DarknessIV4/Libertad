@@ -7,6 +7,7 @@ import { rtcConfig, gathered } from '../lib/ice.ts';
 import { shareSettings } from '../lib/share.svelte.ts';
 import { parseCap, capFps, capScale, type ViewerCap } from '../lib/stream-quality.ts';
 import { store } from '../lib/settings.svelte.ts';
+import { preferHardwareVideo } from '../lib/hw-codec.ts';
 import { watchFileStreamState } from '../lib/watch-file-stream.svelte.ts';
 
 // Opus is negotiated as mono speech by default; a film's sound is stereo
@@ -191,6 +192,8 @@ class WatchFileStream {
         peer.senders.push(rtpSender);
         await this.applyQuality(rtpSender, streamer.caps.get(sender));
       }
+      // Encode on the graphics card when this computer has one (otherwise the processor does 1080p of film)
+      await preferHardwareVideo(pc, stream.getVideoTracks()[0]);
       await pc.setLocalDescription({ type: 'answer', sdp: stereo((await pc.createAnswer()).sdp ?? '') });
       await this.gathered(pc);
       if (streamer.peers.get(sender)?.pc === pc && pc.localDescription) {

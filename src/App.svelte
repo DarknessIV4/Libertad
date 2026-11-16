@@ -35,6 +35,9 @@
   import { customBg, PANELS } from './lib/custom-bg.svelte.ts';
   import { isHex } from './lib/theme.ts';
   import Home from './ui/Home.svelte';
+  import Friends from './ui/Friends.svelte';
+  import CallBar from './ui/CallBar.svelte';
+  import { p2p } from './lib/p2p.svelte.ts';
   import { share } from './lib/share.svelte.ts';
   import Shell from './ui2/Shell.svelte';
   import { identities } from './lib/identities.svelte.ts';
@@ -242,10 +245,13 @@
 {/if}
 {#if share.dialog}<ShareDialog onclose={() => (share.dialog = null)} />{/if}
 {#if ui.roomPicker}<RoomPicker serverId={ui.roomPicker.serverId} onclose={() => (ui.roomPicker = null)} />{/if}
-{#if ui.prompt}<PromptDialog {...ui.prompt} onclose={() => { const p = ui.prompt; ui.prompt = null; p?.oncancel?.(); }} />{/if}
 <UpdateDialog />
 <ProfileCard />
 <ChatDragOverlay />
+{#if p2p.open}<Friends />{/if}
+<!-- After the windows it can be opened from (Friends, ...), so it is drawn over them -->
+{#if ui.prompt}<PromptDialog {...ui.prompt} onclose={() => { const p = ui.prompt; ui.prompt = null; p?.oncancel?.(); }} />{/if}
+<CallBar />
 <ImageViewer />
 <ContextMenu />
 <ColorPicker />

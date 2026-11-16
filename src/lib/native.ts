@@ -6,6 +6,7 @@ import type { FoundTorrent, TitleResult } from '../core/search.ts';
 import type { YoutubeResult } from '../core/youtube-search.ts';
 import type { EmbeddedBatch, EmbeddedTrack } from '../core/mkv.ts';
 import type { Cue, SubtitleOption } from '../core/subtitles.ts';
+import type { P2pState, FriendProfileData } from '../core/p2p-wire.ts';
 
 // What an IPC call to the desktop app's main process rejects with: "Error invoking remote method 'x': Error: the sentence"
 export const torrentError = (e: unknown): string =>
@@ -38,6 +39,45 @@ export type FileExport = { ok: true; path: string } | { ok: false; reason: 'canc
 
 // The desktop app's preload API
 interface NativeApi extends PlatformApi {
+  // Friends and calls over HyperDHT, with no Mumble server. The key pair comes from the default identity.
+  p2p: {
+    // Who I am (the friend code to share) without joining the network
+    state(): Promise<P2pState>;
+    // Joins the network: friends see me online and can call me
+    start(): Promise<P2pState>;
+    stop(): Promise<P2pState>;
+    // Rejects with a sentence when the code is not a friend code
+    addFriend(code: string, name: string): Promise<void>;
+    acceptRequest(key: string): Promise<void>;
+    // Also blocks that key
+    declineRequest(key: string): Promise<void>;
+    removeFriend(key: string): Promise<void>;
+    renameFriend(key: string, name: string): Promise<void>;
+    setAcceptRequests(on: boolean): Promise<void>;
+    // Friend requests through a Mumble server (see core/p2p-wire.ts): a request of mine was sent, one arrived, or the
+    // answer to mine arrived. The person is told by certificate hash; a result of 'none' means it was ignored.
+    serverSent(hash: string, nonce: string): Promise<string>;
+    serverRequest(code: string, name: string, hash: string, nonce: string): Promise<string>;
+    serverAnswer(code: string, name: string, hash: string): Promise<string>;
+    call(key: string): Promise<boolean>;
+    accept(): Promise<boolean>;
+    decline(): Promise<void>;
+    hangUp(): Promise<void>;
+    // A message in the call in progress (kept only until the call ends); false when it could not be sent
+    sendChat(text: string): Promise<boolean>;
+    // My profile for friends (text, colors, and pictures as bytes with their type); a friend's profile as kept here;
+    // and a ping that one of them changed (the key of the friend)
+    setProfile(profile: { text: string; slots: Record<string, unknown> }): Promise<void>;
+    profile(key: string): Promise<FriendProfileData | null>;
+    onProfile(fn: (key: string) => void): () => void;
+    setMute(muted: boolean, deafened: boolean): void;
+    sendAudio(frame: number, last: boolean, opus: Uint8Array): void;
+    // Setup messages for what is shared in the call (core/p2p-wire.ts SIGNAL_CHANNEL); false when no call is active
+    sendSignal(channel: number, packet: Uint8Array): Promise<boolean>;
+    onSignal(fn: (key: string, channel: number, packet: Uint8Array) => void): () => void;
+    onState(fn: (state: P2pState) => void): () => void;
+    onAudio(fn: (key: string, frame: number, last: boolean, opus: Uint8Array) => void): () => void;
+  };
   // Other people's profile backgrounds and pictures in the app's data folder (user-profiles/<name>/<file>); bytes null deletes
   profiles: {
     read(name: string, file: 'meta.json' | 'banner' | 'card' | 'profile' | 'avatar'): Promise<Uint8Array | null>;
@@ -95,11 +135,15 @@ interface NativeApi extends PlatformApi {
   reportHidden(hidden: boolean, stats?: Record<string, number>): void;
   // Settings Chromium reads at start-up; changes apply after a restart
   system: {
-    get(): Promise<{ hardwareAcceleration: boolean; autoUpdate: boolean; throttleWhenHidden: boolean; launchOnStartup: boolean; platform: string }>;
+    get(): Promise<{ hardwareAcceleration: boolean; gpu: string; gpuReverted?: string; gpus: { id: string; label: string; kind: 'integrated' | 'discrete' }[]; autoUpdate: boolean; throttleWhenHidden: boolean; launchOnStartup: boolean; platform: string; displayServer: { choice: 'x11' | 'wayland'; running: 'x11' | 'wayland' } | null }>;
     setAutoUpdate(on: boolean): Promise<void>;
     // Takes effect at once, no restart
     setThrottleWhenHidden(on: boolean): Promise<void>;
+    // Linux on a Wayland desktop: run as an X11 window (through XWayland) or a native Wayland one; applies after a restart
+    setDisplayServer(which: 'x11' | 'wayland'): Promise<void>;
     setHardwareAcceleration(on: boolean): Promise<void>;
+    // Which graphics chip does the work when the computer has two ('auto' leaves it to Chromium); applies after a restart
+    setGpu(id: string): Promise<void>;
     // Starts Libertad when you sign in to the computer (takes effect at once, no restart)
     setLaunchOnStartup(on: boolean): Promise<void>;
     relaunch(): Promise<void>;
@@ -150,6 +194,19 @@ interface NativeApi extends PlatformApi {
   };
   setPopoutFullScreen(name: string, fullscreen?: boolean): Promise<boolean>;
   isPopoutFullScreen(name: string): Promise<boolean>;
+  // Puts the pop-out window with that name at a place on the screen (its top left corner)
+  movePopout(name: string, x: number, y: number): void;
+  // Gives the pop-out window a new size, keeping one edge in place ('right' = the left edge stays and it grows rightward, 'left' = the
+  // right edge stays; 'auto' = rightward unless the screen has no room). Resolves to the side it used.
+  resizePopout(name: string, width: number, height: number, side: 'auto' | 'left' | 'right'): Promise<'left' | 'right'>;
+  // The pop-out windows follow the system's cursor (by the place on each that is held) until endPopoutFollow
+  followPopouts(items: { name: string; dx: number; dy: number }[]): void;
+  // Resolves to whether the cursor is over the app's own window (the drag was let go on it)
+  endPopoutFollow(): Promise<boolean>;
+  // Whether the pop-out window with that name was moved since last asked, and the cursor is now over the app's own window
+  popoutDropCheck(name: string): Promise<boolean>;
+  // Where the pointer is in the page: the main process matches it with the cursor to know where the app's window is on the screen
+  appPointer(x: number, y: number): void;
   linkPreview(url: string): Promise<LinkPreviewData | null>;
   gifFetch(url: string): Promise<Uint8Array>;
   gifSearch(q: string, page: number): Promise<{ gifs: { id: string; preview: string; url: string }[]; more: boolean }>;

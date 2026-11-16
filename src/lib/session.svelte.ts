@@ -22,6 +22,8 @@ import { announce, isPiece } from '../core/file-transfer.ts';
 import { voice } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
 import { mentions } from './mentions.ts';
+import { p2p } from './p2p.svelte.ts';
+import { friendTag, parseFriendTag } from '../core/p2p-wire.ts';
 
 const codec = createCodec();
 
@@ -255,6 +257,8 @@ export class Session {
   // ─── Connection ─────────────────────────────────────────────────────────────
 
   async connect(server: SavedServer): Promise<void> {
+    // The voice is for one thing at a time: entering a server ends the call with a friend
+    if (p2p.call?.state === 'active') void p2p.hangUp();
     this.disconnect();
     const attempt = ++this.attempt;
     this.server = server;
@@ -384,6 +388,8 @@ export class Session {
       // Your picture, kept on this device (servers drop it when you leave unless you are registered)
       // Your banner, cards and avatar are announced in your description, and fetched from this computer
       Promise.all(SLOTS.map(s => OWN[s].loaded)).then(() => { if (live()) this.syncBanner(); });
+      // A description set before friends could see it is handed to them too
+      p2p.adoptDescription(stripBanner(client.self?.comment ?? ''));
       share.entered(this);
       thumbs.entered(this);
       textChannels.entered(this);
@@ -668,6 +674,7 @@ export class Session {
 
   // html comes from the rich editor, already sanitized XHTML. Only the text goes to the server: pictures never do.
   setComment(html: string): void {
+    p2p.setDescription(stripBanner(html));
     this.client?.setComment(stripBanner(html));
   }
 
@@ -1013,6 +1020,9 @@ export class Session {
     else if (msg.channels.length || msg.trees.length) key = `ch:${msg.channels[0] ?? self?.channelId ?? 0}`;
     else key = `dm:${msg.actor}`;
 
+    // A friend request, or the answer to mine: not a chat message
+    if (sender && !msg.channels.length && !msg.trees.length && this.friendMessage(sender, msg.html)) return;
+
     const sentId = MSG_ID.exec(msg.html)?.[1];
     const rendered = renderIncoming(msg.html.replace(MSG_ID, ''), store.trustedHosts);
     if (msg.actor == null) {
@@ -1020,6 +1030,51 @@ export class Session {
     } else {
       this.push(key, { kind: 'text', author: sender ? store.displayName(sender) : `#${msg.actor}`, authorSession: msg.actor, self: false, mention: msg.actor !== client.session && this.mentionsMe(msg.html), msgId: sentId, ...rendered });
     }
+  }
+
+  // Friend requests go as a private message with the sender's friend code hidden in it (see core/p2p-wire.ts): no
+  // address and no connection, and nothing happens on the other side until they accept. The server vouches for
+  // who sent it by their certificate hash, which is also how a card knows whether someone is already a friend.
+  private friendMessage(sender: User, html: string): boolean {
+    const tag = parseFriendTag(html);
+    if (!tag) return false;
+    if (!sender.hash) return true;
+    if (tag.kind === 'req') {
+      p2p.receiveRequest(tag.key, sender.name, sender.hash, tag.nonce).then(added => {
+        if (added) this.system(`dm:${sender.session}`, `${escapeHtml(store.displayName(sender))} sent you a friend request. Answer it in Friends, under Add a Friend.`);
+      });
+    } else {
+      p2p.receiveAnswer(tag.key, sender.name, sender.hash).then(added => {
+        if (added) this.system(`dm:${sender.session}`, `${escapeHtml(store.displayName(sender))} accepted your friend request.`);
+      });
+    }
+    return true;
+  }
+
+  // Returns what to tell the person, or '' when it was sent
+  async sendFriendRequest(userSession: number): Promise<string> {
+    const client = this.client;
+    const user = client?.users.get(userSession);
+    const mine = p2p.state.self?.key;
+    if (!client || !user || this.status !== 'connected') return 'Not connected to this server.';
+    if (!p2p.supported) return 'Friends need the desktop app.';
+    if (!user.hash) return 'This person has no certificate, so a request cannot be tied to them.';
+    if (!mine) return 'Your friend code is not ready yet.';
+    if (client.config.allowHtml === false) return 'This server does not pass on the hidden part of a message, so a request cannot go through it.';
+    // The secret that only this person gets to see, to tell their answer apart if it comes later by another way
+    const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+    client.sendText({ users: [user.session] }, `${friendTag('req', mine, nonce)}${escapeHtml(client.self?.name ?? '')} would like to add you as a friend (Libertad).`);
+    await p2p.markSent(user.hash, nonce);
+    return '';
+  }
+
+  // I accepted a request that came from this person: tell them my friend code, so both sides can connect
+  answerFriend(hash: string, myKey: string): void {
+    const client = this.client;
+    if (!client || this.status !== 'connected') return;
+    const user = [...client.users.values()].find(u => u.hash === hash);
+    if (!user || user.session === client.session) return;
+    client.sendText({ users: [user.session] }, `${friendTag('ok', myKey)}${escapeHtml(client.self?.name ?? '')} accepted your friend request (Libertad).`);
   }
 
   // Opening a server marks what is on screen as read
@@ -1351,6 +1406,17 @@ class Sessions {
 }
 
 export const sessions = new Sessions();
+// A call with a friend that is on (answered here, or by the friend) leaves every server, connected or still connecting
+p2p.beforeAnswer = () => {
+  // One that fails to let go must not keep the others
+  for (const s of [...sessions.list]) {
+    if (s.status === 'idle' && !s.client) continue;
+    try { s.disconnect(); } catch (err) { console.warn('[call] could not leave a server', err); }
+  }
+};
+
+// An accepted request is answered on every server where the person is
+p2p.onAccepted = (hash, myKey) => { for (const s of sessions.list) s.answerFriend(hash, myKey); };
 
 // The session of the server on screen. Forwards to the active Session so components keep
 // using `session.x`; methods are bound to the real instance so async work stays with its server.

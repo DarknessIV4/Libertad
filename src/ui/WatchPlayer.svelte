@@ -4,7 +4,6 @@
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { watchFileStream } from '../core/watch-stream.ts';
   import { watchFileStreamState } from '../lib/watch-file-stream.svelte.ts';
-  import { sessions } from '../lib/session.svelte.ts';
   import { onMount, onDestroy, untrack } from 'svelte';
   import YouTubePlayer from './YouTubePlayer.svelte';
   import Icon from './Icon.svelte';
@@ -35,7 +34,7 @@
   // The host's player is shown as it is; everyone else plays the live stream the host sends
   const liveStream = $derived.by<MediaStream | null>(() => {
     if (watchTogether.mode !== 2 || !watchTogether.party || watchTogether.isHost) return null;
-    const w = watchFileStreamState.watchersOf(sessions.active).find(x => x.session === watchTogether.party!.hostSession);
+    const w = watchFileStreamState.watchersOf(watchTogether.cur()).find(x => x.session === watchTogether.party!.hostSession);
     return w?.stream ?? null;
   });
 
@@ -303,7 +302,7 @@
       return;
     }
     wantSave = true;
-    files.download(sessions.active, share, watchTogether.party.hostSession, true);
+    files.download(watchTogether.cur(), share, watchTogether.party.hostSession, true);
   }
 
   // Saves the frame on screen as a PNG, where this person picks. Nothing is sent to the others.
@@ -593,7 +592,7 @@
         </video>
       {/if}
       {#if watchTogether.mode === 2 && !watchTogether.isHost && watchTogether.party}
-        {@const watchers = watchFileStreamState.watchersOf(sessions.active)}
+        {@const watchers = watchFileStreamState.watchersOf(watchTogether.cur())}
         {@const hostSession = watchTogether.party.hostSession}
         {@const watcher = watchers.find(w => w.session === hostSession)}
         {#if !hasVideo}

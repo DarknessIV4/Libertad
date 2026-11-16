@@ -1,10 +1,15 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { store, type SavedServer } from '../lib/settings.svelte.ts';
-  import { sessions } from '../lib/session.svelte.ts';
+  import { session, sessions } from '../lib/session.svelte.ts';
+  import Avatar from './Avatar.svelte';
+  import { openProfile } from '../lib/actions.ts';
+  import { voice } from '../lib/audio/voice.svelte.ts';
+  import { OFFLINE_SESSION, offlineName, offlineAvatar } from '../lib/offline-self.ts';
   import { menu } from '../lib/menu.svelte.ts';
   import { defaultRooms } from '../lib/default-room.svelte.ts';
   import { desktop } from '../lib/native.ts';
+  import { p2p } from '../lib/p2p.svelte.ts';
   import { makeServerIcon } from '../lib/images.ts';
 
   let { onadd, onedit, onsettings, onbrowse }:
@@ -94,7 +99,18 @@
   <!-- The public list and its pings need the desktop app -->
   {#if desktop}<button class="tile add" title="Browse public servers" onclick={onbrowse}><Icon name="globe" /></button>{/if}
   <div class="spacer"></div>
+  {#if desktop}<button class="tile ghost" title="Friends" onclick={() => (p2p.open = true)}><Icon name="phone" />{#if p2p.requests.length}<span class="badge">{p2p.requests.length}</span>{/if}</button>{/if}
   <button class="tile ghost" title="Settings" onclick={onsettings}><Icon name="settings" /></button>
+  <!-- You: your picture and card, also before any server -->
+  {#if session.self}
+    <button class="tile me" title="Your profile" onclick={e => openProfile(session.self!.session, e.currentTarget)}>
+      <Avatar name={session.self.name} size={40} speaking={voice.transmitting} src={session.avatar(session.self.session)} />
+    </button>
+  {:else}
+    <button class="tile me" title="Your profile" onclick={e => openProfile(OFFLINE_SESSION, e.currentTarget)}>
+      <Avatar name={offlineName()} size={40} src={offlineAvatar()} />
+    </button>
+  {/if}
 </nav>
 
 <style>
@@ -114,6 +130,7 @@
     content: ''; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 4px; background: var(--text);
   }
   .tile.dragged { opacity: 0.4; }
+  .badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--danger); color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
   .icon { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
   /* Connection state: grey dot connecting, green connected, green with ring where voice runs */
   .tile.live::after, .tile.connecting::after {
@@ -131,5 +148,7 @@
   .add:hover { background: var(--speaking); color: var(--bg-0); }
   .ghost { background: transparent; color: var(--text-dim); }
   .ghost:hover { background: var(--bg-3); color: var(--text); }
+  .me { background: transparent; }
+  .me:hover { background: transparent; }
   .spacer { flex: 1; }
 </style>

@@ -1,7 +1,7 @@
 {
   "name": "Libertad",
   "productName": "Libertad",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "description": "A modern Mumble client: Supports screen sharing, watch together, and more.",
   "license": "MIT",
   "type": "module",
@@ -103,7 +103,9 @@
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
       "node_modules/ffprobe-static/**",
-      "node_modules/loopback-capture/**"
+      "node_modules/loopback-capture/**",
+      "node_modules/sodium-native/**",
+      "node_modules/udx-native/**"
     ]
   },
   "devDependencies": {
@@ -131,6 +133,7 @@
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
     "gifenc": "^1.0.3",
+    "hyperdht": "^6.36.0",
     "hls.js": "^1.6.0",
     "node-forge": "^1.4.0",
     "onnxruntime-web": "1.31.1",

@@ -5,7 +5,7 @@ import { store } from './settings.svelte.ts';
 import { voice, userKey } from './audio/voice.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
 import { menu, type MenuItem } from './menu.svelte.ts';
-import { ownCard, ownProfile, cardSource } from './banner.svelte.ts';
+import { ownCard, ownProfile, ownAvatar, cardSource } from './banner.svelte.ts';
 import { bgPause } from './still.svelte.ts';
 import { hiddenCards } from './hidden-cards.svelte.ts';
 import { pickColor, pickFile } from './pick.ts';
@@ -13,12 +13,13 @@ import { setBannerFromFile } from './banner-actions.ts';
 import { imageEditor, EDITABLE_OR_GIF } from './image-editor.svelte.ts';
 import { roles } from './roles.svelte.ts';
 import { deafenFor } from './deafen-for.svelte.ts';
+import { OFFLINE_SESSION } from './offline-self.ts';
 import { PERM, type Channel, type User } from '../core/client.ts';
 
 // A person's profile card, next to the element that was clicked (or at a point, from a menu)
 export function openProfile(user: number, at: Element | { x: number; y: number }): void {
   const r = at instanceof Element ? at.getBoundingClientRect() : { left: at.x, right: at.x, top: at.y, bottom: at.y };
-  session.loadComment(user);
+  if (user !== OFFLINE_SESSION) session.loadComment(user);
   ui.profile = { session: user, anchor: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, el: at instanceof Element ? at : undefined };
 }
 
@@ -83,7 +84,7 @@ export function channelMenu(c: Channel): MenuItem[] {
 // card: the menu of the profile card itself, which is not the user's menu in the lists. There is no "View profile"
 // (it is the profile), nothing about the user card (its background, hiding it), and your own mute and deafen stay
 // out; the choices for your avatar, banner and profile card take their place.
-export interface CardChoices { avatar: () => void; background: () => void; color: () => void; remove?: () => void }
+export interface CardChoices { avatar: () => void; background: () => void; color: () => void; removeAvatar?: () => void; remove?: () => void }
 export function userMenu(u: User, card?: CardChoices): MenuItem[] {
   const self = session.self;
   const isSelf = u.session === self?.session;
@@ -104,6 +105,7 @@ export function userMenu(u: User, card?: CardChoices): MenuItem[] {
     if (card) {
       items.push(
         { label: 'Change avatar...', action: card.avatar },
+        ...(card.removeAvatar && ownAvatar.value ? [{ label: 'Remove avatar', action: card.removeAvatar }] : []),
         { label: 'Add a background', action: card.background },
         { label: 'Add a color', action: card.color }
       );

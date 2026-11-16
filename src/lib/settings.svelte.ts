@@ -10,6 +10,15 @@ function cleanPanelColors(raw: unknown): Settings['panelColors'] {
   return out;
 }
 
+// How a message looks in the chat during a friend call: speech bubbles, plain lines with the name in front,
+// or a tight one-line-per-message list
+export type MessageStyle = 'bubbles' | 'lines' | 'compact';
+export const MESSAGE_STYLES: { id: MessageStyle; name: string; note: string }[] = [
+  { id: 'bubbles', name: 'Bubbles', note: 'Yours on the right, theirs on the left' },
+  { id: 'lines', name: 'Lines', note: 'Name, then the message, no boxes' },
+  { id: 'compact', name: 'Compact', note: 'As much as possible on the screen' }
+];
+
 export interface SavedServer {
   id: string;
   label: string;
@@ -28,6 +37,7 @@ export interface Settings {
   autoDownload: number;    // fetch announced files up to this many MB by themselves; 0: never
   bannerMaxMbit: number;   // fetch other people's banners shared over WebRTC up to this many Mbit; 0: never
   compact: boolean;
+  messageStyle: MessageStyle; // how messages look in the friend-call chat
   youtube: 'off' | 'click' | 'thumbnail'; // YouTube links: plain, click-to-play card, card with thumbnail
   // Link previews: fetched by this computer (reveals IP to the linked site), or none
   linkPreviews: 'direct' | 'off';
@@ -102,6 +112,7 @@ const defaults: Settings = {
   autoDownload: 20,
   bannerMaxMbit: 64,
   compact: false,
+  messageStyle: 'bubbles',
   youtube: 'off',
   linkPreviews: 'off',
   theme: 'dark',
@@ -165,7 +176,7 @@ class SettingsStore {
   settings = $state<Settings>(this.fix(load('libertad.settings', defaults)));
 
   private fix(s: Settings): Settings {
-    return { ...s, theme: normalizeTheme(s.theme), customColors: cleanColors(s.customColors), panelColors: cleanPanelColors(s.panelColors), bannerMaxMbit: Math.min(1000, Math.max(0, Number(s.bannerMaxMbit) || 0)), roundness: Math.min(200, Math.max(0, Math.round(Number(s.roundness)) || 0)), ...glassFix(s) };
+    return { ...s, messageStyle: MESSAGE_STYLES.some(m => m.id === s.messageStyle) ? s.messageStyle : 'bubbles', theme: normalizeTheme(s.theme), customColors: cleanColors(s.customColors), panelColors: cleanPanelColors(s.panelColors), bannerMaxMbit: Math.min(1000, Math.max(0, Number(s.bannerMaxMbit) || 0)), roundness: Math.min(200, Math.max(0, Math.round(Number(s.roundness)) || 0)), ...glassFix(s) };
   }
   servers = $state<SavedServer[]>(loadList('libertad.servers'));
   // Pinned sha256 fingerprints of server certificates, keyed by host:port (trust on first use)

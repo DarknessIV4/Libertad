@@ -4,6 +4,9 @@
   import { session, sessions } from '../lib/session.svelte.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { store } from '../lib/settings.svelte.ts';
+  import { desktop } from '../lib/native.ts';
+  import { p2p } from '../lib/p2p.svelte.ts';
+  import Icon from '../ui/Icon.svelte';
 
   // Always in reach: the room you are in, who is talking, and the two buttons that matter
   let { onopen }: { onopen: () => void } = $props();
@@ -31,6 +34,11 @@
       <span>{line}</span>
     </span>
   </button>
+  {#if desktop}
+    <button class="friends" aria-label="Friends" title="Friends" onclick={() => (p2p.open = true)}>
+      <Icon name="phone" size={20} />{#if p2p.requests.length}<span class="badge">{p2p.requests.length}</span>{/if}
+    </button>
+  {/if}
   {#if elsewhere}
     <button class="btn" onclick={() => sessions.setVoice(sessions.active)}>Talk here</button>
   {:else}
@@ -47,4 +55,7 @@
   .text strong, .text span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .text span { font-size: 13px; color: var(--text-dim); }
   .btn { flex: none; }
+  .friends { position: relative; flex: none; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-dim); }
+  .friends:hover { color: var(--text); background: var(--bg-hover); }
+  .badge { position: absolute; top: 0; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-text); font-size: 11px; line-height: 16px; text-align: center; }
 </style>

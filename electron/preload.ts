@@ -57,8 +57,10 @@ contextBridge.exposeInMainWorld('libertadNative', {
   system: {
     get: () => ipcRenderer.invoke('system:get'),
     setHardwareAcceleration: (on: boolean) => ipcRenderer.invoke('system:setHardwareAcceleration', !!on),
+    setGpu: (id: string) => ipcRenderer.invoke('system:setGpu', String(id)),
     setLaunchOnStartup: (on: boolean) => ipcRenderer.invoke('system:setLaunchOnStartup', !!on),
     setAutoUpdate: (on: boolean) => ipcRenderer.invoke('system:setAutoUpdate', !!on),
+    setDisplayServer: (which: string) => ipcRenderer.invoke('system:setDisplayServer', String(which)),
     setThrottleWhenHidden: (on: boolean) => ipcRenderer.invoke('system:setThrottleWhenHidden', !!on),
     relaunch: () => ipcRenderer.invoke('system:relaunch'),
     quit: () => ipcRenderer.invoke('system:quit')
@@ -110,6 +112,12 @@ contextBridge.exposeInMainWorld('libertadNative', {
     setNoHistory: (on: boolean) => ipcRenderer.invoke('youtube:setNoHistory', !!on)
   },
   setPopoutFullScreen: (name: string, fullscreen?: boolean) => ipcRenderer.invoke('popout:setFullScreen', name, fullscreen),
+  followPopouts: (items: { name: string; dx: number; dy: number }[]) => ipcRenderer.send('popout:follow', items),
+  appPointer: (x: number, y: number) => ipcRenderer.send('app:pointer', x, y),
+  popoutDropCheck: (name: string) => ipcRenderer.invoke('popout:dropCheck', name),
+  endPopoutFollow: () => ipcRenderer.invoke('popout:followEnd'),
+  movePopout: (name: string, x: number, y: number) => ipcRenderer.send('popout:moveTo', name, x, y),
+  resizePopout: (name: string, width: number, height: number, side: 'auto' | 'left' | 'right') => ipcRenderer.invoke('popout:resize', name, width, height, side),
   isPopoutFullScreen: (name: string) => ipcRenderer.invoke('popout:isFullScreen', name),
   updateTray: (state: unknown) => ipcRenderer.send('tray:update', state),
   linkPreview: (url: string) => ipcRenderer.invoke('preview:fetch', url),
@@ -163,6 +171,51 @@ contextBridge.exposeInMainWorld('libertadNative', {
     rename: (id: string, name: string) => ipcRenderer.invoke('identities:rename', id, name),
     remove: (id: string) => ipcRenderer.invoke('identities:remove', id),
     finishSetup: () => ipcRenderer.invoke('identities:finishSetup')
+  },
+  // Friends and calls over HyperDHT (no Mumble server)
+  p2p: {
+    state: () => ipcRenderer.invoke('p2p:state'),
+    start: () => ipcRenderer.invoke('p2p:start'),
+    stop: () => ipcRenderer.invoke('p2p:stop'),
+    addFriend: (code: string, name: string) => ipcRenderer.invoke('p2p:addFriend', code, name),
+    acceptRequest: (key: string) => ipcRenderer.invoke('p2p:acceptRequest', key),
+    declineRequest: (key: string) => ipcRenderer.invoke('p2p:declineRequest', key),
+    removeFriend: (key: string) => ipcRenderer.invoke('p2p:removeFriend', key),
+    renameFriend: (key: string, name: string) => ipcRenderer.invoke('p2p:renameFriend', key, name),
+    setAcceptRequests: (on: boolean) => ipcRenderer.invoke('p2p:acceptRequests', on),
+    serverSent: (hash: string, nonce: string) => ipcRenderer.invoke('p2p:serverSent', hash, nonce),
+    serverRequest: (code: string, name: string, hash: string, nonce: string) => ipcRenderer.invoke('p2p:serverRequest', code, name, hash, nonce),
+    serverAnswer: (code: string, name: string, hash: string) => ipcRenderer.invoke('p2p:serverAnswer', code, name, hash),
+    call: (key: string) => ipcRenderer.invoke('p2p:call', key),
+    accept: () => ipcRenderer.invoke('p2p:accept'),
+    decline: () => ipcRenderer.invoke('p2p:decline'),
+    hangUp: () => ipcRenderer.invoke('p2p:hangup'),
+    sendChat: (text: string) => ipcRenderer.invoke('p2p:chat', text),
+    setProfile: (profile: unknown) => ipcRenderer.invoke('p2p:setProfile', profile),
+    profile: (key: string) => ipcRenderer.invoke('p2p:profile', key),
+    onProfile: (fn: (key: string) => void) => {
+      const l = (_e: unknown, key: string) => fn(key);
+      ipcRenderer.on('p2p:profile', l);
+      return () => { ipcRenderer.removeListener('p2p:profile', l); };
+    },
+    setMute: (muted: boolean, deafened: boolean) => ipcRenderer.send('p2p:mute', !!muted, !!deafened),
+    sendAudio: (frame: number, last: boolean, opus: Uint8Array) => ipcRenderer.send('p2p:audio', frame, !!last, opus),
+    sendSignal: (channel: number, packet: Uint8Array) => ipcRenderer.invoke('p2p:signal', channel, packet),
+    onState: (fn: (state: unknown) => void) => {
+      const l = (_e: unknown, s: unknown) => fn(s);
+      ipcRenderer.on('p2p:state', l);
+      return () => { ipcRenderer.removeListener('p2p:state', l); };
+    },
+    onAudio: (fn: (key: string, frame: number, last: boolean, opus: Uint8Array) => void) => {
+      const l = (_e: unknown, key: string, frame: number, last: boolean, opus: Uint8Array) => fn(key, frame, last, opus);
+      ipcRenderer.on('p2p:audio', l);
+      return () => { ipcRenderer.removeListener('p2p:audio', l); };
+    },
+    onSignal: (fn: (key: string, channel: number, packet: Uint8Array) => void) => {
+      const l = (_e: unknown, key: string, channel: number, packet: Uint8Array) => fn(key, channel, packet);
+      ipcRenderer.on('p2p:signal', l);
+      return () => { ipcRenderer.removeListener('p2p:signal', l); };
+    }
   },
   open: (connId: string, host: string, port: number, identityId?: string) => ipcRenderer.invoke('mumble:open', connId, host, port, identityId),
   send: (connId: string, bytes: Uint8Array) => ipcRenderer.send('mumble:send', connId, bytes),

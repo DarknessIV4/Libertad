@@ -1,6 +1,7 @@
 // Watch Together - shared playback sync state and logic
 import type { YtControls } from './yt-controls.ts';
 import { sessions } from './session.svelte.ts';
+import { share } from './share.svelte.ts';
 import { ui } from './ui.svelte.ts';
 import { WATCH, WATCH_DATA_ID, encodeWatchSignal, WatchAssembler, type WatchMode, type WatchPartyMeta, type FileMeta, type StatePayload, type NextPayload } from '../core/watch-together.ts';
 import { watchFileStream } from '../core/watch-stream.ts';
@@ -47,6 +48,10 @@ type WatchState = 'idle' | 'joining' | 'watching' | 'leaving';
 
 // Sync constants
 const SYNC_INTERVAL_MS = 1000;
+// A viewer in a call closes the party when the host has been silent this long
+const HOST_SILENCE_MS = 15000;
+// While a torrent downloads, the host's app can be too busy to answer for a while
+const HOST_SILENCE_TORRENT_MS = 60000;
 const DRIFT_THRESHOLD_MS = 700;
 const SEEK_THRESHOLD_MS = 2000;
 // The embedded player reports its position coarsely: only a bigger difference is worth a seek
@@ -87,6 +92,8 @@ class WatchTogether {
   private parties = $state<Map<Session, WatchParty>>(new Map());
   private states = $state<Map<Session, WatchState>>(new Map());
   private syncIntervals = new Map<Session, number>();
+  // When the host of the party we watch was last heard (a call closes the party when it stays silent)
+  private lastHeard = new Map<Session, number>();
   private assemblers = new Map<Session, WatchAssembler>();
   // Shared across sessions (local playback elements)
   // Plain field for identity check and listener bookkeeping (non-reactive)
@@ -408,29 +415,38 @@ class WatchTogether {
     }
   }
 
+  // A friend call has a session of its own (call-media.svelte.ts). Nobody else is on it, so what is shared there is that
+  // call's: while something runs in it (or its start menu is open) the controls act on it, otherwise on the server on screen.
+  callSession = $state.raw<Session | null>(null);
+  cur(): Session {
+    const c = this.callSession;
+    if (c && (this.getState(c) !== 'idle' || this.getParty(c) || share.dialog === c || Object.keys(c.watchTogether).length)) return c;
+    return sessions.active;
+  }
+
   // Get state for active session (for UI reactivity)
   get isWatching(): boolean {
-    return this.getState(sessions.active) === 'watching';
+    return this.getState(this.cur()) === 'watching';
   }
 
   get hasActiveParty(): boolean {
-    return this.getParty(sessions.active) !== null;
+    return this.getParty(this.cur()) !== null;
   }
 
   // Host has an active party (either watching or left but party exists for rejoin)
   // Use $derived to properly track session changes through the Proxy
   isHostWithParty = $derived.by(() => {
-    void sessions.active.tick;
-    const s = sessions.active;
+    void this.cur().tick;
+    const s = this.cur();
     const party = this.getParty(s);
     return this.isHostFor(s) && party !== null;
   });
 
   // Use $derived to properly track session changes through the Proxy
-  // Reading sessions.active.tick establishes reactivity on session switches
+  // Reading this.cur().tick establishes reactivity on session switches
   isHost = $derived.by(() => {
-    void sessions.active.tick;
-    const s = sessions.active;
+    void this.cur().tick;
+    const s = this.cur();
     return this.isHostFor(s);
   });
 
@@ -441,7 +457,7 @@ class WatchTogether {
 
   // Expose party for active session
   get party(): WatchParty | null {
-    return this.getParty(sessions.active);
+    return this.getParty(this.cur());
   }
 
   get meta() {
@@ -462,11 +478,11 @@ class WatchTogether {
 
   // Where the shared video is right now and whether it plays; read it on a timer, it is not reactive
   sharedPosition(): number {
-    return Math.max(0, Math.round(this.getExpectedPosition(sessions.active)));
+    return Math.max(0, Math.round(this.getExpectedPosition(this.cur())));
   }
 
   sharedPlaying(): boolean {
-    const s = sessions.active;
+    const s = this.cur();
     return this.getSyncState(s)?.playing ?? this.getParty(s)?.playing ?? false;
   }
 
@@ -654,7 +670,7 @@ class WatchTogether {
 
   private onLoadedMetadata() {
     if (this.moving) return;
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) === 'watching') {
       this.logDebug('local-event', 'loadedmetadata', 'reconcile');
       this.reconcile(s);
@@ -663,7 +679,7 @@ class WatchTogether {
 
   private onCanPlay() {
     if (this.moving) return;
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) === 'watching') {
       this.logDebug('local-event', 'canplay', 'reconcile');
       this.reconcile(s);
@@ -676,13 +692,13 @@ class WatchTogether {
 
   // The YouTube player (re)connected: bring it to the shared state
   syncPlayer() {
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) === 'watching') this.reconcile(s);
   }
 
   // Where the session is now and whether it plays, for a player that is just being set up
   expectedPlayback(): { positionMs: number; playing: boolean } {
-    const s = sessions.active;
+    const s = this.cur();
     const state = this.getSyncState(s);
     return {
       positionMs: Math.max(0, Math.round(this.getExpectedPosition(s))),
@@ -713,8 +729,11 @@ class WatchTogether {
     if (mode === 3 && options.queue && !queue) throw new Error('These torrents can not be shared');
     const torrent = mode === 3 ? (queue ? queue[0] : validTorrentMeta(options.torrent)) : null;
     if (mode === 3 && !torrent) throw new Error('This torrent can not be shared');
-    const s = sessions.active;
+    const s = this.cur();
     console.log('[WatchTogether] start() called - mode:', mode, 'session:', s.server?.id, 'state:', this.getState(s));
+
+    // A session we only watch is left properly first (the host is told), not dropped silently
+    if (this.getState(s) !== 'idle' && this.getParty(s) && !this.isHostFor(s)) await this.leave();
 
     // Also a party we host but left: its player is still running
     if (this.getState(s) !== 'idle' || (this.getParty(s) && this.isHostFor(s))) {
@@ -801,7 +820,7 @@ class WatchTogether {
   }
 
   async join(hostSession: number) {
-    const s = sessions.active;
+    const s = this.cur();
     // Allow host to rejoin if they have a party but left
     const existingParty = this.getParty(s);
     const canRejoin = this.getState(s) === 'idle' && existingParty && this.isHostFor(s) && hostSession === s.self?.session;
@@ -887,8 +906,12 @@ class WatchTogether {
   }
 
   async leave() {
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) === 'idle') return;
+
+    // In a friend call a host who steps out ends it: the one watching must not be left with a video
+    // that nobody hosts any more
+    if (s === this.callSession && this.isHostFor(s)) return this.end();
 
     this.setState(s, 'leaving');
 
@@ -946,7 +969,7 @@ class WatchTogether {
 
   // Host rejoin: resume watching the existing party
   async rejoin() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s) || this.getState(s) !== 'idle') return;
 
@@ -1013,7 +1036,7 @@ class WatchTogether {
   }
 
   async end() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s)) return;
 
@@ -1037,7 +1060,7 @@ class WatchTogether {
   }
 
   play() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party) return;
     const current = this.getSyncState(s);
@@ -1058,7 +1081,7 @@ class WatchTogether {
   }
 
   pause() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party) return;
     const current = this.getSyncState(s);
@@ -1079,7 +1102,7 @@ class WatchTogether {
   }
 
   seek(positionMs: number, playing?: boolean) {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party) return;
     const current = this.getSyncState(s);
@@ -1101,11 +1124,11 @@ class WatchTogether {
   // The playback speed everybody plays at (YouTube), changed by anyone. It is part of the shared
   // state, so the position stays right for everyone: it is taken at the moment of the change.
   sharedRate(): number {
-    return this.getSyncState(sessions.active)?.rate ?? 1;
+    return this.getSyncState(this.cur())?.rate ?? 1;
   }
 
   setRate(rate: number) {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     // A streamed file (mode 2) changes speed on the host's player, which everybody sees live;
     // a torrent (mode 3) changes it on everybody's own player
@@ -1140,7 +1163,7 @@ class WatchTogether {
 
   // Torrent together: anybody in the party moves everybody on to the next link, which starts paused at 0
   async nextTorrent() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || this.getState(s) !== 'watching' || !this.hasNextTorrent) return;
     const index = party.currentIndex + 1;
@@ -1179,7 +1202,7 @@ class WatchTogether {
   }
 
   async addToPlaylist(videoId: string, title: string) {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s) || party.meta.mode !== 1) return;
 
@@ -1192,7 +1215,7 @@ class WatchTogether {
   }
 
   async skipNext() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s) || party.currentIndex >= party.playlist.length - 1) return;
     party.currentIndex++;
@@ -1201,7 +1224,7 @@ class WatchTogether {
   }
 
   async skipPrevious() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s) || party.currentIndex <= 0) return;
     party.currentIndex--;
@@ -1210,7 +1233,7 @@ class WatchTogether {
   }
 
   async setCurrentIndex(index: number) {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s) || index < 0 || index >= party.playlist.length) return;
     party.currentIndex = index;
@@ -1219,7 +1242,7 @@ class WatchTogether {
   }
 
   async playCurrentVideo() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party) return;
 
@@ -1242,6 +1265,8 @@ class WatchTogether {
     const isSelf = fromSession === s.self?.session;
 
     console.log('[WatchTogether] handleSignal - type:', type, 'from:', fromSession, 'isSelf:', isSelf);
+    // Anything from the host shows it is still there (the silence check in the sync loop)
+    if (!isSelf && this.getParty(s)?.hostSession === fromSession) this.lastHeard.set(s, Date.now());
 
     switch (type) {
       case WATCH.start:
@@ -1342,7 +1367,7 @@ class WatchTogether {
 
   // Internal methods
   private getCurrentPosition(): number {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (party?.meta.mode === 1 && this.youtubePlayer) {
       return Math.round(this.youtubePlayer.getCurrentTime() * 1000);
@@ -1448,8 +1473,12 @@ class WatchTogether {
         // ever told what to do when something arrives, so one that stalls would stay behind
         if (party.meta.mode === 1) this.reconcile(s);
 
-        // Send periodic sync with current shared state
-        const currentState = this.getSyncState(s);
+        // Send periodic sync with current shared state. A torrent party starts paused and unplayed (the host presses play
+        // once it is downloaded): there is no shared state yet, but viewers still need the heartbeat, or they take the
+        // host for gone and leave while it loads.
+        const currentState = this.getSyncState(s) ?? {
+          rev: 0, origin: s.self?.session ?? 0, playing: party.playing, positionMs: party.positionMs, at: now
+        } satisfies SyncState;
         if (currentState) {
           this.logDebug('tx', 'sync', currentState.rev, currentState.origin, currentState.playing, currentState.positionMs, 'sent');
           const v = this.videoEl;
@@ -1457,12 +1486,23 @@ class WatchTogether {
           const extra = { ...(durationMs ? { durationMs } : {}), ...(party.fileShare ? { dl: party.fileShare } : {}) };
           this.sendWatchSignal(WATCH.sync, { ...currentState, ...extra }, s);
         }
-      } else {
-        // Viewer: only apply host's sync, never send our own
-        // Handled in handleSync
+      } else if (s === this.callSession && state === 'watching' && Date.now() - (this.lastHeard.get(s) ?? Date.now()) > (party.meta.mode === 3 ? HOST_SILENCE_TORRENT_MS : HOST_SILENCE_MS)) {
+        // Viewer in a call and the host has not been heard for a long time (the end never arrived, the
+        // host's app is gone): close it here as well
+        this.hostGone(s);
       }
+      // Viewer otherwise: only apply host's sync, never send our own (handled in handleSync)
     }, SYNC_INTERVAL_MS);
     this.syncIntervals.set(s, interval);
+  }
+
+  // The host of the party we watch is gone without a word: same as an end from them
+  private hostGone(s: Session): void {
+    const party = this.getParty(s);
+    if (!party) return;
+    s.setWatchTogether(party.hostSession, false);
+    this.handleEnd(s, party.hostSession);
+    this.cleanup(s);
   }
 
   private stopSyncLoop(s: Session) {
@@ -1496,6 +1536,10 @@ class WatchTogether {
     for (const hash of new Set([...(meta?.queue ?? []), ...(meta?.torrent ? [meta.torrent] : [])].map(t => t.infoHash))) {
       void desktop?.torrent?.stop(hash).catch(() => {});
     }
+    // A viewer of a streamed picture lets go of it whichever way the party ended
+    const viewed = this.getParty(s);
+    if (viewed && viewed.meta.mode === 2 && !this.isHostFor(s) && viewed.hostSession) void watchFileStream.stopWatching(s, viewed.hostSession).catch(() => {});
+    this.lastHeard.delete(s);
     this.stopSyncLoop(s);
     this.disposeHostVideo(s);
     this.setParty(s, null);
@@ -1532,7 +1576,8 @@ class WatchTogether {
       this.videoEl.removeEventListener('seeked', this.boundOnLocalSeeked);
       this.videoEl.removeEventListener('ended', this.boundOnLocalEnded);
       this.videoEl.pause();
-      this.videoEl.src = '';
+      this.videoEl.removeAttribute('src');
+      this.videoEl.load();
       this.videoEl = null;
       this.localVideo = null;
     }
@@ -1542,7 +1587,7 @@ class WatchTogether {
 
   private onLocalPlay() {
     if (this.moving) return;
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) !== 'watching') return;
     // Ignore if this play event was caused by our own applySyncState
     if (this.expectedPlaying === true && Date.now() < this.expectedPlayingUntil) {
@@ -1555,7 +1600,7 @@ class WatchTogether {
 
   private onLocalPause() {
     if (this.moving) return;
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) !== 'watching') return;
     // Ignore if this pause event was caused by our own applySyncState
     if (this.expectedPlaying === false && Date.now() < this.expectedPlayingUntil) {
@@ -1568,7 +1613,7 @@ class WatchTogether {
 
   private onLocalSeeking() {
     if (this.moving) return;
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) !== 'watching') return;
     // Ignore if this seeking event was caused by our own applySyncState
     if (this.expectedSeekMs !== null && Date.now() < this.expectedSeekUntil) {
@@ -1581,7 +1626,7 @@ class WatchTogether {
 
   private onLocalSeeked() {
     if (this.moving) return;
-    const s = sessions.active;
+    const s = this.cur();
     if (this.getState(s) !== 'watching' || !this.videoEl) return;
     const positionMs = Math.round(this.videoEl.currentTime * 1000);
 
@@ -1699,7 +1744,7 @@ class WatchTogether {
   }
 
   private onLocalEnded() {
-    const s = sessions.active;
+    const s = this.cur();
     const party = this.getParty(s);
     if (!party || !this.isHostFor(s)) return;
 
@@ -1729,6 +1774,10 @@ class WatchTogether {
 
     const currentState = this.getState(s);
     const party = this.getParty(s);
+
+    // A friend call has two people: while we host (or are in) a session, the other one's start
+    // neither replaces ours nor shows us a Join for it
+    if (s === this.callSession && party && (this.isHostFor(s) || currentState !== 'idle')) return;
 
     // We are in a session already (watched from another room, say): one that starts here only
     // shows its indicator, it does not replace ours
@@ -1827,6 +1876,7 @@ class WatchTogether {
       at,
       rate: syncState?.rate,
       participants: this.participantsToShare(s, party),
+      host: this.isHostFor(s),
     }, s, [fromSession], true);
   }
 
@@ -1965,6 +2015,7 @@ class WatchTogether {
       at: syncState?.at ?? getServerTime(),
       rate: syncState?.rate,
       participants: this.participantsToShare(s, party),
+      host: this.isHostFor(s),
     }, s, [fromSession]);
   }
 
@@ -2086,6 +2137,7 @@ class WatchTogether {
 
     // Only host sends sync, viewers receive
     if (this.isHostFor(s)) return;
+    this.lastHeard.set(s, Date.now());
 
     const incoming: SyncState = {
       rev: body.rev ?? 0,
@@ -2135,6 +2187,9 @@ class WatchTogether {
     // If we're joining, we should have a party with matching hostSession
     // If we're idle (late joiner), we might not have a party yet
     if (party && party.hostSession !== fromSession) return;
+    // An answer nobody asked for from a viewer, not the host: it must not make that viewer our host
+    if (!party && currentState === 'idle' && body.host === false) return;
+    this.lastHeard.set(s, Date.now());
 
     const got = body.mode === 3 ? this.torrentFrom(body, body.currentIndex ?? 0) : null;
     if (body.mode === 3 && !got) return;

@@ -43,9 +43,11 @@
       rows.push(['Video bitrate', kbit(`${key}v`, own ? video.bytesSent : video.bytesReceived, video.timestamp)]);
       if (own) {
         if (video.encoderImplementation) rows.push(['Encoder', video.encoderImplementation]);
+        if (video.powerEfficientEncoder != null) rows.push(['Graphics card encoder', video.powerEfficientEncoder ? 'yes' : 'no (processor)']);
         if (video.qualityLimitationReason && video.qualityLimitationReason !== 'none') rows.push(['Held back by', video.qualityLimitationReason]);
       } else {
         if (video.decoderImplementation) rows.push(['Decoder', video.decoderImplementation]);
+        if (video.powerEfficientDecoder != null) rows.push(['Graphics card decoder', video.powerEfficientDecoder ? 'yes' : 'no (processor)']);
         rows.push(['Frames dropped', `${video.framesDropped ?? 0} of ${video.framesReceived ?? 0}`]);
         rows.push(['Video packets lost', `${video.packetsLost ?? 0} of ${(video.packetsReceived ?? 0) + (video.packetsLost ?? 0)}`]);
         rows.push(['Video jitter', ms(video.jitter)]);

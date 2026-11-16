@@ -11,6 +11,7 @@
   import { share } from '../lib/share.svelte.ts';
   import { watchTogether } from '../lib/watch-together.svelte.ts';
   import { desktop } from '../lib/native.ts';
+  import { p2p } from '../lib/p2p.svelte.ts';
   import { makeServerIcon } from '../lib/images.ts';
   import { peopleOn } from '../lib/server-status.svelte.ts';
   import { PERM, type Channel } from '../core/client.ts';
@@ -305,6 +306,7 @@
         <div class="acts">
           <button class="btn primary" onclick={onadd}>Add a server</button>
           {#if desktop}<button class="btn" onclick={onbrowse}>Browse public servers</button>{/if}
+          {#if desktop}<button class="btn" onclick={() => (p2p.open = true)}>Friends{p2p.requests.length ? ` (${p2p.requests.length})` : ''}</button>{/if}
           <button class="btn" onclick={() => { ui.settingsTab = 'identities'; ui.settingsOpen = true; }}>Manage identities</button>
         </div>
       </div>

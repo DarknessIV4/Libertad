@@ -1,7 +1,7 @@
 import { registerFileStore } from './filestore.ts';
 import { registerTorrent } from './torrent.ts';
 import { registerProfiles } from './profiles.ts';
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, shell, session, systemPreferences, type WebContents } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, screen, shell, session, systemPreferences, type WebContents } from 'electron';
 import { promises as fs, createReadStream, readFileSync, existsSync, readdirSync, cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import v8 from 'node:v8';
@@ -15,12 +15,59 @@ import { fetchLinkPreview } from './link-preview.ts';
 import { searchGiphy, fetchGif } from './giphy-search.ts';
 import { fetchPublicListWith, pingServer } from './publist.ts';
 import { openTls } from './tls-transport.ts';
+import { registerP2p } from './p2p.ts';
+import { listGpus, planGpu } from './gpu.ts';
 import { udpChannel } from './udp-voice.ts';
 import { registerYoutubeAccount } from './youtube-account.ts';
 import { setYoutubeQuality, setYoutubeRate, getYoutubeVideoSize, getYoutubeFrame, hideYoutubeIndicator } from './yt-quality.ts';
 import { checkForUpdate, installUpdate, checkOnStartup } from './updater.ts';
 import { ShareAudio, pipewireAvailable, descendsFrom, VIRTUAL_MIC_LABEL, type AudioTarget } from './pipewire.ts';
 import { WindowsShareAudio, windowsExcludeSupported } from './win-audio.ts';
+
+// Linux on a Wayland desktop: the app runs on X11 (through XWayland) unless Settings > System says Wayland. As a native Wayland window
+// the call bar that is dragged out of the app (an always-on-top window that follows the cursor and goes back in when it is dropped on
+// the app) does not work: Wayland gives a program no say over where its windows are or what is over what. Chromium decides about this
+// before any script runs, so a switch set from here is too late: the app starts itself once more with the switch on the command line.
+// X11 sessions are X11 already. `npm run dev` passes the switch itself (scripts/dev.mjs). LIBERTAD_WAYLAND=1 forces Wayland, and a
+// --ozone-platform given on the command line is respected.
+const savedDisplayServer = (): 'x11' | 'wayland' => {
+  if (process.env.LIBERTAD_WAYLAND) return 'wayland';
+  try {
+    const d = JSON.parse(readFileSync(path.join(app.getPath('userData'), 'system.json'), 'utf8')).displayServer;
+    if (d === 'wayland') return 'wayland';
+  } catch { /* nothing saved yet */ }
+  return 'x11';
+};
+const waylandSession = process.platform === 'linux' && (process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY);
+if (waylandSession && !process.env.LIBERTAD_X11_RELAUNCHED &&
+    !app.commandLine.hasSwitch('ozone-platform') && !app.commandLine.hasSwitch('ozone-platform-hint') && savedDisplayServer() === 'x11') {
+  // Taken along into the new process: it can not start itself a third time if the switch were ever not seen
+  process.env.LIBERTAD_X11_RELAUNCHED = '1';
+  // From an AppImage the file it came from is what starts again (the folder it runs from goes away with this process)
+  app.relaunch({ execPath: process.env.APPIMAGE || process.execPath, args: [...process.argv.slice(1), '--ozone-platform=x11'] });
+  app.exit(0);
+  process.exit(0);
+}
+
+// Friends and calls run over UTP/UDP, where a peer vanishing mid-handshake (UTP_ECONNRESET and its kin) raises an
+// 'error' on a connection nobody owns yet. That is routine network noise, not a bug: it must not pop up a dialog
+// or take the main process down. Everything else is reported as before.
+const NETWORK_CODES = /^(UTP_|ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ENETDOWN|EADDRNOTAVAIL|CHANNEL_CLOSED|STREAM_DESTROYED)/;
+function isNetworkNoise(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown; stack?: unknown } | null;
+  const code = typeof e?.code === 'string' ? e.code : '';
+  const text = `${typeof e?.message === 'string' ? e.message : ''}\n${typeof e?.stack === 'string' ? e.stack : ''}`;
+  return NETWORK_CODES.test(code) || /\b(UTP_[A-Z]+|ECONNRESET)\b/.test(text) || /node_modules\/(utp-native|udx-native|hyperdht|@hyperswarm)\b/.test(text) && /ECONN|EPIPE|ETIMEDOUT|reset|closed|destroyed/i.test(text);
+}
+process.on('uncaughtException', err => {
+  if (isNetworkNoise(err)) { console.warn('Ignored network error:', (err as Error)?.message ?? err); return; }
+  console.error(err);
+  try { dialog.showErrorBox('A JavaScript error occurred in the main process', String((err as Error)?.stack ?? err)); } catch { /* app not ready */ }
+});
+process.on('unhandledRejection', reason => {
+  if (isNetworkNoise(reason)) return;
+  console.error(reason);
+});
 
 const devUrl = process.env.VITE_DEV_SERVER_URL;
 
@@ -67,7 +114,7 @@ function serveDist(): Promise<string> {
 // Screen sharing connects Libertad users directly. Chromium would hide this computer's addresses
 // behind names that only resolve on the local network, so two people on IPv6 could not reach
 // each other without a helper server. Only this app's own page runs here.
-app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
+const disabledFeatures = ['WebRtcHideLocalIpsWithMdns'];
 // Lets the page list and switch the audio tracks of a video (the voice-over menu of Torrent Together)
 app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
 // Timers and process priority stay at full speed in the background through these switches, not through
@@ -100,17 +147,47 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 // System settings live in a file of their own: Chromium decides about the graphics card before
 // the window exists, long before the page (and its localStorage) can be asked.
 const systemFile = path.join(app.getPath('userData'), 'system.json');
-const readSystem = (): { hardwareAcceleration?: boolean; autoUpdate?: boolean; throttleWhenHidden?: boolean; deepSleep?: boolean } => {
+const readSystem = (): { displayServer?: 'x11' | 'wayland'; hardwareAcceleration?: boolean; gpu?: string; gpuTrial?: boolean; gpuReverted?: string; autoUpdate?: boolean; throttleWhenHidden?: boolean; deepSleep?: boolean } => {
   try { return JSON.parse(readFileSync(systemFile, 'utf8')); } catch { return {}; }
 };
+let gpuTrial = false;
+let extraFeatures: string[] = [];
+let softwareVideo = false;
 const hardwareAcceleration = readSystem().hardwareAcceleration !== false;
+// In a development run, what Chromium made of the graphics (is video encoding and decoding on the card?) goes to the terminal
+if (!app.isPackaged) app.whenReady().then(() => setTimeout(() => console.log('[gpu] features', JSON.stringify(app.getGPUFeatureStatus()), 'LIBVA_DRIVER_NAME=', process.env.LIBVA_DRIVER_NAME ?? '(unset)'), 6000));
 if (!hardwareAcceleration) {
   app.disableHardwareAcceleration();
 } else if (process.platform === 'linux') {
   // Chromium keeps video encoding and decoding on the processor on Linux unless asked; streams
   // then cost a lot of CPU. Names a Chromium version does not know are ignored.
-  app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxGL,VaapiVideoEncoder,VaapiVideoDecodeLinuxGL');
+  // With two graphics chips: the one chosen in the settings does the work ('auto' leaves it to Chromium)
+  // A choice is a trial until the window has shown a picture (see below): one that never got that far (a black window, the
+  // app closed or crashed) is taken back to automatic at the next start, so a bad choice can not lock anybody out.
+  const sys = readSystem();
+  if (sys.gpu === 'software') {
+    // Video encoding and decoding stay on the processor (the window is still drawn by the graphics card). Nothing to trial: it only
+    // takes the video engines out.
+    disabledFeatures.push('VaapiVideoDecoder', 'VaapiVideoEncoder', 'VaapiVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoEncoder', 'VaapiOnNvidiaGPUs');
+    softwareVideo = true;
+    console.log('[gpu] video work on the processor (software)');
+  } else if (sys.gpuTrial === true && sys.gpu && sys.gpu !== 'auto') {
+    writeFileSync(systemFile, JSON.stringify({ ...sys, gpu: 'auto', gpuTrial: false, gpuReverted: sys.gpu }));
+    console.log('[gpu] the last choice never showed a picture, back to automatic');
+  } else {
+    const plan = planGpu(sys.gpu);
+    if (plan) {
+      extraFeatures = plan.features;
+      if (plan.renderNode) app.commandLine.appendSwitch('render-node-override', plan.renderNode);
+      console.log('[gpu] using', plan.gpu.label, plan.gpu.node, plan.features.join(','));
+      writeFileSync(systemFile, JSON.stringify({ ...sys, gpuTrial: true, gpuReverted: undefined }));
+      gpuTrial = true;
+    }
+  }
+  // One switch with all of them (a second one would replace the first)
+  if (!softwareVideo) app.commandLine.appendSwitch('enable-features', ['AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'VaapiVideoEncoder', 'VaapiVideoDecodeLinuxGL', ...extraFeatures].join(','));
 }
+app.commandLine.appendSwitch('disable-features', disabledFeatures.join(','));
 // Run on system startup. Windows and macOS have login items; Electron has none on Linux, where the
 // desktop environments start what is listed in ~/.config/autostart.
 const autostartFile = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'autostart', 'Libertad.desktop');
@@ -244,11 +321,16 @@ ipcMain.on('window:hiddenApplied', (e, hidden: boolean, stats?: Record<string, n
     setTimeout(() => { if (pageHidden) { collectMain?.(); if (dev()) console.log(`[throttle] after trimming | ${memory()} | ${mainHeap()}`); } }, 3000);
   })();
 });
-ipcMain.handle('system:get', () => ({ hardwareAcceleration, autoUpdate: readSystem().autoUpdate !== false, throttleWhenHidden, launchOnStartup: launchOnStartup(), platform: process.platform }));
+ipcMain.handle('system:get', () => ({ hardwareAcceleration, gpu: readSystem().gpu ?? 'auto', gpuReverted: readSystem().gpuReverted ?? '', gpus: listGpus().map(({ id, label, kind }) => ({ id, label, kind })), autoUpdate: readSystem().autoUpdate !== false, throttleWhenHidden, launchOnStartup: launchOnStartup(), platform: process.platform,
+  // Only on a Wayland desktop is there a choice: what was chosen, and what this run is
+  displayServer: waylandSession ? { choice: savedDisplayServer(), running: app.commandLine.getSwitchValue('ozone-platform') === 'x11' ? 'x11' : 'wayland' } : null }));
 ipcMain.handle('system:setThrottleWhenHidden', async (_e, on: boolean) => {
   await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), throttleWhenHidden: !!on }));
   throttleWhenHidden = !!on;
   applyHidden('setting changed');
+});
+ipcMain.handle('system:setDisplayServer', async (_e, which: string) => {
+  await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), displayServer: which === 'wayland' ? 'wayland' : 'x11' }));
 });
 ipcMain.handle('system:setLaunchOnStartup', async (_e, on: boolean) => {
   // A development run would register Electron itself, not the app
@@ -257,6 +339,9 @@ ipcMain.handle('system:setLaunchOnStartup', async (_e, on: boolean) => {
 });
 ipcMain.handle('system:setHardwareAcceleration', async (_e, on: boolean) => {
   await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), hardwareAcceleration: !!on }));
+});
+ipcMain.handle('system:setGpu', async (_e, id: string) => {
+  await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), gpu: String(id || 'auto'), gpuTrial: false, gpuReverted: undefined }));
 });
 ipcMain.handle('system:setAutoUpdate', async (_e, on: boolean) => {
   await fs.writeFile(systemFile, JSON.stringify({ ...readSystem(), autoUpdate: !!on }));
@@ -307,6 +392,7 @@ const conns = new Map<string, Conn>();
 registerFileStore();
 registerProfiles();
 const torrentEngine = registerTorrent(hardwareAcceleration);
+registerP2p(identities);
 ipcMain.handle('identities:list', () => identities().list());
 ipcMain.handle('identities:create', (_e, name: string, email: string) => identities().create(String(name), String(email ?? '')));
 ipcMain.handle('identities:import', (_e, bytes: Uint8Array, password: string, name: string) =>
@@ -431,8 +517,9 @@ ipcMain.handle('preview:fetch', (_e, url: string) => fetchLinkPreview(String(url
 // `chosen` tells the renderer not to ask a second time.
 let screenSources: Electron.DesktopCapturerSource[] = [];
 let pickedSource: string | null = null;
-const onWayland = () => process.platform === 'linux' && app.commandLine.getSwitchValue('ozone-platform') !== 'x11' &&
-  (process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY);
+// A Wayland desktop, whichever window system the app itself runs on (Settings > System): with the app on X11 (XWayland) Chromium still
+// captures through the desktop's portal, so its picker opens and the app's own list would only show black pictures and ask again.
+const onWayland = () => waylandSession;
 
 // Sound: PipeWire on Linux (one program or everything but this app); on Windows everything but this app
 // (older Windows versions cannot leave this app out and fall back to the plain system loopback)
@@ -522,12 +609,144 @@ ipcMain.handle('window:isFullScreen', () => mainWindow?.isFullScreen() ?? false)
 // The pop-out windows (one per picture, named by the frame name the app opened them with): full screen
 // of that window alone, and back to the window it was when it ends. Returns the state asked for.
 const popups = new Map<string, BrowserWindow>();
+// When the desktop last moved each pop-out window
+const movedPopups = new Map<string, number>();
+// Going full screen (and coming back) moves and resizes a pop-out window, over the app's own window when they share a screen. That is
+// not a drop on the app: the moves of a full screen change, and the ones that trail after it, never send the window back in.
+const fullScreenGrace = new Map<string, number>();
+// Short: a window dragged inside the app right after it left full screen must still go back in (the first time)
+const fullScreenBusy = (name: string, win?: BrowserWindow) => (!!win && !win.isDestroyed() && win.isFullScreen()) || Date.now() < (fullScreenGrace.get(name) ?? 0);
+const fullScreenChanging = (name: string, ms: number) => {
+  fullScreenGrace.set(name, Math.max(fullScreenGrace.get(name) ?? 0, Date.now() + ms));
+  movedPopups.delete(name);
+};
 ipcMain.handle('popout:setFullScreen', (_e, name: string, fullscreen?: boolean) => {
   const win = popups.get(String(name));
   if (!win || win.isDestroyed()) return false;
   const want = typeof fullscreen === 'boolean' ? fullscreen : !win.isFullScreen();
+  fullScreenChanging(String(name), 800);
   win.setFullScreen(want);
   return want;
+});
+// While a drag out of the app is held, the pop-out windows follow the real cursor of the system (not the screen position the page's
+// pointer events report, which can be wrong or missing outside the page), by the place on the window that was picked up.
+let followSet: { name: string; dx: number; dy: number }[] = [];
+let followTimer: ReturnType<typeof setInterval> | null = null;
+let followStop: ReturnType<typeof setTimeout> | null = null;
+const stopFollow = () => {
+  if (followTimer) clearInterval(followTimer);
+  if (followStop) clearTimeout(followStop);
+  followTimer = followStop = null;
+  followSet = [];
+};
+const stepFollow = () => {
+  const p = screen.getCursorScreenPoint();
+  for (const f of followSet) {
+    const win = popups.get(f.name);
+    if (!win || win.isDestroyed() || win.isFullScreen()) continue;
+    const x = Math.round(p.x - f.dx), y = Math.round(p.y - f.dy);
+    const b = win.getBounds();
+    // The size it has: setPosition alone can resize a window by a pixel or two between screens of different scale
+    if (b.x !== x || b.y !== y) win.setBounds({ x, y, width: b.width, height: b.height });
+  }
+};
+ipcMain.on('popout:follow', (_e, items: { name: string; dx: number; dy: number }[]) => {
+  stopFollow();
+  followSet = (Array.isArray(items) ? items : []).filter(i => i && typeof i.name === 'string' && Number.isFinite(i.dx) && Number.isFinite(i.dy)).map(i => ({ name: i.name, dx: i.dx, dy: i.dy }));
+  if (!followSet.length) return;
+  stepFollow();
+  followTimer = setInterval(stepFollow, 8);
+  // A drag that nobody ended (the page went away) does not keep moving windows for ever
+  followStop = setTimeout(stopFollow, 120_000);
+});
+// The drag ended: answers whether the cursor is over the app's own window (the pop-out was let go on it, so it goes back in)
+ipcMain.handle('popout:followEnd', () => {
+  const p = screen.getCursorScreenPoint();
+  // The windows it was moving, taken before the follow is cleared: they count too (the cursor can be on the edge of one that is mostly over the app)
+  const centers = followSet.map(f => popups.get(f.name)).filter((w): w is BrowserWindow => !!w && !w.isDestroyed()).map(w => { const c = w.getBounds(); return { x: c.x + c.width / 2, y: c.y + c.height / 2 }; });
+  // This drag decides about these windows (here and now): the moves it made must not count as one the desktop made
+  for (const f of followSet) movedPopups.delete(f.name);
+  const followSet0 = followSet;
+  stopFollow();
+  const b = appRect();
+  if (!b) { console.log('[popout] follow end: the app window is not there to drop on'); return false; }
+  const within = (x: number, y: number) => x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height;
+  // A window that is full screen (or just was) is over the app because it is full screen, not because it was dropped there
+  const full = followSet0.some(f => popups.get(f.name)?.isFullScreen());
+  const inside = !full && (within(p.x, p.y) || centers.some(c => within(c.x, c.y)));
+  console.log(`[popout] follow end: cursor ${p.x},${p.y} app ${b.x},${b.y} ${b.width}x${b.height} -> ${inside ? 'back in' : 'stays out'} (${appPageOrigin ? 'place from the pointer' : 'place the window reports, no pointer sample yet'}; window reports ${mainWindow?.getBounds().x},${mainWindow?.getBounds().y})`);
+  return inside;
+});
+ipcMain.on('popout:moveTo', (_e, name: string, x: number, y: number) => {
+  const win = popups.get(String(name));
+  if (!win || win.isDestroyed() || win.isFullScreen() || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const { width, height } = win.getBounds();
+  win.setBounds({ x: Math.round(x), y: Math.round(y), width, height });
+});
+// A pop-out window changes its size and keeps one edge where it was: `side` is the edge that stays ('right' keeps the left edge, so the
+// window grows toward the right; 'left' keeps the right edge). With 'auto' it grows toward the right unless the screen has no room there.
+// Answers the side it used. The call bar's pop-out is just the picture and grows when the mouse is over it.
+ipcMain.handle('popout:resize', (_e, name: string, width: number, height: number, side: string): 'right' | 'left' => {
+  const win = popups.get(String(name));
+  const w = Math.round(width), h = Math.round(height);
+  if (!win || win.isDestroyed() || win.isFullScreen() || !Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return side === 'left' ? 'left' : 'right';
+  const b = win.getBounds();
+  let use: 'right' | 'left' = side === 'left' ? 'left' : 'right';
+  if (side === 'auto') {
+    const area = screen.getDisplayMatching(b).workArea;
+    use = b.x + w > area.x + area.width ? 'left' : 'right';
+  }
+  const x = use === 'left' ? b.x + b.width - w : b.x;
+  // A window that cannot be resized by the user can refuse to be resized by the program too (on Linux): it is let free for the change
+  const fixed = !win.isResizable();
+  // The change moves and resizes the window: that is not a drop on the app
+  fullScreenChanging(String(name), 300);
+  try {
+    if (fixed) { win.setResizable(true); win.setMinimumSize(1, 1); win.setMaximumSize(10000, 10000); }
+    win.setBounds({ x, y: b.y, width: w, height: h });
+  } catch { /* not supported here */ }
+  finally { if (fixed) { try { win.setResizable(false); } catch { /* not supported here */ } } }
+  return use;
+});
+// A pop-out window moved by the desktop (its title bar, or the bar's own drag area) and left over the app's window goes back in.
+// The page of the pop-out asks when the pointer is back in it with no button down (the move is over); this answers whether that window
+// has moved since the last question, and the cursor is over the app's own window.
+// Where the app's window is on the screen. The window's own reported place can be stale (under XWayland it is only refreshed when the
+// window is moved), so it is worked out from the pointer: the page says where the pointer is in the page, the cursor says where it is on
+// the screen, and the difference is where the page starts.
+let appPageOrigin: { x: number; y: number } | null = null;
+ipcMain.on('app:pointer', (e, cx: number, cy: number) => {
+  const w = mainWindow;
+  if (!w || w.isDestroyed() || e.sender !== w.webContents || !Number.isFinite(cx) || !Number.isFinite(cy)) return;
+  const c = screen.getCursorScreenPoint(), z = w.webContents.getZoomFactor();
+  appPageOrigin = { x: Math.round(c.x - cx * z), y: Math.round(c.y - cy * z) };
+});
+const appRect = (): { x: number; y: number; width: number; height: number } | null => {
+  const w = mainWindow;
+  if (!w || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return null;
+  if (!appPageOrigin) return w.getBounds();
+  const [width, height] = w.getContentSize();
+  return { x: appPageOrigin.x, y: appPageOrigin.y, width, height };
+};
+ipcMain.handle('popout:dropCheck', (_e, name: string) => {
+  const key = String(name);
+  // The window has not been moved by the desktop since it last went back in (or was never moved)
+  if (!movedPopups.has(key)) return false;
+  const win = popups.get(key), b = appRect();
+  if (!win || win.isDestroyed()) { movedPopups.delete(key); return false; }
+  // Full screen over the app is not a drop on it
+  if (fullScreenBusy(key, win)) { movedPopups.delete(key); return false; }
+  if (!b) return false;
+  const within = (x: number, y: number) => x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height;
+  const p = screen.getCursorScreenPoint(), c = win.getBounds();
+  // The cursor, or the middle of the window itself: under XWayland the cursor's place is only up to date while it is over a window of
+  // this app, and a window let go over the app is over it whatever the cursor says
+  const inside = within(p.x, p.y) || within(c.x + c.width / 2, c.y + c.height / 2);
+  if (!app.isPackaged) console.log(`[popout] drop check ${key}: cursor ${p.x},${p.y} window ${c.x},${c.y} ${c.width}x${c.height} app ${b.x},${b.y} ${b.width}x${b.height} -> ${inside ? 'back in' : 'stays out'}`);
+  // Kept until it goes in: a check that came before the desktop had told us where the window is (or while it was still being moved)
+  // must not use up the move, or the next one has nothing to go by
+  if (inside) movedPopups.delete(key);
+  return inside;
 });
 ipcMain.handle('popout:isFullScreen', (_e, name: string) => {
   const win = popups.get(String(name));
@@ -571,14 +790,33 @@ function createWindow(woke = false): BrowserWindow {
   });
 
   // Links from chat open in the system browser, never inside the app
-  win.webContents.setWindowOpenHandler(({ url, frameName }) => {
+  // width, height, left and top from the features string the page opened a pop-out window with
+  const featureBox = (features: string) => {
+    const n: Record<string, number> = {};
+    for (const kv of String(features || '').split(',')) {
+      const [k, v] = kv.split('=');
+      const x = Number(v);
+      if (k && v !== undefined && Number.isFinite(x)) n[k.trim()] = x;
+    }
+    return { width: n.width ?? 960, height: n.height ?? 600, ...(n.left !== undefined && n.top !== undefined ? { x: Math.round(n.left), y: Math.round(n.top) } : {}) };
+  };
+  win.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
     // The stream window: an empty page the app fills with the video itself
     if (frameName === 'libertad-stream' && (url === 'about:blank' || url === '')) {
       return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', frame: true, autoHideMenuBar: true, title: 'Libertad' } };
     }
+    // The call bar dragged out of the app: a small window without a frame, over every window on the desktop
+    if (frameName === 'libertad-overlay' && (url === 'about:blank' || url === '')) {
+      const b = featureBox(features);
+      return { action: 'allow', overrideBrowserWindowOptions: { ...b, width: Math.round(b.width), height: Math.round(b.height), frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, alwaysOnTop: true, skipTaskbar: true,
+        // Like a game overlay: it never takes the keyboard from the game or app below (its buttons still click), and on macOS it is a panel,
+        // the kind of window that can sit over full screen apps
+        ...(process.platform === 'win32' || process.platform === 'darwin' ? { focusable: false } : {}), ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
+        resizable: false, minimizable: false, maximizable: false, fullscreenable: false, autoHideMenuBar: true, title: 'Libertad call' } };
+    }
     // The pop-out windows: YouTube, and one for each screen, camera or watch together picture
     if ((frameName === 'libertad-watch' || frameName.startsWith('libertad-pop-')) && (url === 'about:blank' || url === '')) {
-      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 600, minWidth: 320, minHeight: 200, backgroundColor: '#000000', frame: true, autoHideMenuBar: true, title: 'Libertad Watch Together' } };
+      return { action: 'allow', overrideBrowserWindowOptions: { ...featureBox(features), minWidth: 320, minHeight: 200, backgroundColor: '#000000', frame: true, autoHideMenuBar: true, title: 'Libertad Watch Together' } };
     }
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -586,7 +824,38 @@ function createWindow(woke = false): BrowserWindow {
   win.webContents.on('did-create-window', (child, { frameName }) => {
     if (!frameName) return;
     popups.set(frameName, child);
-    child.on('closed', () => { if (popups.get(frameName) === child) popups.delete(frameName); applyHidden('pop-out closed'); });
+    child.on('move', () => { if (!fullScreenBusy(frameName, child)) movedPopups.set(frameName, Date.now()); });
+    // Full screen started or ended (by the page's button, a key, or the system): none of the moves around it count
+    // (The system can tell late, after the user has already taken hold of the window: only the moves right before it, which are the
+    // change's own, are taken back, and the pause after it is short)
+    const settled = () => {
+      const at = movedPopups.get(frameName);
+      fullScreenGrace.set(frameName, Math.max(fullScreenGrace.get(frameName) ?? 0, Date.now() + 300));
+      if (at !== undefined && Date.now() - at < 400) movedPopups.delete(frameName);
+    };
+    child.on('enter-full-screen', settled);
+    child.on('leave-full-screen', settled);
+    // Over everything, full screen windows and every workspace included
+    if (frameName === 'libertad-overlay') {
+      const top = () => {
+        if (child.isDestroyed()) return;
+        try {
+          child.setAlwaysOnTop(true, 'screen-saver');
+          child.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+          child.moveTop();
+        } catch { /* not supported here */ }
+      };
+      top();
+      // Other windows (a game going full screen, another always-on-top window) can take the top: it takes it back
+      const keep = setInterval(top, 1500);
+      child.on('blur', top);
+      child.on('hide', top);
+      child.on('show', top);
+      child.on('closed', () => clearInterval(keep));
+      screen.on('display-metrics-changed', top);
+      child.on('closed', () => screen.removeListener('display-metrics-changed', top));
+    }
+    child.on('closed', () => { movedPopups.delete(frameName); fullScreenGrace.delete(frameName); if (popups.get(frameName) === child) popups.delete(frameName); applyHidden('pop-out closed'); });
     trackVisibility(child, why => applyHidden(`pop-out ${why}`));
     applyHidden('pop-out opened');
   });
@@ -627,6 +896,27 @@ function createWindow(woke = false): BrowserWindow {
   trackVisibility(win, why => applyHidden(`window ${why}`));
   // A reloaded page starts out shown; tell it if that is not so
   win.webContents.on('did-finish-load', () => { if (pageHidden) { win.webContents.setBackgroundThrottling(true); win.webContents.send('window:hidden', true); } });
+  // The graphics choice is confirmed once the window really shows something: a window that is all black (the card could not
+  // present to this display) is put right by itself, with automatic graphics
+  if (gpuTrial) {
+    win.webContents.once('did-finish-load', () => setTimeout(async () => {
+      try {
+        const img = await win.webContents.capturePage();
+        const { width, height } = img.getSize();
+        const px = img.toBitmap();
+        let lit = 0;
+        for (let i = 0; i < px.length; i += 4 * 97) if (px[i] + px[i + 1] + px[i + 2] > 12) lit++;
+        if (width > 0 && height > 0 && lit === 0) {
+          console.log('[gpu] the window is black with this graphics card, back to automatic');
+          writeFileSync(systemFile, JSON.stringify({ ...readSystem(), gpu: 'auto', gpuTrial: false, gpuReverted: readSystem().gpu }));
+          app.relaunch(); app.exit(0);
+          return;
+        }
+      } catch { /* could not look: leave it to the next start */ }
+      writeFileSync(systemFile, JSON.stringify({ ...readSystem(), gpuTrial: false }));
+      gpuTrial = false;
+    }, 5000));
+  }
   win.on('closed', () => { if (mainWindow === win) mainWindow = null; pageHidden = false; asleep = false; if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; } });
 
   if (restored?.maximized) win.maximize();

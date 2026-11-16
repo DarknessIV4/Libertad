@@ -1,8 +1,8 @@
 <script lang="ts">
   import Modal from './Modal.svelte';
 
-  let { title, label, confirm, danger = false, input = 'text', initial = '', text = '', onsubmit, onclose }:
-    { title: string; label: string; confirm: string; danger?: boolean; input?: 'text' | 'password' | 'none'; initial?: string;
+  let { title, label, confirm, cancel = 'Cancel', danger = false, input = 'text', initial = '', text = '', onsubmit, onclose }:
+    { title: string; label: string; confirm: string; cancel?: string; danger?: boolean; input?: 'text' | 'password' | 'none'; initial?: string;
       text?: string; onsubmit: (value: string) => void; onclose: () => void } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -19,7 +19,7 @@
     {/if}
   </form>
   {#snippet footer()}
-    <button class="btn" onclick={onclose}>Cancel</button>
+    <button class="btn" onclick={onclose}>{cancel}</button>
     <button class="btn" class:primary={!danger} class:danger type="submit" form="prompt">{confirm}</button>
   {/snippet}
 </Modal>

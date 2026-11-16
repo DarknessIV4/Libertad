@@ -16,6 +16,7 @@ import { startHints } from './lib/hints.ts';
 import { youtubeAccount } from './lib/youtube-account.svelte.ts';
 import { serverStatus } from './lib/server-status.svelte.ts';
 import { startBackground } from './lib/background.ts';
+import { p2p } from './lib/p2p.svelte.ts';
 
 mount(App, { target: document.getElementById('app')! });
 startTray();
@@ -25,3 +26,4 @@ startHints();
 serverStatus.start();
 youtubeAccount.refresh();
 startBackground();
+p2p.boot();

@@ -8,19 +8,38 @@
   import { canSaveFrame, saveVideoFrame } from '../lib/save-frame.ts';
   import { CAP_FPS, CAP_HEIGHTS, capFpsLabel, capHeightLabel, isCapped, type ViewerCap } from '../lib/stream-quality.ts';
 
-  // Two small buttons in the top right corner of a picture, shown only while the mouse is over the
+  // The buttons in the top right corner of a picture, shown while the mouse moves over the
   // picture (or something in here has focus). cap: the viewer's own limit on the stream he receives
   // (frame rate and size, for him alone); speed: the playback speed everybody plays at, which anybody
   // can change (a streamed file).
   // Full screen and pop out only while the picture is in full screen or in a window of its own (the bar
   // above the picture has them otherwise): to leave it again.
   let { cap, speed = false, fullscreen = false, onfullscreen, popped = false, onpopout, video = null }:
-    { video?: HTMLVideoElement | null; cap: { get: () => ViewerCap; set: (c: ViewerCap) => void } | null; speed?: boolean; fullscreen?: boolean; onfullscreen: () => void; popped?: boolean; onpopout: () => void } = $props();
+    { video?: HTMLVideoElement | null; cap: { get: () => ViewerCap; set: (c: ViewerCap) => void } | null; speed?: boolean; fullscreen?: boolean; onfullscreen: () => void; popped?: boolean; onpopout?: () => void } = $props();
 
   let open = $state<'quality' | 'speed' | null>(null);
   let root = $state<HTMLElement>();
   const current = $derived(cap?.get() ?? { fps: 0, height: 0 });
   const rate = $derived(watchTogether.sharedRate());
+
+  // Shown while the mouse moves over the picture, gone 2.5 s after it stopped (or when it leaves)
+  let awake = $state(false);
+  let idle: number | undefined;
+  const wake = () => { awake = true; clearTimeout(idle); idle = window.setTimeout(() => (awake = false), 2500); };
+  const sleep = () => { clearTimeout(idle); awake = false; };
+  $effect(() => {
+    const pic = root?.parentElement;
+    if (!pic) return;
+    pic.addEventListener('pointermove', wake);
+    pic.addEventListener('pointerdown', wake);
+    pic.addEventListener('pointerleave', sleep);
+    return () => {
+      pic.removeEventListener('pointermove', wake);
+      pic.removeEventListener('pointerdown', wake);
+      pic.removeEventListener('pointerleave', sleep);
+      clearTimeout(idle);
+    };
+  });
 
   const toggle = (m: 'quality' | 'speed') => { open = open === m ? null : m; };
   // A click anywhere else closes the menu
@@ -38,7 +57,7 @@
 <svelte:window onpointerdowncapture={outside} onkeydown={e => { if (e.key === 'Escape') open = null; }} />
 
 {#if cap || speed || fullscreen || popped || (video && canSaveFrame())}
-<div class="hud" class:open={!!open} bind:this={root} role="presentation" ondblclick={e => e.stopPropagation()} oncontextmenu={e => e.stopPropagation()}>
+<div class="hud" class:open={!!open} class:awake bind:this={root} role="presentation" ondblclick={e => e.stopPropagation()} oncontextmenu={e => e.stopPropagation()}>
     <!-- Full screen: mute and deafen, left of everything else -->
     {#if fullscreen}<FsMuteDeafen />{/if}
     <!-- A screen or a camera: save the frame on screen, beside the quality button (desktop app) -->
@@ -81,16 +100,15 @@
       </div>
     {/if}
     {#if fullscreen}<button use:tip class="ibtn" onclick={onfullscreen} aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} title={fullscreen ? 'Exit full screen' : 'Full screen'}><Icon name="expand" size={20} /></button>{/if}
-    {#if fullscreen || popped}<button use:tip class="ibtn" class:on={popped} onclick={onpopout} aria-label={popped ? 'Bring back into the window' : 'Open in a separate window'} title={popped ? 'Bring back into the window' : 'Open in a separate window'}><Icon name="popout" size={20} /></button>{/if}
+    {#if onpopout && (fullscreen || popped)}<button use:tip class="ibtn" class:on={popped} onclick={onpopout} aria-label={popped ? 'Bring back into the window' : 'Open in a separate window'} title={popped ? 'Bring back into the window' : 'Open in a separate window'}><Icon name="popout" size={20} /></button>{/if}
 </div>
 {/if}
 
 <style>
   /* The padding is part of what the mouse has to be over: a hit area a little larger than the buttons */
   .hud { position: absolute; top: 0; right: 0; z-index: 4; display: flex; gap: 4px; padding: 8px; opacity: 0; transition: opacity 150ms; }
-  /* Shown only while the mouse is over the buttons (or a menu is open, or the keyboard is on them), not
-     when it moves elsewhere on the picture */
-  .hud:hover, .hud.open, .hud:has(:focus-visible) { opacity: 1; }
+  /* Shown while the mouse moves over the picture (or is over the buttons, a menu is open, or the keyboard is on them) */
+  .hud.awake, .hud:hover, .hud.open, .hud:has(:focus-visible) { opacity: 1; }
   .wrap { position: relative; }
   .ibtn { display: flex; align-items: center; justify-content: center; padding: 5px; border: none; border-radius: 6px; background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer; }
   .ibtn:hover, .ibtn:focus-visible { background: rgba(255, 255, 255, 0.25); }

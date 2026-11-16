@@ -107,6 +107,9 @@ export interface StatePayload {
   rate?: number;
   // Who is in the session, from a member that is in it, so a newcomer's list is right at once
   participants?: number[];
+  // Whether the sender is the host. A viewer answers "who is here" too, but whoever asks must not take
+  // that viewer for the host (session numbers are not even the same on both sides of a friend call)
+  host?: boolean;
 }
 
 export interface NextPayload {

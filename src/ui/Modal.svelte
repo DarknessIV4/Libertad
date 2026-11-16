@@ -1,14 +1,28 @@
+<script module lang="ts">
+  let seq = 0;
+  const live = new Set<number>();
+  const nextLayer = (): number => { if (!live.size) seq = 0; const z = 100 + Math.min(seq++, 18); live.add(z); return z; };
+  // Escape closes the window on top only
+  const topmost = (z: number): boolean => Math.max(...live) === z;
+</script>
+
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
 
   let { title, onclose, children, footer, width = 460 }:
     { title: string; onclose: () => void; children: Snippet; footer?: Snippet; width?: number } = $props();
+
+  // A window opened later is drawn over the ones already open, whatever part of the page it is opened from. Each takes the next
+  // layer when it opens (the counter starts over once none is open); the call bar and the title bar sit above them.
+  const layer = nextLayer();
+  onDestroy(() => live.delete(layer));
 </script>
 
-<svelte:window onkeydown={e => { if (e.key === 'Escape') onclose(); }} />
+<svelte:window onkeydown={e => { if (e.key === 'Escape' && topmost(layer)) onclose(); }} />
 
-<div class="backdrop" role="presentation" onmousedown={e => { if (e.target === e.currentTarget) onclose(); }}>
+<div class="backdrop" style:z-index={layer} role="presentation" onmousedown={e => { if (e.target === e.currentTarget) onclose(); }}>
   <div class="modal" role="dialog" aria-modal="true" aria-label={title} style:max-width="{width}px">
     <header>
       <h2>{title}</h2>

@@ -16,6 +16,21 @@
 /* Windows */
 :root[data-rounded] .modal { border-radius: var(--r-window) !important; overflow: hidden; }
 
+/* The call: the messages window, and the bar with the person, the clock and the buttons */
+:root[data-rounded] .callchat { border-radius: var(--r-window) !important; overflow: hidden; }
+:root[data-rounded] .callchat .msg span { border-radius: var(--r-item) !important; }
+:root[data-rounded] .callbar { border-radius: var(--r-menu) !important; }
+/* The start page's two containers (servers, friends) */
+:root[data-rounded] .home .cols > .scroll,
+:root[data-rounded] .home .cols > .panel { border-radius: var(--r-window) !important; }
+:root[data-rounded] .callbar.compact,
+:root[data-rounded] .callbar.compact::before { border-radius: var(--r-tile) !important; }
+:root[data-rounded] .callbar .side[data-dir='left'] { border-radius: var(--r-menu) 0 0 var(--r-menu) !important; }
+:root[data-rounded] .callbar .side[data-dir='right'] { border-radius: 0 var(--r-menu) var(--r-menu) 0 !important; }
+:root[data-rounded] .callbar .side[data-dir='up'] { border-radius: var(--r-menu) var(--r-menu) 0 0 !important; }
+:root[data-rounded] .callbar .side[data-dir='down'] { border-radius: 0 0 var(--r-menu) var(--r-menu) !important; }
+:root[data-rounded] .callbar .round { border-radius: var(--r-tile) !important; }
+
 /* Menus and pop-ups, and the items inside them */
 :root[data-rounded] .menu,
 :root[data-rounded] .pop { border-radius: var(--r-menu) !important; }

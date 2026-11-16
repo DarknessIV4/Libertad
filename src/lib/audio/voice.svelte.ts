@@ -5,7 +5,7 @@ import type { NoiseEngine, NoiseNode } from './noise.ts';
 import type { Probe } from './detect.ts';
 import captureUrl from './capture.worklet.ts?worker&url';
 import playbackUrl from './playback.worklet.ts?worker&url';
-import { encodeVoice, decodeVoice } from '../../core/voice-packet.ts';
+import { encodeVoice, decodeVoice, type VoicePacket } from '../../core/voice-packet.ts';
 import type { MumbleClient } from '../../core/client.ts';
 import { load, save } from '../storage.ts';
 
@@ -84,6 +84,14 @@ const GATE_RELEASE_MS = 100;
 // Rough per-packet cost of IP, TCP/TLS or UDP, and Mumble headers, for the bandwidth limit
 const PACKET_OVERHEAD_BYTES = 60;
 
+// A call with a friend (see p2p.svelte.ts): while one is on, the microphone goes to it instead of a server, and
+// its voice is played alongside whatever the server sends
+export interface CallLink {
+  muted: boolean;
+  deafened: boolean;
+  send(opus: Uint8Array, frame: number, last: boolean): void;
+}
+
 export const userKey = (u: { hash: string; name: string }) => u.hash || `name:${u.name}`;
 
 export interface DeviceInfo { id: string; label: string }
@@ -126,6 +134,7 @@ class VoiceEngine {
   private encoder: AudioEncoder | WasmEncoder | null = null;
   private decoders = new Map<number, { decoder: AudioDecoder | WasmDecoder; lastFrame: number; timer: ReturnType<typeof setTimeout> | null }>();
   private client: MumbleClient | null = null;
+  private call: CallLink | null = null;
   // Where your voice goes: 0 normal talking, 1 the whisper list of "Deafen for me" (see deafen-for.svelte.ts)
   target = 0;
   private sessionGains = new Map<number, number>();
@@ -308,6 +317,7 @@ class VoiceEngine {
     this.decoders.clear();
     try { this.encoder?.close(); } catch { /* closed */ }
     this.encoder = null;
+    if (this.refreshTimer) { clearTimeout(this.refreshTimer); this.refreshTimer = null; }
     this.noiseSeq++;
     this.probeSeq++;
     this.probe?.destroy();
@@ -330,9 +340,16 @@ class VoiceEngine {
     this.level = -100;
   }
 
+  // Whether we could talk at the previous sync; a change back to true refreshes the microphone
+  private wasTalking = true;
+
   // The microphone is not needed while we cannot talk anyway (muted or deafened, by us or the server)
   private micWanted(): boolean {
     if (this.testing) return true;
+    if (this.call) {
+      if (this.hidden && this.call.deafened) return false;
+      return !this.settings.releaseMicMuted || this.meterHolds > 0 || !(this.call.muted || this.call.deafened);
+    }
     const self = this.client?.self;
     // Hidden and deafened: nothing can be said, and nothing shows the level
     if (this.hidden && self && (self.selfDeaf || self.deaf)) return false;
@@ -350,6 +367,11 @@ class VoiceEngine {
   // Opens or gives back the microphone as the mute state asks. restart: open it anew (settings changed).
   private async syncInput(restart = false): Promise<void> {
     if (!this.ctx) return;
+    // Unmuting (or undeafening) takes the microphone anew: one that has been kept open through a long mute may
+    // have gone idle (a sleeping headset, a driver that stopped feeding it) without saying so
+    const talk = this.canTalk();
+    if (talk && !this.wasTalking && this.stream) restart = true;
+    this.wasTalking = talk;
     const wanted = this.micWanted();
     if (wanted && (restart || !this.stream)) return this.restartInput();
     if (!wanted && this.stream) {
@@ -415,15 +437,22 @@ class VoiceEngine {
       this.source.connect(this.analyser);
     } catch { this.analyser = null; }
     this.applyNoise();
+    let sysMuted = false;
     for (const track of stream.getAudioTracks()) {
       // The driver or the system took the microphone away
       track.addEventListener('ended', () => { if (this.stream === stream) this.recoverInput('ended'); });
       // Muted by the browser: the device delivers nothing. Often it comes back by itself within a moment.
       track.addEventListener('mute', () => {
+        sysMuted = true;
         if (this.muteTimer) clearTimeout(this.muteTimer);
         this.muteTimer = setTimeout(() => { if (this.stream === stream && track.muted) this.recoverInput('muted'); }, 1500);
       });
-      track.addEventListener('unmute', () => { if (this.muteTimer) clearTimeout(this.muteTimer); this.muteTimer = null; });
+      track.addEventListener('unmute', () => {
+        if (this.muteTimer) clearTimeout(this.muteTimer);
+        this.muteTimer = null;
+        // The system muted the microphone and let it go again: it is taken anew rather than trusted
+        if (sysMuted) { sysMuted = false; this.refreshInput(300); }
+      });
     }
     this.refreshDevices();
   }
@@ -496,18 +525,34 @@ class VoiceEngine {
     if (this.recoveries && now - this.lastRecovery > 15000 && this.zeroFrames === 0) this.recoveries = 0;
   }
 
-  // Microphones coming and going: take a new one when ours disappeared, or when none could be opened before
-  private onDeviceChange(): void {
-    if (!this.ctx || !this.micWanted()) return;
+  // Microphones coming and going, or the system's default changing: the microphone is opened anew
+  private inputSig = '';
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private async onDeviceChange(): Promise<void> {
+    if (!this.ctx || !navigator.mediaDevices?.enumerateDevices) return;
+    let sig = '';
+    try {
+      // The names carry which device the system's default is at the moment ("Default - Headset")
+      sig = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput').map(d => `${d.deviceId}:${d.label}`).join('|');
+    } catch { /* look again at the next change */ }
     const track = this.stream?.getAudioTracks()[0];
-    if (!this.stream || !track || track.readyState === 'ended') {
+    const changed = sig !== this.inputSig;
+    this.inputSig = sig;
+    if (!this.micWanted()) return;
+    if (changed || !this.stream || !track || track.readyState === 'ended') {
       this.recoveries = 0;
-      this.restartInput();
-    } else {
-      // Drivers often change the device right after a change is announced; look again a moment later
-      const stream = this.stream;
-      setTimeout(() => { if (this.stream === stream && track.readyState === 'ended') this.recoverInput('device change'); }, 1000);
+      // Drivers often change the device right after a change is announced: wait a moment, then take it
+      this.refreshInput(600);
     }
+  }
+
+  // Opens the microphone anew after a short wait (several reasons close together make one reopening)
+  private refreshInput(delay: number): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      if (this.ctx && this.micWanted()) void this.restartInput();
+    }, delay);
   }
 
   // Gets the microphone going again, stepping up: reopen it, reopen it plainly (default device, no
@@ -577,8 +622,8 @@ class VoiceEngine {
     this.degraded = false;
     this.notice = '';
     this.recoveries = 0;
-    // Release the microphone while not connected (unless testing it)
-    if (!this.testing) this.stop();
+    // Release the microphone while not connected (unless testing it, or in a call with a friend)
+    if (!this.testing && !this.call) this.stop();
   }
 
   // Opus bitrate that keeps bitrate plus packet overhead inside the server's per-user limit
@@ -621,6 +666,7 @@ class VoiceEngine {
   }
 
   private canTalk(): boolean {
+    if (this.call) return !this.call.muted && !this.call.deafened;
     const self = this.client?.self;
     return !!self && this.client!.synced && !self.selfMute && !self.mute && !self.suppress && !self.selfDeaf && !self.deaf;
   }
@@ -714,6 +760,12 @@ class VoiceEngine {
   }
 
   private sendPacket(opus: Uint8Array, last: boolean): void {
+    if (this.call) {
+      this.call.send(opus, this.frameCounter, last);
+      this.frameCounter += this.settings.frameMs / 10;
+      this.stats.sent++;
+      return;
+    }
     const client = this.client;
     if (!client) return;
     client.sendVoice(encodeVoice({ target: this.target, frame: this.frameCounter, opus, last }, client.protobufVoice));
@@ -756,11 +808,45 @@ class VoiceEngine {
 
   private receive(raw: Uint8Array): void {
     const p = decodeVoice(raw);
-    if (!p) return;
+    if (p) this.play(p);
+  }
+
+  // ─── Calls with friends ─────────────────────────────────────────────────────
+
+  // Friends' sessions are numbered above anything a server hands out (they are 32-bit and small)
+  static readonly CALL_SESSION = 0x7fff0001;
+
+  async joinCall(link: CallLink): Promise<void> {
+    this.call = link;
+    this.frameCounter = 0;
+    await this.start();
+    this.refresh();
+  }
+
+  leaveCall(): void {
+    if (!this.call) return;
+    this.endTransmission();
+    this.call = null;
+    this.dropSession(VoiceEngine.CALL_SESSION);
+    if (this.client) this.refresh();
+    else if (!this.testing) this.stop();
+  }
+
+  // The call's mute or deafen changed: the microphone is let go or taken again
+  refresh(): void {
+    this.syncInput().catch(() => {});
+  }
+
+  receiveCall(frame: number, last: boolean, opus: Uint8Array): void {
+    if (this.call) this.play({ session: VoiceEngine.CALL_SESSION, target: 0, frame, opus, last });
+  }
+
+  private play(p: VoicePacket): void {
     this.stats.received++;
     const self = this.client?.self;
-    if (!this.ctx || !this.playback || self?.selfDeaf || self?.deaf) return;
-    const user = this.client?.users.get(p.session);
+    const isCall = p.session === VoiceEngine.CALL_SESSION;
+    if (!this.ctx || !this.playback || (isCall ? !this.call || this.call.deafened : self?.selfDeaf || self?.deaf)) return;
+    const user = isCall ? undefined : this.client?.users.get(p.session);
     if (user && this.settings.localMutes[userKey(user)]) return;
 
     let d = this.decoders.get(p.session);

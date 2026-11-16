@@ -58,6 +58,7 @@ const self = $derived(session.self);
   onDestroy(() => { spotState.fullscreen = false; spotState.poppedOut = false; });
   $effect(() => {
     const onSpot = (e: Event) => {
+      if (spotState.call) return;
       const action = (e as CustomEvent<string>).detail;
       if (action === 'fullscreen') fullscreen(WT);
       else if (action === 'popout') togglePip(WT);
@@ -1059,7 +1060,10 @@ const self = $derived(session.self);
           </span>
         {/if}
       </button>
+      <!-- Full screen has its own buttons on the picture: the bar's copies would show again at the top left -->
+      {#if !isFullscreen}
       {#each barIds as id, i (id)}{#if i > 0}<span class="gsep" aria-hidden="true"></span>{/if}{@render controls(id)}{/each}
+      {/if}
     </header>
     {#if !collapsed && !fill && !(meeting && popped)}
       {#if !meeting}

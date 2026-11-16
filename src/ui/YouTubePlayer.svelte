@@ -557,7 +557,7 @@
       </div>
       {#if spotState.fullscreen}
         <!-- Full screen: the spotlight's own bar is hidden, so its pop-out and full screen buttons are here -->
-        <button use:tip class="ibtn" class:on={spotState.poppedOut} onclick={() => spotAction('popout')} aria-label="Pop out" title="Pop out"><Icon name="popout" size={20} /></button>
+        {#if !spotState.call}<button use:tip class="ibtn" class:on={spotState.poppedOut} onclick={() => spotAction('popout')} aria-label="Pop out" title="Pop out"><Icon name="popout" size={20} /></button>{/if}
         <button use:tip class="ibtn" onclick={() => spotAction('fullscreen')} aria-label="Exit full screen" title="Exit full screen"><Icon name="expand" size={20} /></button>
       {/if}
     </div>

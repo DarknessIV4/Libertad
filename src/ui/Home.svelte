@@ -11,6 +11,7 @@
   import { defaultRooms } from '../lib/default-room.svelte.ts';
   import { homeBackgroundItems } from '../lib/custom-bg-menu.ts';
   import QuickMessage from './QuickMessage.svelte';
+  import Friends from './Friends.svelte';
 
   // The start screen while not connected: your saved servers with who is on them, ready to join.
   let { onadd, onedit, onbrowse }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void } = $props();
@@ -59,6 +60,7 @@
 </script>
 
 <section class="home" aria-label="Servers" oncontextmenu={bgMenu}>
+  <div class="cols">
   <div class="scroll">
     <header>
       <div class="title">
@@ -116,6 +118,8 @@
       <p class="none">No saved servers yet.</p>
     {/if}
   </div>
+  {#if desktop}<Friends panel />{/if}
+  </div>
   <UserBar inline />
 </section>
 
@@ -123,7 +127,13 @@
 
 <style>
   .home { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-2); }
-  .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 32px clamp(16px, 4vw, 48px) 24px; }
+  /* Two containers side by side: the servers with their controls, and the friends with theirs */
+  .cols { flex: 1; min-height: 0; display: flex; gap: 16px; padding: 16px; }
+  .scroll { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 24px clamp(16px, 3vw, 32px);
+    background-color: color-mix(in srgb, var(--bg-1) var(--panel-solid, 100%), transparent);
+    background-image: linear-gradient(rgb(0 0 0 / var(--panel-shade, 0)), rgb(0 0 0 / var(--panel-shade, 0)));
+    backdrop-filter: blur(var(--panel-blur, 0px));
+    border: 1px solid var(--line); }
   header { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; max-width: 960px; }
   h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   .title p { margin: 4px 0 0; color: var(--text-dim); }
