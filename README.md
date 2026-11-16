@@ -1,6 +1,6 @@
 # Libertad
 
-**Voice chat with your friends on Mumble, in an app that feels like the apps you already know.**
+**Voice chat with your friends on Mumble, Or privately call them without a server (HyperDHT).**
 
 Libertad works with any Mumble server, as it is: nothing has to be installed or changed on the server, and friends on the classic Mumble app still hear and see you like anyone else. It also has a server-less side: add friends by a code and call them directly, with no Mumble server at all. It runs on Windows and Linux.
 
