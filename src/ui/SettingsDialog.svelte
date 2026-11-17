@@ -171,7 +171,7 @@
     <label for="s-banner">Largest profile picture, banner or card to fetch from other people (Mbit)</label>
     <input id="s-banner" type="number" min="0" max="1000" step="1" value={s.bannerMaxMbit}
       onchange={e => { const v = Math.min(1000, Math.max(0, Math.round(Number(e.currentTarget.value)) || 0)); s.bannerMaxMbit = v; e.currentTarget.value = String(v); saveFiles(); }} />
-    <p class="help">Avatars, banners and cards (pictures, GIFs and videos) are shared directly from the other person's computer over WebRTC, and are fetched when you see them, as long as they are no larger than this. 8 Mbit is 1 MB. Enter 0 to never fetch them; you then see plain colors and letters.</p>
+    <p class="help">Avatars, banners and cards (pictures, GIFs and videos) are shared directly from the other person's computer over WebRTC, and are fetched when you see them, as long as they are no larger than this. The same limit applies to your friends' pictures (their avatar, banner and card): larger ones are not fetched or shown, and changing the limit takes effect at once. 8 Mbit is 1 MB. Enter 0 to never fetch them; you then see plain colors and letters.</p>
     <label class="check"><input type="checkbox" bind:checked={s.sendThumbnails} onchange={saveFiles} /> Send a preview picture with pictures and videos</label>
     <div class="row kept">
       <p class="help">Files under 256 MB that you sent or received are kept on this computer, up to 100 GB, so others can get them from you later. {files.usage != null ? `In use: ${formatBytes(files.usage)}.` : ''}</p>

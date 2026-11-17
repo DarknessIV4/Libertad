@@ -16,8 +16,11 @@ const okKey = (v: unknown): string => {
   return key;
 };
 
-export function registerP2p(identities: () => IdentityStore): void {
+// inCall(): a call with a friend is active. The main process must know: a friend call has no Mumble connection, yet the page holds its
+// microphone, speakers and Opus codec, so the page may not be hidden, throttled or put to sleep while one is on.
+export function registerP2p(identities: () => IdentityStore, onCallChange?: () => void): { inCall: () => boolean } {
   let node: P2p | null = null;
+  let callOn = false;
   let dht: Dht | null = null;
   let identityId = '';
   let loading: Promise<DhtModule> | null = null;
@@ -42,6 +45,8 @@ export function registerP2p(identities: () => IdentityStore): void {
   };
   // My own profile as the page last gave it: handed to every node that is made, so it is not lost when the identity changes
   let ownProfile: unknown = null;
+  // The largest picture of a friend that is shown and fetched, in bytes (Settings: 64 Mbit until the page says)
+  let pictureLimit = 8_000_000;
 
   // Not bundled: it and its native parts are loaded from node_modules, the way webtorrent is
   const load = () => (loading ??= (async () => { const spec = 'hyperdht'; return (await import(spec)).default as DhtModule; })());
@@ -53,6 +58,7 @@ export function registerP2p(identities: () => IdentityStore): void {
   async function shutdown(): Promise<void> {
     const n = node, d = dht;
     node = null; dht = null; identityId = '';
+    if (callOn) { callOn = false; try { onCallChange?.(); } catch { /* not ready */ } }
     await n?.stop();
     await d?.destroy().catch(() => {});
   }
@@ -73,11 +79,16 @@ export function registerP2p(identities: () => IdentityStore): void {
       dht, keyPair, store, name: id.name, hash: id.fingerprint,
       profiles: profilesOf(id.id),
       onProfile: key => broadcast('p2p:profile', key),
-      onState: s => broadcast('p2p:state', s),
+      onState: s => {
+        const on = s.call?.state === 'active';
+        broadcast('p2p:state', s);
+        if (on !== callOn) { callOn = on; try { onCallChange?.(); } catch { /* not ready */ } }
+      },
       onAudio: (key, frame, isLast, opus) => broadcast('p2p:audio', key, frame, isLast, opus),
       onSignal: (key, channel, packet) => broadcast('p2p:signal', key, channel, packet)
     });
     if (ownProfile) node.setProfile(ownProfile);
+    node.setPictureLimit(pictureLimit);
     return node;
   }
 
@@ -131,12 +142,13 @@ export function registerP2p(identities: () => IdentityStore): void {
   ipcMain.handle('p2p:acceptRequests', async (_e, on: unknown) => { await node?.setAcceptRequests(!!on); });
 
   // My profile, for friends: text, colors and the bytes of pictures. Sent to them when it differs from the last one.
+  ipcMain.handle('p2p:setPictureLimit', (_e, bytes: unknown) => { const n = Number(bytes); pictureLimit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; node?.setPictureLimit(pictureLimit); });
   ipcMain.handle('p2p:setProfile', (_e, input: unknown) => { ownProfile = input; node?.setProfile(input); });
   // A friend's profile as kept on this computer (nothing needs the network for this)
   ipcMain.handle('p2p:profile', async (_e, key: unknown): Promise<FriendProfileData | null> => {
     if (typeof key !== 'string' || !/^[0-9a-f]{64}$/.test(key)) return null;
     const id = await identities().get();
-    return profilesOf(id.id).read(key);
+    return profilesOf(id.id).read(key, pictureLimit);
   });
 
   ipcMain.handle('p2p:call', (_e, key: unknown) => node?.callFriend(okKey(key)) ?? false);
@@ -153,4 +165,5 @@ export function registerP2p(identities: () => IdentityStore): void {
   });
 
   app.on('will-quit', () => { void shutdown(); });
+  return { inCall: () => callOn };
 }

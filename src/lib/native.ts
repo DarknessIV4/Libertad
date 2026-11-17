@@ -68,6 +68,8 @@ interface NativeApi extends PlatformApi {
     // My profile for friends (text, colors, and pictures as bytes with their type); a friend's profile as kept here;
     // and a ping that one of them changed (the key of the friend)
     setProfile(profile: { text: string; slots: Record<string, unknown> }): Promise<void>;
+    // The largest picture of a friend that is fetched and shown, in bytes (the limit in Settings); 0: none
+    setPictureLimit(bytes: number): Promise<void>;
     profile(key: string): Promise<FriendProfileData | null>;
     onProfile(fn: (key: string) => void): () => void;
     setMute(muted: boolean, deafened: boolean): void;
@@ -133,6 +135,8 @@ interface NativeApi extends PlatformApi {
   // The window is hidden or minimized (true) or back (false); the page then draws and fetches nothing but what the connection needs
   onHidden(fn: (hidden: boolean) => void): () => void;
   reportHidden(hidden: boolean, stats?: Record<string, number>): void;
+  // Chromium's audio service died and came back: the audio streams of the page have to be built again
+  onAudioServiceGone?(fn: () => void): () => void;
   // Settings Chromium reads at start-up; changes apply after a restart
   system: {
     get(): Promise<{ hardwareAcceleration: boolean; gpu: string; gpuReverted?: string; gpus: { id: string; label: string; kind: 'integrated' | 'discrete' }[]; autoUpdate: boolean; throttleWhenHidden: boolean; launchOnStartup: boolean; platform: string; displayServer: { choice: 'x11' | 'wayland'; running: 'x11' | 'wayland' } | null }>;

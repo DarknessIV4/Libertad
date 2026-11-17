@@ -211,7 +211,8 @@ export type ProfileItem =
 export interface ProfileManifest { text: string; slots: Partial<Record<ProfileSlot, ProfileItem>> }
 
 export const MAX_PROFILE_TEXT = 40000;
-export const MAX_PROFILE_FILE = 16 * 1024 * 1024;
+// The most a friend's picture can be at all; what is fetched is decided by the limit in Settings (largest 1000 Mbit = 125 MB)
+export const MAX_PROFILE_FILE = 128 * 1024 * 1024;
 export const PROFILE_CHUNK = 16 * 1024;
 export const PROFILE_MIME = /^(?:image\/(?:gif|png|jpeg|webp)|video\/(?:mp4|webm))$/;
 const COLOR = /^#[0-9a-f]{6}$/i;

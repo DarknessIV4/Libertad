@@ -2,8 +2,9 @@ import { registerFileStore } from './filestore.ts';
 import { registerTorrent } from './torrent.ts';
 import { registerProfiles } from './profiles.ts';
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, screen, shell, session, systemPreferences, type WebContents } from 'electron';
-import { promises as fs, createReadStream, readFileSync, existsSync, readdirSync, cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { promises as fs, createReadStream, readFileSync, existsSync, readdirSync, cpSync, mkdirSync, writeFileSync, appendFileSync, statSync, renameSync } from 'node:fs';
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import v8 from 'node:v8';
 import vm from 'node:vm';
 import os from 'node:os';
@@ -29,7 +30,37 @@ import { WindowsShareAudio, windowsExcludeSupported } from './win-audio.ts';
 // the app) does not work: Wayland gives a program no say over where its windows are or what is over what. Chromium decides about this
 // before any script runs, so a switch set from here is too late: the app starts itself once more with the switch on the command line.
 // X11 sessions are X11 already. `npm run dev` passes the switch itself (scripts/dev.mjs). LIBERTAD_WAYLAND=1 forces Wayland, and a
-// --ozone-platform given on the command line is respected.
+// --ozone-platform given on the command line by the person starting the app is respected.
+//
+// IMPORTANT: on a Wayland session Electron itself adds `--ozone-platform=wayland` to its command line before any script runs, so
+// app.commandLine.hasSwitch('ozone-platform') is ALWAYS true there and says nothing about what the person asked for. (That made the
+// packaged app skip this relaunch and run as a native Wayland window, while `npm run dev` worked because dev.mjs passes the flag.)
+// What the person asked for can only be read from the real process arguments (process.argv).
+const AUTO_X11_FLAG = '--libertad-auto-x11';
+// An AppImage that was started with --appimage-extract-and-run (a computer where FUSE does not work) must start itself again the
+// same way: the plain start needs FUSE and shows "Cannot mount AppImage". The runtime unpacks into /tmp/appimage_extracted_*.
+const keepExtractMode = (): void => {
+  if (process.env.APPIMAGE && /appimage_extracted_/.test(process.env.APPDIR ?? '')) process.env.APPIMAGE_EXTRACT_AND_RUN = '1';
+};
+// Starts the app again as a program of its own, and the caller quits. This is not app.relaunch(): from an AppImage that starts the
+// file again with this copy's environment and its folder as the working directory. The folder is the mounted AppImage, which goes
+// away the moment this copy quits, and the variables of the running copy (APPDIR, ARGV0, OWD) belong to it, not to the next one.
+// The new AppImage then finds no folder to stand in or a mount that is being torn down, and shows "Cannot mount AppImage".
+const startAgain = (args: string[]): void => {
+  keepExtractMode();
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const cwd = (process.env.OWD && existsSync(process.env.OWD) ? process.env.OWD : os.homedir());
+  if (process.env.APPIMAGE) for (const k of ['APPDIR', 'ARGV0', 'OWD']) delete env[k];
+  try {
+    const child = spawn(process.env.APPIMAGE || process.execPath, args, { detached: true, stdio: 'ignore', cwd, env });
+    child.on('error', () => { /* nothing more to do: the app is closing */ });
+    child.unref();
+  } catch { /* fall back to Electron's own */
+    app.relaunch({ execPath: process.env.APPIMAGE || process.execPath, args });
+  }
+  app.exit(0);
+};
+const ozoneArg = (a: string) => /^--ozone-platform(-hint)?(=|$)/.test(a);
 const savedDisplayServer = (): 'x11' | 'wayland' => {
   if (process.env.LIBERTAD_WAYLAND) return 'wayland';
   try {
@@ -39,15 +70,56 @@ const savedDisplayServer = (): 'x11' | 'wayland' => {
   return 'x11';
 };
 const waylandSession = process.platform === 'linux' && (process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY);
-if (waylandSession && !process.env.LIBERTAD_X11_RELAUNCHED &&
-    !app.commandLine.hasSwitch('ozone-platform') && !app.commandLine.hasSwitch('ozone-platform-hint') && savedDisplayServer() === 'x11') {
+// The arguments the app was really started with, without the ones this app added to itself for X11
+const userArgs = (): string[] => process.argv.slice(1).filter(a => a !== AUTO_X11_FLAG && !(process.argv.includes(AUTO_X11_FLAG) && ozoneArg(a)));
+const startedByUsAsX11 = process.argv.includes(AUTO_X11_FLAG);
+// An --ozone-platform / --ozone-platform-hint that somebody typed (not the one added by this app for X11)
+const userChoseOzone = process.argv.slice(1).some(a => ozoneArg(a)) && !startedByUsAsX11;
+if (waylandSession && !startedByUsAsX11 && !userChoseOzone && !process.env.LIBERTAD_X11_RELAUNCHED && savedDisplayServer() === 'x11') {
   // Taken along into the new process: it can not start itself a third time if the switch were ever not seen
   process.env.LIBERTAD_X11_RELAUNCHED = '1';
   // From an AppImage the file it came from is what starts again (the folder it runs from goes away with this process)
-  app.relaunch({ execPath: process.env.APPIMAGE || process.execPath, args: [...process.argv.slice(1), '--ozone-platform=x11'] });
+  startAgain([...userArgs(), '--ozone-platform=x11', AUTO_X11_FLAG]);
+  process.exit(0);
+}
+// The loop guard has done its work; programs started from here (an update, the tray) decide for themselves
+delete process.env.LIBERTAD_X11_RELAUNCHED;
+// Starts the app again (settings that apply after a restart). The X11 flags this app added to itself are left out, so the saved choice
+// in Settings > System is decided anew: otherwise a person who went back to Wayland would be put on X11 again by the old arguments.
+// From an AppImage the file it came from is what starts again, not the folder it was mounted in.
+const relaunchApp = (): void => {
+  // The new copy starts while this one is still closing: it is told so, and the lock is handed over now
+  process.env.LIBERTAD_RESTARTING = '1';
+  try { app.releaseSingleInstanceLock(); } catch { /* none held */ }
+  startAgain(userArgs());
+};
+
+// One copy of the app per data folder. Two copies share one identity, so both go online on the friend network with the same key:
+// the friend's computer keeps only one of the two connections, the other one reconnects, and so on, over and over. A call on the
+// connection that lost is cut every few seconds (both people go silent and have to call again). A second start brings the first
+// one to the front instead. (Not in `npm run dev`, which restarts itself on every change; LIBERTAD_ALLOW_MULTIPLE=1 turns it off.)
+const restarting = !!process.env.LIBERTAD_RESTARTING;
+delete process.env.LIBERTAD_RESTARTING;
+const takeLock = (): boolean => {
+  // After a restart the old copy may still hold the lock for a moment: wait for it (up to 8 s) instead of quitting
+  for (let i = 0; i < 80; i++) {
+    if (app.requestSingleInstanceLock()) return true;
+    if (!restarting) return false;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  return false;
+};
+if (!process.env.VITE_DEV_SERVER_URL && !process.env.LIBERTAD_ALLOW_MULTIPLE && !takeLock()) {
   app.exit(0);
   process.exit(0);
 }
+app.on('second-instance', () => {
+  const w = reviveWindow();
+  if (!w || w.isDestroyed()) return;
+  if (w.isMinimized()) w.restore();
+  w.show();
+  w.focus();
+});
 
 // Friends and calls run over UTP/UDP, where a peer vanishing mid-handshake (UTP_ECONNRESET and its kin) raises an
 // 'error' on a connection nobody owns yet. That is routine network noise, not a bug: it must not pop up a dialog
@@ -188,6 +260,30 @@ if (!hardwareAcceleration) {
   if (!softwareVideo) app.commandLine.appendSwitch('enable-features', ['AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'VaapiVideoEncoder', 'VaapiVideoDecodeLinuxGL', ...extraFeatures].join(','));
 }
 app.commandLine.appendSwitch('disable-features', disabledFeatures.join(','));
+// A log file for the installed app: an AppImage started from a menu has no terminal to read. It is kept small (the old half is
+// moved aside at 1 MB). Settings > System in the app does not show it; it lives next to system.json as libertad.log.
+const logFile = path.join(app.getPath('userData'), 'libertad.log');
+try { if (statSync(logFile).size > 1024 * 1024) renameSync(logFile, `${logFile}.old`); } catch { /* none yet */ }
+const log = (...parts: unknown[]): void => {
+  try {
+    const text = parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join(' ');
+    appendFileSync(logFile, `${new Date().toISOString()} ${text}\n`);
+  } catch { /* the folder is not writable: nothing to do */ }
+};
+// What this run is (the first things to ask when something works from npm run dev and not from the AppImage)
+log('start', { version: app.getVersion(), electron: process.versions.electron, packaged: app.isPackaged, appimage: !!process.env.APPIMAGE,
+  session: process.env.XDG_SESSION_TYPE ?? '', waylandDisplay: !!process.env.WAYLAND_DISPLAY, ozone: app.commandLine.getSwitchValue('ozone-platform'),
+  startedAsX11ByApp: startedByUsAsX11, args: process.argv.slice(1) });
+// A helper process of Chromium that died (the audio service is the one that carries every microphone and speaker stream of the page)
+app.on('child-process-gone', (_e, d) => {
+  log('child-process-gone', { type: d.type, name: d.name ?? '', reason: d.reason, exitCode: d.exitCode });
+  if (d.type === 'Utility' && /audio/i.test(d.name ?? '')) {
+    // Every stream the page had on it is dead although the page does not know: it builds its audio again
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('audio:serviceGone');
+  }
+});
+app.on('render-process-gone', (_e, _wc, d) => log('render-process-gone', { reason: d.reason, exitCode: d.exitCode }));
+
 // Run on system startup. Windows and macOS have login items; Electron has none on Linux, where the
 // desktop environments start what is listed in ~/.config/autostart.
 const autostartFile = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'autostart', 'Libertad.desktop');
@@ -240,7 +336,9 @@ function applyHidden(why = 'check'): void {
   const away = gone.get(win) ?? false;
   // A pop-out window (stream, camera, Watch Together) is drawn by the page: while one is on screen the page is in use
   const popupShown = [...popups.values()].some(p => !p.isDestroyed() && !(gone.get(p) ?? false));
-  const hidden = throttleWhenHidden && away && !popupShown;
+  // A call with a friend: the page holds the microphone, the speakers and the codec. Its window being reported as hidden (a desktop
+  // that does not report minimize and restore reliably, as Wayland does not) must not take any of that away.
+  const hidden = throttleWhenHidden && away && !popupShown && !p2pCall.inCall();
   if (dev()) console.log(`[throttle] ${why}: window ${away ? 'out of sight' : 'shown'}, pop-out ${popupShown ? 'shown' : 'none'}, setting ${throttleWhenHidden ? 'on' : 'off'} -> ${hidden === pageHidden ? `no change (${hidden ? 'hidden' : 'shown'})` : hidden ? 'HIDDEN' : 'SHOWN'}`);
   if (hidden === pageHidden) return;
   pageHidden = hidden;
@@ -271,7 +369,7 @@ function armSleep(): void {
   sleepTimer = setTimeout(() => {
     sleepTimer = null;
     const win = mainWindow;
-    if (!win || win.isDestroyed() || !pageHidden || asleep || conns.size || popups.size || !appUrl()) return;
+    if (!win || win.isDestroyed() || !pageHidden || asleep || conns.size || popups.size || p2pCall.inCall() || !appUrl()) return;
     if (dev()) console.log('[throttle] nothing connected: the page goes to sleep');
     asleep = true;
     torrentEngine.release(win.webContents);
@@ -349,7 +447,7 @@ ipcMain.handle('system:setAutoUpdate', async (_e, on: boolean) => {
 const updateProgress = (done: number, total: number) => mainWindow?.webContents.send('update:progress', done, total);
 ipcMain.handle('update:check', () => checkForUpdate());
 ipcMain.handle('update:install', () => installUpdate(updateProgress));
-ipcMain.handle('system:relaunch', () => { app.relaunch(); app.exit(0); });
+ipcMain.handle('system:relaunch', () => { relaunchApp(); });
 ipcMain.handle('system:quit', () => { tray.quitApp(); });
 // Chromium writes localStorage to disk a few seconds after a change, or on a clean quit; killing the app
 // (pkill, a crash, the system closing it) loses what was still waiting. The page asks for a flush after saving.
@@ -392,7 +490,8 @@ const conns = new Map<string, Conn>();
 registerFileStore();
 registerProfiles();
 const torrentEngine = registerTorrent(hardwareAcceleration);
-registerP2p(identities);
+// A call with a friend (no Mumble connection) still needs the page: see applyHidden and armSleep
+const p2pCall = registerP2p(identities, () => { log('friend call', p2pCall.inCall() ? 'active' : 'ended'); applyHidden('friend call'); });
 ipcMain.handle('identities:list', () => identities().list());
 ipcMain.handle('identities:create', (_e, name: string, email: string) => identities().create(String(name), String(email ?? '')));
 ipcMain.handle('identities:import', (_e, bytes: Uint8Array, password: string, name: string) =>
@@ -821,6 +920,13 @@ function createWindow(woke = false): BrowserWindow {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  // What the page says about voice, calls and pop-outs, and every warning or error, goes to the log file as well
+  win.webContents.on('console-message', (e: unknown) => {
+    const ev = e as { level?: string | number; message?: string };
+    const msg = String(ev.message ?? '');
+    const bad = ev.level === 'warning' || ev.level === 'error' || ev.level === 2 || ev.level === 3;
+    if (bad || /^\[(voice|call|popout|p2p)\]/.test(msg)) log('page', msg.slice(0, 500));
+  });
   win.webContents.on('did-create-window', (child, { frameName }) => {
     if (!frameName) return;
     popups.set(frameName, child);
@@ -909,7 +1015,7 @@ function createWindow(woke = false): BrowserWindow {
         if (width > 0 && height > 0 && lit === 0) {
           console.log('[gpu] the window is black with this graphics card, back to automatic');
           writeFileSync(systemFile, JSON.stringify({ ...readSystem(), gpu: 'auto', gpuTrial: false, gpuReverted: readSystem().gpu }));
-          app.relaunch(); app.exit(0);
+          relaunchApp();
           return;
         }
       } catch { /* could not look: leave it to the next start */ }

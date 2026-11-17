@@ -241,13 +241,15 @@ export class ProfileStore {
   }
 
   // For the page: the text, the colors and the pictures as bytes
-  async read(key: string): Promise<FriendProfileData | null> {
+  // limit: the most bytes a picture may have to be shown (Settings); one above it is kept but not handed to the page
+  async read(key: string, limit = Infinity): Promise<FriendProfileData | null> {
     const meta = await this.meta(key);
     const out: FriendProfileData = { text: meta.text, slots: {} };
     for (const slot of PROFILE_SLOTS) {
       const item = meta.slots[slot];
       if (!item) continue;
       if (item.kind === 'color') { out.slots[slot] = item; continue; }
+      if (!(item.size <= limit)) continue;
       const bytes = await this.file(key, slot);
       if (bytes) out.slots[slot] = { kind: 'file', hash: item.hash, mime: item.mime, bytes, ...(item.scope && { scope: item.scope }) };
     }
@@ -296,6 +298,7 @@ interface Conn {
   timer?: ReturnType<typeof setTimeout>;
   // Their profile: what I asked them for, the picture arriving now, and what they are to be sent
   wanted: Map<ProfileSlot, ProfileItem & { kind: 'file' }>;
+  lastManifest?: ProfileManifest;
   incoming?: { slot: ProfileSlot; item: ProfileItem & { kind: 'file' }; chunks: Uint8Array[]; got: number };
   sendQueue: { slot: ProfileSlot; hash: string }[];
   pumping: boolean;
@@ -337,6 +340,9 @@ export class P2p {
   private error = '';
   private starting = false;
   private mine: OwnProfile | null = null;
+  private profileLater = new Set<string>();
+  // The largest picture of a friend that is fetched (bytes): the limit in Settings. 0: none. 64 Mbit until the page says.
+  private pictureLimit = 8_000_000;
   private profileWork = new Map<string, Promise<void>>();
 
   constructor(o: P2pOptions) {
@@ -634,6 +640,20 @@ export class P2p {
     void next.then(() => { if (this.profileWork.get(key) === next) this.profileWork.delete(key); });
   }
 
+  // The limit in Settings changed (bytes; 0: never fetch): what a friend's list holds is looked at again against it, so pictures that
+  // are now allowed are asked for, pictures that are no longer allowed stop being fetched, and the page shows what fits.
+  setPictureLimit(bytes: unknown): void {
+    const n = Number(bytes);
+    const next = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    if (next === this.pictureLimit) return;
+    this.pictureLimit = next;
+    for (const conn of this.peers.values()) {
+      if (conn.lastManifest) { const m = conn.lastManifest; this.later(conn.key, () => this.takeManifest(conn, m)); }
+      conn.incoming = conn.incoming && conn.incoming.item.size <= next ? conn.incoming : undefined;
+    }
+    for (const f of this.data.friends) this.o.onProfile?.(f.key);
+  }
+
   // My profile, as the page has it now. Friends are told when it differs from what they were told last.
   setProfile(input: unknown): void {
     const next = buildOwnProfile(input);
@@ -645,6 +665,7 @@ export class P2p {
 
   private sendProfileTo(key: string): void {
     if (!this.mine || this.friend(key)?.status !== 'friend') return;
+    if (this.call) { this.profileLater.add(key); return; }
     this.sendTo(key, encodeJson(P2P.profile, this.mine.manifest));
   }
 
@@ -654,6 +675,7 @@ export class P2p {
     const store = this.o.profiles;
     const key = conn.key;
     if (!store || this.peers.get(key) !== conn) return;
+    conn.lastManifest = m;
     const had = await store.meta(key);
     const next: KeptProfile = { text: m.text, slots: {} };
     const drop: Partial<Record<ProfileSlot, null>> = {};
@@ -675,6 +697,12 @@ export class P2p {
         if (!sameProfileItem(old, item)) changed = true;
         continue;
       }
+      // Larger than the limit in Settings: not fetched. An older, different picture is outdated and goes.
+      if (!(item.size <= this.pictureLimit)) {
+        if (old) changed = true;
+        if (old?.kind === 'file') drop[slot] = null;
+        continue;
+      }
       // New or different: the old one stays until the new one is complete
       if (old?.kind === 'file') next.slots[slot] = old;
       wanted.set(slot, item);
@@ -685,7 +713,14 @@ export class P2p {
       await store.save(key, next, drop);
       this.o.onProfile?.(key);
     }
-    for (const [slot, item] of wanted) this.sendTo(key, encodeJson(P2P.profileWant, { slot, hash: item.hash }));
+    this.askWanted(conn);
+  }
+
+  // Asks for the pictures that are missing. Not while a call is on (with anybody): the voice has the connection and the line to
+  // the friend; the pictures are asked for again when the call is over.
+  private askWanted(conn: Conn): void {
+    if (this.call || this.peers.get(conn.key) !== conn) return;
+    for (const [slot, item] of conn.wanted) this.sendTo(conn.key, encodeJson(P2P.profileWant, { slot, hash: item.hash }));
   }
 
   // A picture arrived whole: it must be the one that was announced
@@ -713,7 +748,7 @@ export class P2p {
     conn.pumping = true;
     try {
       while (conn.sendQueue.length && !conn.socket.destroyed && this.peers.get(conn.key) === conn) {
-        if (this.call?.key === conn.key) return;
+        if (this.call) return;
         const { slot, hash } = conn.sendQueue[0];
         const item = this.mine?.manifest.slots[slot];
         const bytes = this.mine?.files.get(hash);
@@ -722,7 +757,7 @@ export class P2p {
         let cut = false;
         for (let at = 0; at < bytes.length; at += PROFILE_CHUNK) {
           if (conn.socket.destroyed) return;
-          if (this.call?.key === conn.key) { cut = true; break; }
+          if (this.call) { cut = true; break; }
           if (!conn.socket.write(encodeProfileData(slot, bytes.subarray(at, at + PROFILE_CHUNK)))) {
             await new Promise<void>(done => {
               const end = () => { conn.socket.off('drain', end); conn.socket.off('close', end); done(); };
@@ -929,8 +964,13 @@ export class P2p {
     this.chat = [];
     if (c) this.lastEnd = { key: c.key, reason };
     if (!quiet || c) this.push();
-    const conn = c && this.peers.get(c.key);
-    if (conn?.sendQueue.length) void this.pump(conn);
+    // My list for the friends it was held back from, and the pictures that waited for the call to end
+    const later = [...this.profileLater]; this.profileLater.clear();
+    for (const k of later) this.sendProfileTo(k);
+    for (const conn of this.peers.values()) {
+      if (conn.wanted.size) this.askWanted(conn);
+      if (conn.sendQueue.length) void this.pump(conn);
+    }
   }
 
   // ─── State for the page ─────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { sounds } from './audio/sounds.svelte.ts';
 import { identities } from './identities.svelte.ts';
 import { emptyP2pState, parseFriendCode, type P2pState, type ProfileSlot, type FriendProfileData } from '../core/p2p-wire.ts';
 import { OWN } from './banner.svelte.ts';
+import { store } from './settings.svelte.ts';
 import { SLOTS, dataMime, isVideoMime, type BannerView } from '../core/banner.ts';
 
 const FLAG = 'libertad.p2p.on';
@@ -78,6 +79,14 @@ class P2pStore {
     desktop.p2p.state().then(s => this.apply(s)).catch(() => {});
     if (this.startup) { this.enabled = true; writeFlag(true); }
     if (this.enabled) this.start();
+    // Friends' pictures follow the limit in Settings (Largest profile picture, banner or card to fetch): the main process fetches
+    // and shows no picture above it, and looks again whenever it is changed. Mbit to bytes; 0 means never.
+    $effect.root(() => {
+      $effect(() => {
+        const mbit = Number(store.settings.bannerMaxMbit) || 0;
+        void desktop!.p2p.setPictureLimit(Math.max(0, mbit) * 1_000_000 / 8).catch(() => {});
+      });
+    });
     // My picture, banner, card backgrounds and description go to friends whenever one of them changes
     $effect.root(() => {
       $effect(() => {
@@ -201,8 +210,12 @@ class P2pStore {
   }
 
   // Hands my profile to the main process, which tells friends when it differs from what they were told last
+  private pushAfterCall = false;
+  private loadAfterCall = new Set<string>();
   private async pushProfile(): Promise<void> {
     if (!desktop) return;
+    // Megabytes of pictures through the page and the main process are not sent while a call is on
+    if (this.joined) { this.pushAfterCall = true; return; }
     const run = ++this.pushRun;
     try {
       await Promise.all(SLOTS.map(s => OWN[s].loaded));
@@ -223,6 +236,7 @@ class P2pStore {
 
   async loadProfile(key: string): Promise<void> {
     if (!desktop) return;
+    if (this.joined) { this.loadAfterCall.add(key); return; }
     let data: FriendProfileData | null = null;
     try { data = await desktop.p2p.profile(key); } catch { return; }
     if (!data) return;
@@ -316,6 +330,8 @@ class P2pStore {
       this.open = false;
     } else if (c?.state !== 'active' && this.joined) {
       this.joined = false;
+      if (this.pushAfterCall) { this.pushAfterCall = false; void this.pushProfile(); }
+      for (const k of [...this.loadAfterCall]) { this.loadAfterCall.delete(k); void this.loadProfile(k); }
       voice.leaveCall();
       this.muted = this.deafened = false;
       sounds.play('disconnected');

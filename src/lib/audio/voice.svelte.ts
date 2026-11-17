@@ -302,6 +302,15 @@ class VoiceEngine {
     return this.queue(() => this.doStop());
   }
 
+  // The audio streams died underneath the page (the audio service of the system restarted): the context, the microphone and
+  // the decoders are made again. Calls and server connections stay as they are.
+  async rebuild(): Promise<void> {
+    if (!this.running) return;
+    console.warn('[voice] audio service restarted: rebuilding the audio engine');
+    await this.stop();
+    await this.start();
+  }
+
   private async doStop(): Promise<void> {
     this.endTransmission();
     if (this.levelTimer) clearInterval(this.levelTimer);
@@ -536,21 +545,29 @@ class VoiceEngine {
       sig = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput').map(d => `${d.deviceId}:${d.label}`).join('|');
     } catch { /* look again at the next change */ }
     const track = this.stream?.getAudioTracks()[0];
-    const changed = sig !== this.inputSig;
+    // The first list only says what is there (names are empty until the microphone has been opened once): not a change
+    const first = this.inputSig === '';
+    const changed = !first && sig !== this.inputSig;
     this.inputSig = sig;
     if (!this.micWanted()) return;
-    if (changed || !this.stream || !track || track.readyState === 'ended') {
+    const dead = !this.stream || !track || track.readyState === 'ended';
+    // A microphone that is open and alive is only taken anew for a real change of the list, and not again within 20 s of the last
+    // time: on Linux, opening a microphone makes the sound server announce devices again, which must not become a loop of
+    // reopenings (every one of them is a gap in the voice)
+    if (dead || (changed && Date.now() - this.lastReopen > 20000)) {
       this.recoveries = 0;
       // Drivers often change the device right after a change is announced: wait a moment, then take it
       this.refreshInput(600);
     }
   }
+  private lastReopen = 0;
 
   // Opens the microphone anew after a short wait (several reasons close together make one reopening)
   private refreshInput(delay: number): void {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
+      this.lastReopen = Date.now();
       if (this.ctx && this.micWanted()) void this.restartInput();
     }, delay);
   }

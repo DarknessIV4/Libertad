@@ -24,6 +24,8 @@ function stats(): Record<string, number> {
 }
 
 export function startBackground(): void {
+  // The audio service of the system crashed or was restarted (a sound server restart, a driver): microphone and speakers are built again
+  desktop?.onAudioServiceGone?.(() => { void voice.rebuild(); });
   desktop?.onHidden(hidden => {
     if (hidden === ui.hidden) return;
     if (hidden) drafts.capture();

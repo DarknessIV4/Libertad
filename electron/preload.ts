@@ -146,6 +146,12 @@ contextBridge.exposeInMainWorld('libertadNative', {
     ipcRenderer.on('window:hidden', on);
     return () => { ipcRenderer.removeListener('window:hidden', on); };
   },
+  // Chromium's audio service died and came back: the page's audio streams are dead and have to be built again
+  onAudioServiceGone: (fn: () => void) => {
+    const on = () => fn();
+    ipcRenderer.on('audio:serviceGone', on);
+    return () => { ipcRenderer.removeListener('audio:serviceGone', on); };
+  },
   screenSources: (thumbnails: boolean) => ipcRenderer.invoke('share:sources', !!thumbnails),
   pickScreenSource: (id: string) => ipcRenderer.send('share:pick', id),
   shareInfo: () => ipcRenderer.invoke('share:info'),
@@ -192,6 +198,7 @@ contextBridge.exposeInMainWorld('libertadNative', {
     hangUp: () => ipcRenderer.invoke('p2p:hangup'),
     sendChat: (text: string) => ipcRenderer.invoke('p2p:chat', text),
     setProfile: (profile: unknown) => ipcRenderer.invoke('p2p:setProfile', profile),
+    setPictureLimit: (bytes: number) => ipcRenderer.invoke('p2p:setPictureLimit', bytes),
     profile: (key: string) => ipcRenderer.invoke('p2p:profile', key),
     onProfile: (fn: (key: string) => void) => {
       const l = (_e: unknown, key: string) => fn(key);
