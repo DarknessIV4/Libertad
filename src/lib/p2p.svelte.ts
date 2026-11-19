@@ -210,6 +210,7 @@ class P2pStore {
   }
 
   // Hands my profile to the main process, which tells friends when it differs from what they were told last
+  private engineGuard: ReturnType<typeof setInterval> | undefined;
   private pushAfterCall = false;
   private loadAfterCall = new Set<string>();
   private async pushProfile(): Promise<void> {
@@ -325,11 +326,22 @@ class P2pStore {
       // can not hold the microphone and speakers the call needs
       this.leaveServers();
       voice.joinCall(this.link).then(() => this.pushMute());
+      // The call is active but the audio engine is not running (it was stopped by something, or never came up): it starts again.
+      // Nothing else would: the call looks fine and is silent.
+      clearInterval(this.engineGuard);
+      this.engineGuard = setInterval(() => {
+        if (!this.joined) return;
+        if (!voice.running && !voice.starting) {
+          console.warn('[voice] the audio engine was not running during a call: starting it again');
+          void voice.joinCall(this.link).then(() => this.pushMute());
+        }
+      }, 2000);
       if (changed) sounds.play('connected');
       // The call is on: the Friends window has done its job
       this.open = false;
     } else if (c?.state !== 'active' && this.joined) {
       this.joined = false;
+      clearInterval(this.engineGuard);
       if (this.pushAfterCall) { this.pushAfterCall = false; void this.pushProfile(); }
       for (const k of [...this.loadAfterCall]) { this.loadAfterCall.delete(k); void this.loadProfile(k); }
       voice.leaveCall();

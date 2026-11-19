@@ -16,7 +16,7 @@
   // The level meter below needs the microphone even when it is muted
   voice.holdMeter(true);
   voice.start();
-  onDestroy(() => { voice.holdMeter(false); if (voice.testing) voice.setTesting(false); if (session.status !== 'connected') voice.stop(); });
+  onDestroy(() => { voice.holdMeter(false); if (voice.testing) voice.setTesting(false); if (session.status !== 'connected' && !voice.hasCall) voice.stop(); });
 
   const METER_MIN = -80;
   const pct = (db: number) => Math.max(0, Math.min(100, ((db - METER_MIN) / -METER_MIN) * 100));

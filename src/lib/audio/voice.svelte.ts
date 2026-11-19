@@ -226,9 +226,14 @@ class VoiceEngine {
   // (stop closes the audio context), and a start that came in meanwhile used to see the old context,
   // do nothing, and leave the engine stopped for good: no microphone, no level meter.
   private lifecycle: Promise<unknown> = Promise.resolve();
+  private busy = 0;
+  // A start or a stop is under way (the call's engine check must not start a second one on top of it)
+  get starting(): boolean { return this.busy > 0; }
   private queue(task: () => Promise<void>): Promise<void> {
+    this.busy++;
     const run = this.lifecycle.then(task, task);
     this.lifecycle = run.catch(() => {});
+    void run.catch(() => {}).finally(() => { this.busy--; });
     return run;
   }
 
@@ -298,7 +303,15 @@ class VoiceEngine {
     }
   }
 
-  stop(): Promise<void> {
+  get hasCall(): boolean { return !!this.call; }
+
+  // Lets go of the microphone and speakers. Never while a call with a friend is on, unless force is set (the engine's own rebuild):
+  // a settings page closing, a server leaving or a test ending would otherwise cut the call without a word, and nothing starts it again.
+  stop(force = false): Promise<void> {
+    if (this.call && !force) {
+      console.warn('[voice] stop() ignored during a friend call', (new Error().stack ?? '').split('\n').slice(2, 6).map(l => l.trim()).join(' | '));
+      return Promise.resolve();
+    }
     return this.queue(() => this.doStop());
   }
 
@@ -307,7 +320,7 @@ class VoiceEngine {
   async rebuild(): Promise<void> {
     if (!this.running) return;
     console.warn('[voice] audio service restarted: rebuilding the audio engine');
-    await this.stop();
+    await this.stop(true);
     await this.start();
   }
 
@@ -590,7 +603,7 @@ class VoiceEngine {
       }
       if (this.recoveries === 5) {
         // Rebuild the audio engine itself: a new audio context and a new microphone stream
-        await this.stop();
+        await this.stop(true);
         await this.start();
       } else {
         await this.restartInput();
@@ -836,11 +849,40 @@ class VoiceEngine {
   async joinCall(link: CallLink): Promise<void> {
     this.call = link;
     this.frameCounter = 0;
+    this.startCallLog();
     await this.start();
     this.refresh();
   }
 
+  // While a call is on, one line every 5 s goes to libertad.log: where in the chain (microphone, encoder, line, decoder, speakers) a
+  // silence starts. lag = how late this timer ran (a page that is held back or busy runs it late); clock = how much audio time passed
+  // (5 s when the speakers are fed); frames, sent, got, decoded = what went through in these 5 s.
+  private callLog: ReturnType<typeof setInterval> | undefined;
+  private startCallLog(): void {
+    clearInterval(this.callLog);
+    let at = performance.now(), clock = this.ctx?.currentTime ?? 0;
+    let prev = { frames: this.frameCount, sent: this.stats.sent, got: this.stats.received, dec: this.stats.decoded, lost: this.stats.lost };
+    this.callLog = setInterval(() => {
+      if (!this.call) { clearInterval(this.callLog); return; }
+      const now = performance.now(), t = this.ctx?.currentTime ?? 0;
+      const track = this.stream?.getAudioTracks()[0];
+      let dq = 0;
+      for (const d of this.decoders.values()) if (typeof AudioDecoder !== 'undefined' && d.decoder instanceof AudioDecoder) dq += d.decoder.decodeQueueSize;
+      const eq = typeof AudioEncoder !== 'undefined' && this.encoder instanceof AudioEncoder ? this.encoder.encodeQueueSize : 0;
+      const cur = { frames: this.frameCount, sent: this.stats.sent, got: this.stats.received, dec: this.stats.decoded, lost: this.stats.lost };
+      console.warn('[voice] call', JSON.stringify({
+        lag: Math.round(now - at - 5000), clock: +(t - clock).toFixed(2), ctx: this.ctx?.state ?? 'none', running: this.running,
+        vis: document.visibilityState, focus: document.hasFocus(),
+        mic: track ? `${track.readyState}${track.muted ? '+muted' : ''}${track.enabled ? '' : '+off'}` : 'none', talk: this.canTalk(),
+        frames: cur.frames - prev.frames, sent: cur.sent - prev.sent, got: cur.got - prev.got, decoded: cur.dec - prev.dec, lost: cur.lost - prev.lost,
+        decQ: dq, encQ: eq, level: Math.round(this.levelRaw)
+      }));
+      at = now; clock = t; prev = cur;
+    }, 5000);
+  }
+
   leaveCall(): void {
+    clearInterval(this.callLog);
     if (!this.call) return;
     this.endTransmission();
     this.call = null;
