@@ -108,6 +108,7 @@
   /* The padding is part of what the mouse has to be over: a hit area a little larger than the buttons */
   .hud { position: absolute; top: 0; right: 0; z-index: 4; display: flex; gap: 4px; padding: 8px; opacity: 0; transition: opacity 150ms; }
   /* Shown while the mouse moves over the picture (or is over the buttons, a menu is open, or the keyboard is on them) */
+  :global(.pic.touch-on) .hud { opacity: 1; }
   .hud.awake, .hud:hover, .hud.open, .hud:has(:focus-visible) { opacity: 1; }
   .wrap { position: relative; }
   .ibtn { display: flex; align-items: center; justify-content: center; padding: 5px; border: none; border-radius: 6px; background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer; }

@@ -16,6 +16,7 @@
   import { store } from '../lib/settings.svelte.ts';
   import { watchMemo } from '../lib/watch-memo.svelte.ts';
   import { menuClosed, menuJustClosed, swallowClick } from '../lib/overlay.ts';
+  import { touchOnlyRevealed } from '../lib/touch-reveal.ts';
   import { canSaveFrame, saveVideoFrame } from '../lib/save-frame.ts';
 
   console.log('[WatchPlayer] Component script running');
@@ -257,6 +258,15 @@
     if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
     active = false;
   }
+  // (YouTube keeps its own "held" in YouTubePlayer: playingNow here is not kept up to date for it, so it would always read paused)
+  // While paused the controls stay (the "held" class); when it plays again they go after IDLE_MS like they do for a
+  // mouse that stopped, instead of vanishing at once
+  let wasPaused = false;
+  $effect(() => {
+    const paused = !playingNow;
+    if (wasPaused && !paused) wake();
+    wasPaused = paused;
+  });
   const clock = (ms: number) => {
     const sec = Math.max(0, Math.floor(ms / 1000));
     const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
@@ -483,7 +493,7 @@
 {/snippet}
 
 {#if watchTogether.isWatching}
-  <div class="watch-player" class:active bind:clientHeight={playerH} role="presentation" onpointermove={wake} onpointerdown={wake} onpointerleave={leave}>
+  <div class="watch-player" class:active class:held={watchTogether.mode !== 1 && !playingNow} bind:clientHeight={playerH} role="presentation" onpointermove={wake} onpointerdown={wake} onpointerleave={leave}>
     {#if watchTogether.mode === 1}
       <!-- YouTube player -->
       <YouTubePlayer />
@@ -493,7 +503,7 @@
         <div class="loading"><p>Torrent Together needs the Libertad desktop app. The others can watch; this browser can not download torrents.</p></div>
       {:else}
         <video bind:this={tVideo} class="local-video" crossorigin="anonymous" playsinline preload="auto"
-          onclick={() => { if (tp.status === 'ready' && !menuJustClosed()) toggle(); }}></video>
+          onclick={() => { if (tp.status === 'ready' && !menuJustClosed() && !touchOnlyRevealed()) toggle(); }}></video>
         {#if tp.status === 'failed'}
           <div class="loading"><p style="color: var(--danger);">{tp.error}</p></div>
         {:else if tp.status !== 'ready'}
@@ -578,7 +588,7 @@
     {:else if watchTogether.mode === 2}
       <!-- File streaming: the host sees their own player, viewers the live stream -->
       {#if watchTogether.isHost}
-        <div class="host-slot" role="presentation" use:adopt={watchTogether.hostVideo} onclick={() => { if (!menuJustClosed()) toggle(); }}></div>
+        <div class="host-slot" role="presentation" use:adopt={watchTogether.hostVideo} onclick={() => { if (!menuJustClosed() && !touchOnlyRevealed()) toggle(); }}></div>
         {#if barShown}{@render speedMenu()}{@render bar()}{/if}
       {:else}
         <video
@@ -586,7 +596,7 @@
           class="local-video"
           playsinline
           preload="auto"
-          onclick={() => { if (viewing && !menuJustClosed()) toggle(); }}
+          onclick={() => { if (viewing && !menuJustClosed() && !touchOnlyRevealed()) toggle(); }}
         >
           <track kind="captions" />
         </video>
@@ -615,10 +625,37 @@
         {/if}
       {/if}
     {/if}
+    {#if watchTogether.notice}
+      {#key watchTogether.notice.id}
+        <div class="action-notice" role="status" aria-live="polite">{watchTogether.notice.text}</div>
+      {/key}
+    {/if}
   </div>
 {/if}
 
 <style>
+  /* Somebody else's play, pause, seek, speed or next: 1s shown, then a 500ms fade (1.5s in all) */
+  .action-notice {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    max-width: 80%;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    pointer-events: none;
+    animation: action-notice 1.5s linear forwards;
+  }
+  @keyframes action-notice {
+    0%, 66.667% { opacity: 1; }
+    100% { opacity: 0; }
+  }
   .watch-player {
     position: relative;
     width: 100%;
@@ -682,9 +719,18 @@
     transition: opacity 0.15s;
     z-index: 5;
   }
-  .watch-player.active .controls { opacity: 1; }
-  .watch-player:not(.active) .controls { pointer-events: none; }
-  .watch-player:not(.active) { cursor: none; }
+  .watch-player.active .controls, .watch-player.held .controls { opacity: 1; }
+  /* Touch: a tap on the picture shows the controls for two seconds (lib/touch-reveal.ts) */
+  :global(.pic.touch-on) .watch-player .controls { opacity: 1 !important; pointer-events: auto !important; }
+  :global(.pic.touch-on) .watch-player .chip { opacity: 1; }
+  /* On a touch screen, while it plays, the controls come only with a tap (the two seconds above). Paused, they stay. */
+  @media (hover: none) and (pointer: coarse) {
+    .watch-player:not(.held) .controls { opacity: 0 !important; pointer-events: none; }
+    .watch-player:not(.held) .chip { opacity: 0 !important; }
+    :global(.pic.touch-on) .watch-player .chip { opacity: 1 !important; }
+  }
+  .watch-player:not(.active):not(.held) .controls { pointer-events: none; }
+  .watch-player:not(.active):not(.held) { cursor: none; }
   .ctl {
     display: flex;
     align-items: center;
@@ -712,7 +758,7 @@
     background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums;
     opacity: 0; transition: opacity 0.15s; pointer-events: none;
   }
-  .watch-player.active .chip { opacity: 1; }
+  .watch-player.active .chip, .watch-player.held .chip { opacity: 1; }
   .hint {
     position: absolute; left: 0; right: 0; bottom: 64px; text-align: center; margin: 0; z-index: 4;
     color: #fff; font-size: 13px; text-shadow: 0 1px 3px #000; pointer-events: none;

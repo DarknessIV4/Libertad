@@ -5,6 +5,8 @@
   import AppearanceSettings from './AppearanceSettings.svelte';
   import SoundSettings from './SoundSettings.svelte';
   import ShortcutSettings from './ShortcutSettings.svelte';
+  import AndroidSystem from './AndroidSystem.svelte';
+  import { isAndroid } from '../lib/platform.ts';
   import { store } from '../lib/settings.svelte.ts';
   import { native, desktop } from '../lib/native.ts';
   import { youtubeAccount as yt } from '../lib/youtube-account.svelte.ts';
@@ -118,7 +120,7 @@
     { id: 'appearance', label: 'Appearance' },
     { id: 'accessibility', label: 'Accessibility' },
     { id: 'files', label: 'Chat and files' },
-    ...(desktop ? [{ id: 'system' as Tab, label: 'System' }] : []),
+    ...(desktop || isAndroid() ? [{ id: 'system' as Tab, label: 'System' }] : []),
     ...(native ? [{ id: 'identities' as Tab, label: 'Identities' }] : [])
   ];
 </script>
@@ -198,6 +200,8 @@
       <option value="click">Player card, loads from YouTube when clicked</option>
       <option value="thumbnail">Player card with thumbnail (loads the thumbnail from YouTube)</option>
     </select>
+  {:else if tab === 'system' && !desktop}
+    <AndroidSystem />
   {:else if tab === 'system'}
     {#if desktop}
       <div class="row kept">

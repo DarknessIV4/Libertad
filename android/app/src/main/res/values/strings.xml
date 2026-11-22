@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Libertad</string>
+    <string name="title_activity_main">Libertad</string>
+    <string name="package_name">dev.f0ck.Libertad</string>
+    <string name="custom_url_scheme">dev.f0ck.Libertad</string>
+</resources>

@@ -6,7 +6,7 @@ import { SHARE, SHARE_DATA_ID, encodeShare, ShareAssembler, type ShareType } fro
 import type { User } from '../core/client.ts';
 import type { Session } from './session.svelte.ts';
 import { desktop } from './native.ts';
-import { rtcConfig, gathered } from './ice.ts';
+import { rtcConfig, gathered, unmaskLocal, describeIce } from './ice.ts';
 import { store } from './settings.svelte.ts';
 import { ui } from './ui.svelte.ts';
 import { sounds } from './audio/sounds.svelte.ts';
@@ -644,7 +644,7 @@ class ScreenShare {
     }
     await pc.setLocalDescription({ type: 'offer', sdp: tuneVideo(stereo((await pc.createOffer()).sdp ?? ''), ratesFor(this.cfg.bitrate)) });
     await this.gathered(pc);
-    if (this.peers.get(viewer) === pc && pc.localDescription) await this.send(s, [viewer], SHARE.offer, pc.localDescription.sdp);
+    if (this.peers.get(viewer) === pc && pc.localDescription) await this.send(s, [viewer], SHARE.offer, await unmaskLocal(pc.localDescription.sdp));
   }
 
   private async answerTo(s: Session, sharer: number, sdp: string): Promise<void> {
@@ -664,7 +664,10 @@ class ScreenShare {
     pc.addEventListener('connectionstatechange', () => {
       if (!current()) return;
       if (pc.connectionState === 'connected') this.setWatchState(sharer, 'live');
-      else if (pc.connectionState === 'failed') this.setWatchState(sharer, 'failed');
+      else if (pc.connectionState === 'failed') {
+        console.warn('[share] connection failed:', describeIce(pc, pc.localDescription?.sdp ?? '', sdp));
+        this.setWatchState(sharer, 'failed');
+      }
     });
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp });
@@ -672,8 +675,9 @@ class ScreenShare {
       const answer = stereo((await pc.createAnswer()).sdp ?? '');
       await pc.setLocalDescription({ type: 'answer', sdp: tuneVideo(answer, ratesOf(sdp) ?? ratesFor(8)) });
       await this.gathered(pc);
-      if (current() && pc.localDescription) await this.send(s, [sharer], SHARE.answer, pc.localDescription.sdp);
-    } catch {
+      if (current() && pc.localDescription) await this.send(s, [sharer], SHARE.answer, await unmaskLocal(pc.localDescription.sdp));
+    } catch (e) {
+      console.warn('[share] could not answer:', e);
       if (current()) this.setWatchState(sharer, 'failed');
     }
   }

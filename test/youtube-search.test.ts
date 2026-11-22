@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractInitialData, parseYoutubeResults, youtubeSearchUrl } from '../src/core/youtube-search.ts';
+import { extractInitialData, parseYoutubeData, parseYoutubeResults, youtubeSearchUrl } from '../src/core/youtube-search.ts';
 
 const video = (id: string, title: string, extra: object = {}) => ({
   videoRenderer: {
@@ -32,6 +32,23 @@ test('a page without its data gives nothing, and no more than 20 are kept', () =
   assert.deepEqual(parseYoutubeResults('<html>consent</html>'), []);
   const many = Array.from({ length: 30 }, (_, i) => video(`abcdefghi${String(i).padStart(2, '0')}`, `v${i}`));
   assert.equal(parseYoutubeResults(page({ many })).length, 20);
+});
+
+test('the mobile page: videoWithContextRenderer, and the data as an escaped string', () => {
+  const data = { a: [{ videoWithContextRenderer: { videoId: 'dQw4w9WgXcQ', headline: { runs: [{ text: 'Mobile "title"' }] },
+    shortBylineText: { runs: [{ text: 'Chan' }] }, lengthText: { runs: [{ text: '3:32' }] }, shortViewCountText: { simpleText: '1B views' }, publishedTimeText: { simpleText: '14 years ago' } } }] };
+  const esc = JSON.stringify(data).replace(/[\\"{}:,\[\]']/g, c => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+  const html = `<script>var ytInitialData = '${esc}';</script>`;
+  assert.deepEqual(parseYoutubeResults(html), [{ id: 'dQw4w9WgXcQ', title: 'Mobile "title"', channel: 'Chan', duration: '3:32', views: '1B views', published: '14 years ago' }]);
+});
+
+test('the newer lockupViewModel layout', () => {
+  const lock = { lockupViewModel: { contentId: 'dQw4w9WgXcQ', contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+    contentImage: { thumbnailViewModel: { overlays: [{ thumbnailBottomOverlayViewModel: { badges: [{ thumbnailBadgeViewModel: { text: '3:32' } }] } }] } },
+    metadata: { lockupMetadataViewModel: { title: { content: 'Never Gonna' }, metadata: { contentMetadataViewModel: { metadataRows: [
+      { metadataParts: [{ text: { content: 'Rick' } }] }, { metadataParts: [{ text: { content: '1B views' } }, { text: { content: '14 years ago' } }] }] } } } } } };
+  const other = { lockupViewModel: { contentId: 'PLxxxxxxxxx', contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST' } };
+  assert.deepEqual(parseYoutubeData({ a: [lock, other] }), [{ id: 'dQw4w9WgXcQ', title: 'Never Gonna', channel: 'Rick', duration: '3:32', views: '1B views', published: '14 years ago' }]);
 });
 
 test('the search address', () => {

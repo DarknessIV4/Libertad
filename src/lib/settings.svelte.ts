@@ -1,5 +1,6 @@
 import { load, loadList, save } from './storage.ts';
 import { cleanColors, CUSTOM_DEFAULTS, isHex, type CustomColors } from './theme.ts';
+import { isAndroid } from './platform.ts';
 
 function cleanPanelColors(raw: unknown): Settings['panelColors'] {
   const out: Settings['panelColors'] = {};
@@ -119,7 +120,8 @@ const defaults: Settings = {
   customColors: { ...CUSTOM_DEFAULTS },
   panelColors: {},
   publicListUrl: 'https://publist.mumble.info/v1/list?version=1.5.0',
-  interface: 'standard',
+  // The Android app starts in Rooms, which was made for phones; everywhere else in standard. A saved choice wins (see load).
+  interface: isAndroid() ? 'rooms' : 'standard',
   rounded: false,
   roundness: 50,
   glassSync: false,

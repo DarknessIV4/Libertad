@@ -110,6 +110,12 @@ class WatchTogether {
   // getCurrentTime is in seconds (like YouTube's own API), seekTo in milliseconds
   youtubePlayer: ({ play: () => void; pause: () => void; seekTo: (ms: number) => void; getCurrentTime: () => number; getPlayerState: () => number; ready?: () => boolean } & Partial<YtControls>) | null = null;
   pendingSeek = $state(false);
+  // What somebody else just did to the shared playback ("Kai paused"), shown over the player for a moment.
+  // `id` changes with every action so the notice restarts when a new one replaces the last.
+  notice = $state<{ id: number; text: string } | null>(null);
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  private noticeSeq = 0;
+  static readonly NOTICE_MS = 1500; // 1s shown + 500ms fade
   lastSyncSent = 0;
   latencyEstimate = $state(0);
   // Echo-safe tracking
@@ -140,6 +146,23 @@ class WatchTogether {
 
   private logDebug(...args: unknown[]) {
     if (WatchTogether.DEBUG) console.log('[sync]', ...args);
+  }
+
+  // Shows "<name> <what>" over the player for everybody but the one who did it (callers skip our own signals)
+  private announce(s: Session, fromSession: number, what: string): void {
+    const name = s.client?.users.get(fromSession)?.name?.trim() || 'Someone';
+    this.notice = { id: ++this.noticeSeq, text: `${name} ${what}` };
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => { this.notice = null; this.noticeTimer = null; }, WatchTogether.NOTICE_MS);
+  }
+
+  private seekLabel(deltaMs: number, toMs: number): string {
+    const secs = Math.round(deltaMs / 1000);
+    if (Math.abs(secs) < 60) return secs === 0 ? 'seeked' : `${secs > 0 ? '+' : '-'}${Math.abs(secs)}s`;
+    const total = Math.max(0, Math.round(toMs / 1000));
+    const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), sec = total % 60;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `jumped to ${h ? `${h}:${pad(m)}` : String(m)}:${pad(sec)}`;
   }
 
   // Compute expected position from sync state
@@ -1176,7 +1199,9 @@ class WatchTogether {
     const party = this.getParty(s);
     if (!party || this.getState(s) !== 'watching' || !party.participants.includes(fromSession)) return;
     if (!body || typeof body.index !== 'number') return;
-    this.applyTorrentIndex(s, body.index, typeof body.rev === 'number' ? body.rev : undefined);
+    if (this.applyTorrentIndex(s, body.index, typeof body.rev === 'number' ? body.rev : undefined) !== null) {
+      this.announce(s, fromSession, 'skipped episode');
+    }
   }
 
   // Makes `index` the link being played; the one before it is let go (its files are deleted).
@@ -2059,6 +2084,7 @@ class WatchTogether {
 
     this.setSyncState(s, incoming);
     this.logDebug('rx', 'play-pause', incoming.rev, incoming.origin, incoming.playing, incoming.positionMs, 'applied');
+    this.announce(s, fromSession, playing ? 'resumed' : 'paused');
 
     // If local gesture is pending, don't apply to video yet - let settle win
     if (!this.settlePending) {
@@ -2087,9 +2113,11 @@ class WatchTogether {
       this.logDebug('rx', 'seek', incoming.rev, incoming.origin, incoming.playing, incoming.positionMs, 'ignored(stale)');
       return;
     }
+    const seekDelta = incoming.positionMs - this.getExpectedPosition(s);
 
     this.setSyncState(s, incoming);
     this.logDebug('rx', 'seek', incoming.rev, incoming.origin, incoming.playing, incoming.positionMs, 'applied');
+    this.announce(s, fromSession, this.seekLabel(seekDelta, incoming.positionMs));
 
     // If local gesture is pending, don't apply to video yet - let settle win
     if (!this.settlePending) {
@@ -2121,6 +2149,7 @@ class WatchTogether {
 
     this.setSyncState(s, incoming);
     this.logDebug('rx', 'rate', incoming.rev, incoming.origin, incoming.playing, incoming.positionMs, 'applied');
+    this.announce(s, fromSession, `changed speed to ${incoming.rate ?? 1}x`);
 
     // If local gesture is pending, don't apply to video yet - let settle win
     if (!this.settlePending) {

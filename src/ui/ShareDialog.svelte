@@ -482,20 +482,23 @@
 
 
   // YouTube search: the person types a title instead of a link; choosing a result fills the link and shows its preview
-  const canSearchYoutube = !!desktop?.youtube?.search;
+  // The desktop app searches in its main process, the Android app in its Node backend
+  const youtubeFind = desktop?.youtube?.search ?? native?.youtubeSearch?.bind(native);
+  // The bar is always there; where this build cannot search it says so and the link box below still works
+  const canSearchYoutube = true;
   let yQuery = $state('');
   let yResults = $state<YoutubeResult[] | null>(null);
   let yBusy = $state(false);
   let yError = $state('');
   let yRun = 0;
   async function searchYoutube() {
-    const api = desktop?.youtube;
     const q = yQuery.trim();
-    if (!api?.search || !q || yBusy) return;
+    if (!q || yBusy) return;
+    if (!youtubeFind) { yError = 'Searching is not available in this version. Paste a link below instead.'; return; }
     const run = ++yRun;
     yBusy = true; yError = ''; yResults = null;
     try {
-      const r = await api.search(q);
+      const r = await youtubeFind(q);
       if (run === yRun) { yResults = r; if (!r.length) yError = `Nothing found for "${q}".`; }
     } catch (e) {
       if (run === yRun) yError = torrentError(e);

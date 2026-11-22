@@ -258,10 +258,13 @@ export function mountPopoutBar(w: Window, stage: HTMLElement, fullscreen?: Popou
 
   // ---- the overlay is there while the mouse moves, and goes IDLE_MS after it stopped
   let idle: ReturnType<typeof setTimeout> | null = null;
+  // While paused the overlay stays: the controls are there to press play
+  const held = () => !watchTogether.sharedPlaying();
   const sleep = () => {
     if (menu || dragging || draggingVol) { idle = setTimeout(sleep, IDLE_MS); return; }
-    stage.classList.remove('active');
     idle = null;
+    if (held()) return;
+    stage.classList.remove('active');
   };
   const wake = () => {
     stage.classList.add('active');
@@ -270,7 +273,7 @@ export function mountPopoutBar(w: Window, stage: HTMLElement, fullscreen?: Popou
   };
   const leave = () => {
     if (idle) { clearTimeout(idle); idle = null; }
-    stage.classList.remove('active');
+    if (!held()) stage.classList.remove('active');
     closeMenu();
   };
   // The whole window wakes it: the buttons are in its corner, which may be outside a narrower picture
@@ -290,8 +293,11 @@ export function mountPopoutBar(w: Window, stage: HTMLElement, fullscreen?: Popou
     const p = player();
     const playing = watchTogether.sharedPlaying();
     if (playing !== shownPlaying) {
+      const first = shownPlaying === null;
       shownPlaying = playing;
       bigIcon(playing ? 'pause' : 'play');
+      // Paused: the overlay comes and stays; playing again: it goes after IDLE_MS
+      if (!playing) stage.classList.add('active'); else if (!first) wake();
     }
     const v = p?.getVolume?.() ?? 1;
     if (v > 0) lastVol = v;
@@ -343,6 +349,8 @@ export interface VideoPopout {
 }
 export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopout): () => void {
   const d = w.document;
+  // While a streamed file is paused the overlay stays: the controls are there to press play
+  const held = () => !!o.watch && !watchTogether.sharedPlaying();
   const make = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent: HTMLElement) => {
     const e = d.createElement(tag);
     e.className = cls;
@@ -406,7 +414,7 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
     if (menuEl) menuClosed();
     menuEl?.remove(); menuEl = null; menuOpen = false; refreshHud();
     // The mouse may have gone while the menu was open
-    if (!stage.matches(':hover')) stage.classList.remove('active');
+    if (!stage.matches(':hover') && !held()) stage.classList.remove('active');
   };
   if (o.hud) {
     top = make('div', 'yt-hud', stage);
@@ -498,8 +506,9 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
   const sleep = () => {
     // A menu, or a slider being dragged, keeps it
     if (menuOpen || dragging || draggingVol) { idle = setTimeout(sleep, IDLE_MS); return; }
-    stage.classList.remove('active');
     idle = null;
+    if (held()) return;
+    stage.classList.remove('active');
   };
   const wake = () => {
     stage.classList.add('active');
@@ -511,7 +520,7 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
     // A menu stays while the mouse is on its list, which can be outside the window's picture
     if (menuOpen) return;
     if (idle) { clearTimeout(idle); idle = null; }
-    stage.classList.remove('active');
+    if (!held()) stage.classList.remove('active');
   };
   stage.addEventListener('pointerenter', wake);
   stage.addEventListener('pointermove', wake);
@@ -522,7 +531,12 @@ export function mountVideoPopoutBar(w: Window, stage: HTMLElement, o: VideoPopou
     if (top) refreshHud();
     if (o.watch) {
       const playing = watchTogether.sharedPlaying();
-      if (playing !== shownPlaying) { shownPlaying = playing; bigIcon(playing ? 'pause' : 'play'); }
+      if (playing !== shownPlaying) {
+        const first = shownPlaying === null;
+        shownPlaying = playing; bigIcon(playing ? 'pause' : 'play');
+        // Paused: the overlay comes and stays; playing again: it goes after IDLE_MS
+        if (!playing) stage.classList.add('active'); else if (!first) wake();
+      }
     }
     if (o.volume) {
       const v = o.volume.get();

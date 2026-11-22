@@ -242,6 +242,30 @@ const hideScript = `(() => {
     });
     new MutationObserver(hide).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
     hide();
+    // The app makes the frame taller than the picture and clips the extra, and YouTube anchors the captions to the frame, so
+    // they sit at or past the clipped edge. Pin the caption layer to the video's own rectangle.
+    const fit = () => {
+      try {
+        const v = document.querySelector('video');
+        const c = document.querySelector('.ytp-caption-window-container');
+        if (!v || !c || !c.parentElement) return;
+        const r = v.getBoundingClientRect();
+        if (r.width < 10 || r.height < 10) return;
+        const q = c.parentElement.getBoundingClientRect();
+        const st = c.style;
+        st.setProperty('position', 'absolute', 'important');
+        st.setProperty('margin', '0', 'important');
+        st.setProperty('transform', 'none', 'important');
+        st.setProperty('right', 'auto', 'important');
+        st.setProperty('bottom', 'auto', 'important');
+        st.setProperty('left', (r.left - q.left) + 'px', 'important');
+        st.setProperty('top', (r.top - q.top) + 'px', 'important');
+        st.setProperty('width', r.width + 'px', 'important');
+        st.setProperty('height', r.height + 'px', 'important');
+      } catch (e) {}
+    };
+    setInterval(fit, 200);
+    window.addEventListener('resize', fit);
     window.__libertadHideIndicator = true;
     return true;
   };

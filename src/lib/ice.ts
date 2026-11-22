@@ -1,6 +1,66 @@
 // The connection settings every direct connection uses (screen sharing, watch together, file
 // sharing), so that the STUN and relay servers chosen in Settings apply to all of them alike.
 import { store } from './settings.svelte.ts';
+import { native } from './native.ts';
+
+// The Android WebView hides the phone's addresses behind random "<uuid>.local" names (mDNS), which the
+// other device usually cannot resolve, so on the same network neither side finds the other and the stream
+// "could not connect". The backend knows the real addresses: they replace the names in the description we
+// send. Only candidates with such a name are touched, so desktop (which never hides them) is unaffected.
+let known: string[] = [];
+let askedAt = 0;
+// Fresh addresses are asked for before each connection is made (rtcConfig), at most every 10 seconds
+async function refreshAddresses(): Promise<void> {
+  const ask = native?.localAddresses;
+  if (!ask || Date.now() - askedAt < 10_000) return;
+  askedAt = Date.now();
+  try { known = await ask.call(native); } catch { askedAt = 0; /* the names stay as they are; asked again next time */ }
+}
+function unmaskWith(sdp: string, ips: string[]): string {
+  if (!ips.length || !/ [0-9a-f-]{36}\.local /i.test(sdp)) return sdp;
+  const out: string[] = [];
+  for (const line of sdp.split('\r\n')) {
+    const m = /^(a=candidate:)(\S+)( \d+ \w+ \d+ )[0-9a-f-]{36}\.local( \d+ typ host.*)$/i.exec(line);
+    if (!m) { out.push(line); continue; }
+    ips.forEach((ip, i) => out.push(`${m[1]}${m[2]}${i ? 'x' + i : ''}${m[3]}${ip}${m[4]}`));
+  }
+  return out.join('\r\n');
+}
+export async function unmaskLocal(sdp: string): Promise<string> {
+  await refreshAddresses();
+  return unmaskWith(sdp, known);
+}
+
+// Every connection of the app (streams, cameras, profile pictures, files, friends, watch together) reads its
+// description from pc.localDescription before sending it, so that is where the names are replaced: one place
+// instead of one per feature. Only where the backend knows the addresses (the Android app).
+if (native?.localAddresses && typeof RTCPeerConnection !== 'undefined') {
+  const proto = RTCPeerConnection.prototype;
+  const get = Object.getOwnPropertyDescriptor(proto, 'localDescription')?.get;
+  if (get) {
+    Object.defineProperty(proto, 'localDescription', {
+      configurable: true,
+      enumerable: true,
+      get(this: RTCPeerConnection) {
+        const d = get.call(this) as RTCSessionDescription | null;
+        if (!d?.sdp) return d;
+        const sdp = unmaskWith(d.sdp, known);
+        return sdp === d.sdp ? d : { type: d.type, sdp, toJSON: () => ({ type: d.type, sdp }) } as RTCSessionDescription;
+      }
+    });
+  }
+  void refreshAddresses();
+}
+
+// What a connection found out, for the message when it fails (so a failure says why)
+export function describeIce(pc: RTCPeerConnection, local: string, remote: string): string {
+  const types = (sdp: string) => {
+    const t = [...sdp.matchAll(/a=candidate:\S+ \d+ \w+ \d+ (\S+) \d+ typ (\w+)/g)];
+    const kinds = ['host', 'srflx', 'relay'].map(k => `${t.filter(x => x[2] === k).length} ${k}`).join(', ');
+    return `${kinds}${t.some(x => x[1].endsWith('.local')) ? ' (hidden .local names)' : ''}`;
+  };
+  return `ICE ${pc.iceConnectionState}, we offered [${types(local)}], they offered [${types(remote)}]`;
+}
 
 // STUN and the relay of a Libertad relay server, for screen sharing. The relay needs credentials,
 // which the server hands out for a few hours at a time.
@@ -40,6 +100,7 @@ export async function iceServers(): Promise<RTCIceServer[]> {
 // For testing the relay: localStorage libertad.iceDebug = "relay" uses only relayed routes,
 // "relay-tcp" only the relay reached over TCP (what a browser without direct UDP is left with)
 export async function rtcConfig(): Promise<RTCConfiguration> {
+  await refreshAddresses();
   const servers = await iceServers();
   let debug = '';
   try { debug = localStorage.getItem('libertad.iceDebug') ?? ''; } catch { /* storage unavailable */ }

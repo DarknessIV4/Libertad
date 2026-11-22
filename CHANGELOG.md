@@ -2,6 +2,19 @@
  
 All notable changes to Libertad.
 
+## 0.5.1 - 2026-11-22
+
+### Added:
+
+- Android editions, currently still under development, doesnt support calls or torrents, ui still bad,
+
+### Fixed:
+
+- Simple app fixxes and ui fixes,
+
+### Changed:
+
+- Now doing an action in a watch together reveals your name to other viewers with the action done.
 
 ## 0.5.0 - 2026-11-16
 

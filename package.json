@@ -1,7 +1,7 @@
 {
   "name": "Libertad",
   "productName": "Libertad",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A modern Mumble client: Supports screen sharing, watch together, and more.",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,12 @@
     "test:e2e:files": "node test/e2e/files-disk.e2e.ts",
     "test:e2e:hidden": "node test/e2e/hidden.e2e.mjs",
     "proto": "pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-comments --force-number proto/Mumble.proto -o src/core/mumble-pb.js && pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-comments --force-number proto/MumbleUDP.proto -o src/core/mumble-udp-pb.js",
-    "screenshots": "node test/e2e/screenshots.ts"
+    "screenshots": "node test/e2e/screenshots.ts",
+    "android:prepare": "vite build --outDir dist-android --emptyOutDir && node mobile/scripts/build-node.mjs && node mobile/android/apply.mjs && npx cap sync android",
+    "build:android": "npm run android:prepare && node mobile/scripts/build-apk.mjs",
+    "android:setup": "node mobile/android/apply.mjs",
+    "test:mobile": "node --test mobile/test/*.test.ts",
+    "check:mobile": "tsc -p mobile/tsconfig.json"
   },
   "build": {
     "appId": "dev.f0ck.Libertad",
@@ -109,6 +114,7 @@
     ]
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.0.0",
     "@evan/opus": "^1.0.3",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tsconfig/svelte": "^5.0.8",
@@ -125,16 +131,20 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/filesystem": "^8.0.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@ricky0123/vad-web": "0.0.30",
     "@sapphi-red/web-noise-suppressor": "0.4.1",
     "@workadventure/noise-suppression": "0.2.0",
+    "capacitor-nodejs": "https://github.com/hampoelz/capacitor-nodejs/releases/download/v1.0.0-beta.10/capacitor-nodejs.tgz",
     "dompurify": "^3.4.17",
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
     "gifenc": "^1.0.3",
-    "hyperdht": "^6.36.0",
     "hls.js": "^1.6.0",
+    "hyperdht": "^6.36.0",
     "node-forge": "^1.4.0",
     "onnxruntime-web": "1.31.1",
     "protobufjs": "^8.8.0",

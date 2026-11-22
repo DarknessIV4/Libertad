@@ -26,7 +26,7 @@
 <style>
   .corner { position: absolute; right: 0; bottom: 0; z-index: 4; display: flex; align-items: center; gap: 10px; padding: 22px 14px 12px 28px;
     color: #fff; background: linear-gradient(to top left, rgba(0, 0, 0, 0.65), transparent 70%); opacity: 0; transition: opacity 150ms; }
-  .corner:hover, .corner:has(:focus-visible) { opacity: 1; }
+  .corner:hover, .corner:has(:focus-visible), :global(.pic.touch-on) .corner { opacity: 1; }
   .mute { display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 3px; border-radius: 6px; color: #fff; cursor: pointer; flex: none; }
   .mute:hover, .mute:focus-visible { background: rgba(255, 255, 255, 0.2); }
   .vol { width: 90px; flex: none; -webkit-appearance: none; appearance: none; height: 14px; margin: 0; background: transparent; cursor: pointer; }

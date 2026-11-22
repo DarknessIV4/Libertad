@@ -1,5 +1,10 @@
 <script lang="ts">
   import { tip } from '../lib/tip.ts';
+  import { floatPop } from '../lib/float-pop.ts';
+  import { touchReveal } from '../lib/touch-reveal.ts';
+  import { isAndroid } from '../lib/platform.ts';
+  import { setAndroidImmersive, immersiveProblem } from '../lib/android-service.ts';
+  import { followPip, enterPip, pipProblem, videoPicture, type PipPicture } from '../lib/android-pip.ts';
   import { onDestroy, untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import MediaFill from './MediaFill.svelte';
@@ -525,20 +530,46 @@ const self = $derived(session.self);
   // The pictures, to ask one of them for picture-in-picture
   let videos = $state<Record<number, HTMLVideoElement | undefined>>({});
 
+  // The whole window (desktop) or the whole screen, status and navigation bars hidden (Android); a wide picture also turns
+  // the phone to landscape, and the picture of a portrait camera leaves it as it is
+  const wantsLandscape = (id: number) => {
+    if (id === WT) return true;
+    const v = videos[id];
+    return !v || !v.videoHeight || v.videoWidth >= v.videoHeight;
+  };
+  async function systemFullscreen(on: boolean, id?: number) {
+    if (desktop) await desktop.setFullScreen(on);
+    else if (isAndroid()) {
+      // A failure is shown, not swallowed: full screen that silently leaves the bars on is hard to tell from a bug in the page
+      const r = await setAndroidImmersive(on, on && id !== undefined && wantsLandscape(id))
+        .catch(e => { if (on) share.error = `Full screen could not hide the bars: ${e instanceof Error ? e.message : String(e)}`; return null; });
+      if (on && immersiveProblem(r)) share.error = immersiveProblem(r);
+    }
+  }
   async function fullscreen(id: number) {
     fsId = fsId === id ? null : id;
+    await systemFullscreen(fsId !== null, id);
+  }
 
-    if (desktop) {
-      // Use Electron's native fullscreen for the entire window
-      await desktop.setFullScreen(fsId !== null);
-    }
+  // Android's back button leaves full screen instead of the app: full screen takes one step of the page's history,
+  // and going back one step (the button) ends it. Leaving by a button gives the step back.
+  let fsStep = false;
+  $effect(() => {
+    if (!isAndroid()) return;
+    if (fsId !== null && !fsStep) { fsStep = true; try { history.pushState({ libertadFs: 1 }, ''); } catch { fsStep = false; } }
+    else if (fsId === null && fsStep) { fsStep = false; if (history.state?.libertadFs) history.back(); }
+  });
+  function fsBack() {
+    if (!fsStep || fsId === null) return;
+    fsStep = false;
+    leaveFullscreen();
   }
 
   // The picture is gone (the host stopped sharing or ended the watch party, we left the channel):
   // leave full screen at once, otherwise the window stays full screen with nothing to see
   function leaveFullscreen() {
     fsId = null;
-    desktop?.setFullScreen(false);
+    void systemFullscreen(false);
   }
   $effect(() => { if (fsId !== null && !stack.includes(fsId)) leaveFullscreen(); });
   onDestroy(() => { if (isFullscreen) leaveFullscreen(); });
@@ -548,12 +579,7 @@ const self = $derived(session.self);
     if (!isFullscreen) return;
 
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        fsId = null;
-        if (desktop) {
-          desktop.setFullScreen(false);
-        }
-      }
+      if (e.key === 'Escape') leaveFullscreen();
     };
 
     window.addEventListener('keydown', handleEscape);
@@ -822,8 +848,42 @@ const self = $derived(session.self);
     }
   }
 
+  // ---- Android: the small window that stays on top of everything (lib/android-pip.ts) ----
+  // A WebView has no window of its own to give a picture, so on a phone the pop-out button, and leaving the app while
+  // something plays, turn the whole app into the small window, showing only the picture.
+  function pipPicture(id: number): PipPicture | null {
+    if (id === WT) {
+      if (!watchTogether.isWatching && !(watchTogether.isHost && watchTogether.hasActiveParty)) return null;
+      const running = watchTogether.sharedPlaying();
+      if (watchTogether.mode === 1) {
+        const frame = document.querySelector<HTMLElement>('.spot[data-spot="-1"] .youtube-iframe');
+        return frame ? { el: frame, width: 16, height: 9, running } : null;
+      }
+      const pic = videoPicture(videoOf(WT));
+      return pic ? { ...pic, running } : null;
+    }
+    return videoPicture(videos[id]);
+  }
+  // Leaving the app takes along the picture in full screen, else watch together, else the first one that plays
+  function pipAuto(): PipPicture | null {
+    const ids = [...(fsId !== null ? [fsId] : []), ...stack];
+    const all = ids.map(pipPicture).filter((p): p is PipPicture => !!p);
+    return all.find(p => p.running !== false) ?? all[0] ?? null;
+  }
+  $effect(() => {
+    if (!isAndroid()) return;
+    return untrack(() => followPip(pipAuto));
+  });
+  async function pipOnPhone(id: number) {
+    if (!pipPicture(id)) { share.error = 'There is no picture to put in the small window yet'; return; }
+    // Not allowed yet: the app asks (a dialog, then the settings page) and the window opens by itself once it is
+    const problem = pipProblem(await enterPip(() => pipPicture(id)));
+    if (problem) share.error = problem;
+  }
+
   // Toggle picture-in-picture / popup window
   async function togglePip(id: number) {
+    if (isAndroid()) { await pipOnPhone(id); return; }
     if (videoPops[id]) { popInVideo(id); return; }
     if (id === WT && watchTogether.mode === 1) {
       // YouTube: toggle popup window
@@ -846,11 +906,13 @@ const self = $derived(session.self);
   }
 </script>
 
+<svelte:window onpopstate={fsBack} />
+
 {#if voice.error && session.status === 'connected'}<div class="bar bad" role="alert"><span>Voice is not working: {voice.error}</span></div>{/if}
 {#if share.error}<div class="bar bad" role="alert"><span>{share.error}</span><button class="btn" onclick={() => (share.error = '')}>Dismiss</button></div>{/if}
 
 {#snippet viewerList(ids: number[])}
-  <span class="pop" role="list">
+  <span class="pop" role="list" use:floatPop>
     {#each ids as v (v)}
       {@const u = session.user(v)}
       {#if u}
@@ -919,7 +981,7 @@ const self = $derived(session.self);
         <div class="spot-bar">{@render controls(id)}</div>
       {/if}
       <!-- svelte-ignore a11y_media_has_caption -->
-      <div class="pic" role="presentation" use:zoomable oncontextmenu={e => streamMenu(e, id)}
+      <div class="pic" role="presentation" use:zoomable use:touchReveal oncontextmenu={e => streamMenu(e, id)}
         ontouchstart={e => touchStart(e, id)} ontouchend={touchEnd} ontouchmove={touchEnd} ontouchcancel={touchEnd}
         ondblclick={isWT ? () => { if (!menuJustClosed()) fullscreen(id); } : undefined}>
         {#if isWT}
@@ -1185,8 +1247,8 @@ const self = $derived(session.self);
   /* Between the control groups of two sessions in the bar on top: a little wider than the one inside a group, with room on both sides */
   .gsep { width: 2px; height: 18px; margin: 0 10px 0 6px; background: var(--line-strong, var(--line)); flex: none; }
   .vsep { width: 1px; height: 14px; margin: 0 6px 0 2px; background: var(--line); flex: none; }
-  .pop { display: none; position: absolute; left: 100%; top: 50%; transform: translateY(-50%); margin-left: 8px; z-index: 30; flex-direction: column; gap: 6px; padding: 8px 10px; min-width: 140px; max-height: 260px; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.4); }
-  .viewers:hover .pop, .viewers:focus-visible .pop, .viewers:focus-within .pop { display: flex; }
+  /* Moved to <body> by use:floatPop and placed with fixed coordinates, so it is drawn over the picture and the panels; shown by that action */
+  .pop { display: none; position: fixed; z-index: 2147483647; flex-direction: column; gap: 6px; padding: 8px 10px; min-width: 140px; max-height: 260px; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.4); }
   .vrow { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--text); font-size: 13px; }
   .vname { display: flex; flex-direction: column; line-height: 1.15; }
   .vname em { font-style: normal; font-size: 11px; color: var(--text-dim); }
@@ -1195,7 +1257,7 @@ const self = $derived(session.self);
   /* Meeting view: the chosen picture large, everyone in one row below */
   .spot { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #000; }
   /* Full screen: the picture covers the window; its own buttons (top right, on hover) leave it again */
-  .spot.fullscreen { position: fixed !important; inset: 0 !important; z-index: 9999 !important; flex: none !important; background: #000 !important; }
+  .spot.fullscreen { position: fixed !important; inset: 0 !important; z-index: 9999 !important; flex: none !important; background: #000 !important; width: 100vw; height: 100dvh; margin: 0; }
   .spot.fullscreen .pic { position: absolute !important; inset: 0 !important; }
   .pic { position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden; -webkit-touch-callout: none; user-select: none; }
   /* Ctrl + wheel zoom (lib/zoom.ts sets the numbers): only the picture is moved and scaled, never the buttons and bars over it */

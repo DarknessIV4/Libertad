@@ -7,6 +7,7 @@
   import { changeNamePrompt, openProfile } from '../lib/actions.ts';
   import { voice } from '../lib/audio/voice.svelte.ts';
   import { desktop } from '../lib/native.ts';
+  import { isAndroid } from '../lib/platform.ts';
 
   // Yourself, your servers and the settings, in one place
   let { onadd, onedit, onbrowse }: { onadd: () => void; onedit: (s: SavedServer) => void; onbrowse: () => void } = $props();
@@ -20,6 +21,7 @@
     { tab: 'appearance', name: 'Appearance', note: 'Colors and interface' },
     { tab: 'accessibility', name: 'Accessibility', note: '' },
     { tab: 'files', name: 'Chat and files', note: 'Files, previews, embeds' },
+    ...(desktop || isAndroid() ? [{ tab: 'system' as Tab, name: 'System', note: 'Battery, notifications, background' }] : []),
     { tab: 'identities', name: 'Identities', note: 'Your certificates' }
   ];
   const openSettings = (tab: Tab) => { ui.settingsTab = tab; ui.settingsOpen = true; };

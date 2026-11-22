@@ -11,6 +11,7 @@
   import { youtubeHost } from '../lib/youtube-account.svelte.ts';
   import { RATES, rateLabel, qualityLabel, IDLE_MS, DEFAULT_QUALITIES } from '../lib/yt-controls.ts';
   import { menuClosed, menuJustClosed, swallowClick } from '../lib/overlay.ts';
+  import { touchOnlyRevealed } from '../lib/touch-reveal.ts';
   import { canSaveYoutubeFrame, saveYoutubeFrame } from '../lib/save-frame.ts';
 
   // YouTube iframe player for watch together (mode 1).
@@ -231,9 +232,17 @@
     active = false;
     menu = null;
   }
+  // While paused the controls stay (the "held" class); when it plays again they go after IDLE_MS like they do for a
+  // mouse that stopped, instead of vanishing at once
+  let wasPaused = false;
+  $effect(() => {
+    const paused = !playingNow;
+    if (wasPaused && !paused) wake();
+    wasPaused = paused;
+  });
   const toggleMenu = (m: 'quality' | 'speed') => { menu = menu === m ? null : m; };
   // A click on the picture closes an open menu first, otherwise it plays or pauses
-  const clickPicture = () => { if (menu) menu = null; else if (!menuJustClosed()) toggle(); };
+  const clickPicture = () => { if (touchOnlyRevealed()) return; if (menu) menu = null; else if (!menuJustClosed()) toggle(); };
   // The menus are overlays: a double click on them or on the bars is not the picture's (full screen),
   // and a press anywhere else closes a menu without playing or pausing
   const stop = (e: Event) => e.stopPropagation();
@@ -509,7 +518,7 @@
   onkeydown={e => { if (e.key === 'Escape' && menu) { menu = null; return; } if (src) playerKey(e, { toggle, seekBy }); }} />
 
 {#if src}
-  <div class="youtube-container" class:active role="presentation"
+  <div class="youtube-container" class:active class:held={!playingNow} role="presentation"
     onpointermove={wake} onpointerdown={wake} onpointerleave={leave}>
     <div class="yt-stage" bind:clientWidth={stageW} style="--aspect: {aspect};">
       <iframe
@@ -642,8 +651,8 @@
     transition: opacity 0.15s;
     pointer-events: none;
   }
-  .youtube-container.active .big { opacity: 1; }
-  .youtube-container:not(.active) .shield { cursor: none; }
+  .youtube-container.active .big, .youtube-container.held .big { opacity: 1; }
+  .youtube-container:not(.active):not(.held) .shield { cursor: none; }
 
   /* Time above the seek bar, the bar itself just above the bottom edge */
   .bar {
@@ -662,8 +671,17 @@
     transition: opacity 0.15s;
     z-index: 2;
   }
-  .youtube-container:not(.active) .bar, .youtube-container:not(.active) .top { pointer-events: none; }
-  .youtube-container.active .bar, .youtube-container.active .top { opacity: 1; }
+  .youtube-container:not(.active):not(.held) .bar, .youtube-container:not(.active):not(.held) .top { pointer-events: none; }
+  .youtube-container.active .bar, .youtube-container.active .top, .youtube-container.held .bar, .youtube-container.held .top { opacity: 1; }
+  /* Touch: a tap on the picture shows the controls for two seconds (lib/touch-reveal.ts) */
+  :global(.pic.touch-on) .youtube-container .bar, :global(.pic.touch-on) .youtube-container .top { opacity: 1 !important; pointer-events: auto !important; }
+  /* On a touch screen, while it plays, the controls and the play / pause badge come only with a tap (the two seconds above).
+     Paused, they stay. */
+  @media (hover: none) and (pointer: coarse) {
+    .youtube-container:not(.held) .bar, .youtube-container:not(.held) .top { opacity: 0; pointer-events: none; }
+    .youtube-container:not(.held) .big { opacity: 0; }
+    :global(.pic.touch-on) .youtube-container .big { opacity: 1; }
+  }
 
   .top {
     position: absolute;

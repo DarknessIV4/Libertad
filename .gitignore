@@ -1,8 +1,7 @@
 node_modules/
 dist/
-dist-web/
-dist-proxy/
 dist-electron/
+dist-android/
 release/
 *.log
 .env

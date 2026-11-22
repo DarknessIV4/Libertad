@@ -7,6 +7,7 @@ import type { YoutubeResult } from '../core/youtube-search.ts';
 import type { EmbeddedBatch, EmbeddedTrack } from '../core/mkv.ts';
 import type { Cue, SubtitleOption } from '../core/subtitles.ts';
 import type { P2pState, FriendProfileData } from '../core/p2p-wire.ts';
+import { androidPlatform, androidTransport } from './native-android.ts';
 
 // What an IPC call to the desktop app's main process rejects with: "Error invoking remote method 'x': Error: the sentence"
 export const torrentError = (e: unknown): string =>
@@ -16,9 +17,14 @@ export type YoutubeAccountState = { signedIn: boolean; noHistory: boolean };
 
 export interface PlatformApi {
   platformInfo(): Promise<{ os: string; osVersion: string }>;
+  // Android only: this device's own network addresses, for streams on the local network
+  localAddresses?(): Promise<string[]>;
+  // Android only: YouTube search (the desktop app has it as youtube.search)
+  youtubeSearch?(query: string): Promise<YoutubeResult[]>;
   describeCerts(ders: Uint8Array[]): Promise<CertDetails[]>;
   // People on a server without connecting (UDP ping)
   pingServer(host: string, port: number): Promise<PingResult | null>;
+  publicServers(url: string): Promise<PublicServer[]>;
   identities: {
     list(): Promise<{ identities: IdentitySummary[]; setupDone: boolean }>;
     create(name: string, email: string): Promise<IdentitySummary>;
@@ -297,11 +303,11 @@ declare global {
 
 // Everything that needs the desktop app (identities, TLS and UDP to servers, tray, public list, link previews) checks `desktop`
 export const desktop: NativeApi | null = typeof window !== 'undefined' ? window.libertadNative ?? null : null;
-export const native: PlatformApi | null = desktop;
+export const native: PlatformApi | null = desktop ?? androidPlatform();
 
 // A connection to a Mumble server: TLS in the desktop app's main process
 export async function openTransport(host: string, port: number, identityId?: string): Promise<(Transport & { secure: Promise<ServerCertInfo> }) | null> {
-  return desktop ? new ElectronTransport(desktop, host, port, identityId) : null;
+  return desktop ? new ElectronTransport(desktop, host, port, identityId) : androidTransport(host, port, identityId);
 }
 
 // Transport backed by a TLS socket in the Electron main process.

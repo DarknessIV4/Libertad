@@ -1,7 +1,11 @@
 <script lang="ts">
   import { untrack, onDestroy } from 'svelte';
   import { desktop } from '../lib/native.ts';
+  import { isAndroid } from '../lib/platform.ts';
+  import { setAndroidImmersive, immersiveProblem } from '../lib/android-service.ts';
+  import { followPip, enterPip, pipProblem, videoPicture, type PipPicture } from '../lib/android-pip.ts';
   import { tip } from '../lib/tip.ts';
+  import { touchReveal } from '../lib/touch-reveal.ts';
   import Icon from './Icon.svelte';
   import WatchPlayer from './WatchPlayer.svelte';
   import WatchTogetherBar from './WatchTogetherBar.svelte';
@@ -58,14 +62,39 @@
 
   // Full screen is the window's own (as for a stream on a server), with the panel filling it
   let fsPart = $state<Part | null>(null);
+  // The window's own full screen (desktop), or the whole screen with the status and navigation bars hidden (Android), where a
+  // wide picture also turns the phone to landscape
+  async function systemFullscreen(on: boolean, part?: Part) {
+    if (desktop) await desktop.setFullScreen(on);
+    else if (isAndroid()) {
+      const pic = on && part ? pipPictureOf(part) : null;
+      const landscape = on && !!part && (part === 'together' || !pic || pic.width >= pic.height);
+      const r = await setAndroidImmersive(on, landscape)
+        .catch(e => { if (on) share.error = `Full screen could not hide the bars: ${e instanceof Error ? e.message : String(e)}`; return null; });
+      if (on && immersiveProblem(r)) share.error = immersiveProblem(r);
+    }
+  }
   async function fullscreen(part: Part) {
     fsPart = fsPart === part ? null : part;
-    await desktop?.setFullScreen(fsPart !== null);
+    await systemFullscreen(fsPart !== null, part);
   }
   function leaveFullscreen() {
     if (!fsPart) return;
     fsPart = null;
-    void desktop?.setFullScreen(false);
+    void systemFullscreen(false);
+  }
+  // Android's back button leaves full screen instead of the call: full screen takes one step of the page's history, and going
+  // back one step (the button) ends it. Leaving by a button gives the step back.
+  let fsStep = false;
+  $effect(() => {
+    if (!isAndroid()) return;
+    if (fsPart && !fsStep) { fsStep = true; try { history.pushState({ libertadFs: 1 }, ''); } catch { fsStep = false; } }
+    else if (!fsPart && fsStep) { fsStep = false; if (history.state?.libertadFs) history.back(); }
+  });
+  function fsBack() {
+    if (!fsStep || !fsPart) return;
+    fsStep = false;
+    leaveFullscreen();
   }
   $effect(() => {
     if (!fsPart) return;
@@ -155,6 +184,36 @@
     }
     const v = watchTogether.isHost && watchTogether.mode === 2 ? watchTogether.hostVideo : stageEls.together?.querySelector<HTMLVideoElement>('video.local-video') ?? null;
     return v ? [{ key: 'together', video: v }] : [];
+  }
+  // ---- Android: the small window that stays on top of everything (lib/android-pip.ts) ----
+  function pipPictureOf(part: Part, sid?: number): PipPicture | null {
+    if (part === 'mine') return videoPicture(mineVideo);
+    if (part === 'theirs') {
+      if (sid !== undefined) return videoPicture(videos[sid]);
+      for (const w of watches) { const p = videoPicture(videos[w.session]); if (p) return p; }
+      return null;
+    }
+    if (!together) return null;
+    const running = watchTogether.sharedPlaying();
+    if (watchTogether.mode === 1) {
+      const frame = stageEls.together?.querySelector<HTMLElement>('iframe.youtube-iframe') ?? null;
+      return frame ? { el: frame, width: 16, height: 9, running } : null;
+    }
+    const v = watchTogether.isHost && watchTogether.mode === 2 ? watchTogether.hostVideo : stageEls.together?.querySelector<HTMLVideoElement>('video.local-video') ?? null;
+    const pic = videoPicture(v);
+    return pic ? { ...pic, running } : null;
+  }
+  function pipAuto(): PipPicture | null {
+    const all = [fsPart, ...PARTS].map(p => (p ? pipPictureOf(p) : null)).filter((p): p is PipPicture => !!p);
+    return all.find(p => p.running !== false) ?? all[0] ?? null;
+  }
+  $effect(() => {
+    if (!isAndroid()) return;
+    return untrack(() => followPip(pipAuto));
+  });
+  function pipOnPhone(part: Part, sid?: number) {
+    if (!pipPictureOf(part, sid)) return;
+    void enterPip(() => pipPictureOf(part, sid)).then(r => { const problem = pipProblem(r); if (problem) share.error = problem; });
   }
   const popFullscreen = (name: string) => (desktop ? { set: (on: boolean) => desktop.setPopoutFullScreen(name, on), get: () => desktop.isPopoutFullScreen(name) } : null);
 
@@ -519,6 +578,8 @@
   const closable = (part: Part) => part === 'mine' ? !!mineKind : part === 'together' ? together : watches.length > 0;
 </script>
 
+<svelte:window onpopstate={fsBack} />
+
 {#snippet panel(part: Part)}
   {@const fs = fsPart === part}
   {@const p = panels[part]}
@@ -553,7 +614,7 @@
           {/if}
 
           {#if together}
-            <div class="pic wt" role="region" aria-label="Watch together">
+            <div class="pic wt" role="region" aria-label="Watch together" use:touchReveal>
               <WatchPlayer />
               {#if watchTogether.mode === 1 && watchTogether.playlist.length > 1}<WatchTogetherBar />{/if}
               <!-- YouTube has these in its own overlay -->
@@ -569,7 +630,7 @@
           {/if}
 
           {#each watches as w (w.session)}
-            <div class="pic" role="region" aria-label={w.kind === 'camera' ? 'Camera' : 'Screen'}>
+            <div class="pic" role="region" aria-label={w.kind === 'camera' ? 'Camera' : 'Screen'} use:touchReveal>
               <!-- svelte-ignore a11y_media_has_caption -->
               <video bind:this={videos[w.session]} use:media={w.stream} autoplay playsinline></video>
               {#if w.state !== 'live'}
@@ -577,12 +638,12 @@
                   ? 'Could not connect to the stream. Across the internet both of you need a STUN server; networks that block direct connections need a relay. Both are in Settings, Voice.'
                   : 'Connecting to the stream...'}</p>
               {/if}
-              <StreamHud video={videos[w.session] ?? null} cap={{ get: () => share.qualityOf(w.session), set: c => { if (s) share.setQuality(s, w.session, c); } }} speed={false} fullscreen={fs} onfullscreen={() => fullscreen(part)} popped={false} onpopout={() => { void videos[w.session]?.requestPictureInPicture?.().catch(() => {}); }} />
+              <StreamHud video={videos[w.session] ?? null} cap={{ get: () => share.qualityOf(w.session), set: c => { if (s) share.setQuality(s, w.session, c); } }} speed={false} fullscreen={fs} onfullscreen={() => fullscreen(part)} popped={false} onpopout={() => { if (isAndroid()) pipOnPhone('theirs', w.session); else void videos[w.session]?.requestPictureInPicture?.().catch(() => {}); }} />
             </div>
           {/each}
         {:else if mineKind}
           <!-- What you send: a camera mirrored, a screen from a lighter copy -->
-          <div class="pic" class:cam={mineKind === 'camera'} role="region" aria-label="Your {mineKind}">
+          <div class="pic" class:cam={mineKind === 'camera'} role="region" aria-label="Your {mineKind}" use:touchReveal>
             <!-- svelte-ignore a11y_media_has_caption -->
             <video bind:this={mineVideo} class:mirror={mineKind === 'camera' && share.mirror} use:media={mineKind === 'screen' ? (share.preview ?? share.stream) : share.stream} autoplay playsinline muted></video>
             <StreamHud video={null} cap={null} fullscreen={fs} onfullscreen={() => fullscreen(part)} />
